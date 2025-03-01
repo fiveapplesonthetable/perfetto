@@ -41,4 +41,8 @@ export class Icons {
   static readonly ChangeTab = 'tab';
   static readonly Crashed = 'warning';
   static readonly Chart = 'bar_chart';
+  static readonly Change = 'change_circle';
+  static readonly GoTo = 'arrow_forward';
+  static readonly MoreVert = 'more_vert';
+  static readonly Warning = 'warning';
 }
