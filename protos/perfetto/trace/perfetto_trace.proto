@@ -1405,6 +1405,12 @@ message ProcessStatsConfig {
   optional bool resolve_process_fds = 9;
 
   // If true, output will include memory stats from /proc/pid/smaps_rollup.
+  //
+  // Does NOT work with the Android system daemon by default, as it requires
+  // running the recording process (traced_probes or tracebox) as root. It is
+  // possible to avoid the root requirement, but the exact steps depend on the
+  // Linux distibution. The proc file requires passing a PTRACE_MODE_READ
+  // check, and might be further covered by the procfs "hidepid" mount option.
   optional bool scan_smaps_rollup = 10;
 
   // If true: process descriptions will include process age (starttime in
@@ -4940,7 +4946,6 @@ enum BluetoothTracePacketType {
 
 // Trace event for bluetooth
 message BluetoothTraceEvent {
-
   // Packet type and direction
   optional BluetoothTracePacketType packet_type = 1;
 
@@ -4951,8 +4956,8 @@ message BluetoothTraceEvent {
   // interval
   optional uint32 length = 3;
 
-  // The collection interval in ms. This is the duration between the first and
-  // last packets collected.
+  // The collection interval in nanoseconds. This is the duration between the
+  // first and last packets collected.
   optional uint32 duration = 4;
 
   // In case of CMD type, further breakdown of the type of command
@@ -4968,6 +4973,7 @@ message BluetoothTraceEvent {
   // Associated handle for the bluetooth packet
   optional uint32 connection_handle = 8;
 }
+
 // End of protos/perfetto/trace/android/bluetooth_trace.proto
 
 // Begin of protos/perfetto/trace/android/camera_event.proto
@@ -7919,6 +7925,11 @@ message DpuDispDpuUnderrunFtraceEvent {
   optional int32 id = 1;
   optional int32 frames_pending = 2;
   optional int32 vsync_count = 3;
+}
+message DpuDispVblankIrqEnableFtraceEvent {
+  optional int32 id = 1;
+  optional int32 output_id = 2;
+  optional int32 enable = 3;
 }
 
 // End of protos/perfetto/trace/ftrace/dpu.proto
@@ -11682,6 +11693,7 @@ message FtraceEvent {
     BlockIoDoneFtraceEvent block_io_done = 547;
     MaliGpuPowerStateFtraceEvent mali_gpu_power_state = 548;
     DpuDispDpuUnderrunFtraceEvent dpu_disp_dpu_underrun = 549;
+    DpuDispVblankIrqEnableFtraceEvent dpu_disp_vblank_irq_enable = 550;
   }
 }
 

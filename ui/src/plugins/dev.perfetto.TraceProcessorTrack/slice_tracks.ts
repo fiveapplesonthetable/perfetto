@@ -32,6 +32,11 @@ export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
     group: 'Battery Stats',
   },
   {
+    type: 'bluetooth_trace_event',
+    topLevelGroup: 'SYSTEM',
+    group: 'Bluetooth',
+  },
+  {
     type: 'legacy_async_process_slice',
     topLevelGroup: 'PROCESS',
     group: undefined,
@@ -68,6 +73,11 @@ export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
   },
   {
     type: 'disp_dpu_underrun',
+    topLevelGroup: 'HARDWARE',
+    group: 'Display',
+  },
+  {
+    type: 'disp_vblank_irq_enable',
     topLevelGroup: 'HARDWARE',
     group: 'Display',
   },
