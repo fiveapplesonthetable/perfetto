@@ -667,14 +667,26 @@ void TraceProcessorImpl::EnableMetatrace(MetatraceConfig config) {
 base::Status TraceProcessorImpl::AnalyzeStructuredQueries(
     const std::vector<StructuredQueryBytes>& sqs,
     std::vector<AnalyzedStructuredQuery>* output) {
+  auto opt_idx = metrics_descriptor_pool_.FindDescriptorIdx(
+      ".perfetto.protos.TraceSummarySpec");
+  if (!opt_idx) {
+    metrics_descriptor_pool_.AddFromFileDescriptorSet(
+        kTraceSummaryDescriptor.data(), kTraceSummaryDescriptor.size());
+  }
   perfetto_sql::generator::StructuredQueryGenerator sqg;
   for (const auto& sq : sqs) {
-    AnalyzedStructuredQuery newAnalyzedSq;
-    ASSIGN_OR_RETURN(newAnalyzedSq.sql, sqg.Generate(sq.ptr, sq.size));
-    newAnalyzedSq.modules = sqg.ComputeReferencedModules();
-    newAnalyzedSq.preambles = sqg.ComputePreambles();
+    AnalyzedStructuredQuery analyzed_sq;
+    ASSIGN_OR_RETURN(analyzed_sq.sql, sqg.Generate(sq.ptr, sq.size));
+    analyzed_sq.textproto =
+        perfetto::trace_processor::protozero_to_text::ProtozeroToText(
+            metrics_descriptor_pool_,
+            ".perfetto.protos.PerfettoSqlStructuredQuery",
+            protozero::ConstBytes{sq.ptr, sq.size},
+            perfetto::trace_processor::protozero_to_text::kIncludeNewLines);
+    analyzed_sq.modules = sqg.ComputeReferencedModules();
+    analyzed_sq.preambles = sqg.ComputePreambles();
     sqg.AddQuery(sq.ptr, sq.size);
-    output->push_back(newAnalyzedSq);
+    output->push_back(analyzed_sq);
   }
   return base::OkStatus();
 }

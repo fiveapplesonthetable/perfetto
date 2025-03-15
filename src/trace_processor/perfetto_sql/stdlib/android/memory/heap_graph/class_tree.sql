@@ -56,3 +56,162 @@ CREATE PERFETTO TABLE _heap_graph_class_tree AS
 SELECT
   *
 FROM _heap_graph_path_hashes_to_class_tree!(_heap_graph_path_hashes_aggregated);
+
+CREATE PERFETTO MACRO _heap_graph_object_references_agg(
+    path_hashes TableOrSubquery
+)
+RETURNS TableOrSubquery AS
+(
+  SELECT
+    path_hash,
+    count(DISTINCT outgoing.id) AS outgoing_reference_count,
+    count(DISTINCT incoming.id) AS incoming_reference_count,
+    c.name AS class_name,
+    o.*
+  FROM $path_hashes AS h
+  JOIN heap_graph_object AS o
+    ON h.id = o.id
+  JOIN heap_graph_class AS c
+    ON o.type_id = c.id
+  JOIN heap_graph_reference AS outgoing
+    ON outgoing.owner_id = o.id
+  JOIN heap_graph_reference AS incoming
+    ON incoming.owned_id = o.id
+  GROUP BY
+    o.id,
+    path_hash
+  ORDER BY
+    outgoing_reference_count DESC
+);
+
+CREATE PERFETTO MACRO _heap_graph_incoming_references_agg(
+    path_hashes TableOrSubquery
+)
+RETURNS TableOrSubquery AS
+(
+  SELECT
+    path_hash,
+    c.name AS class_name,
+    r.field_name,
+    r.field_type_name,
+    src.*
+  FROM $path_hashes AS h
+  JOIN heap_graph_reference AS r
+    ON r.owned_id = dst.id
+  JOIN heap_graph_object AS src
+    ON src.id = r.owner_id
+  JOIN heap_graph_object AS dst
+    ON h.id = dst.id
+  JOIN heap_graph_class AS c
+    ON src.type_id = c.id
+);
+
+CREATE PERFETTO MACRO _heap_graph_outgoing_references_agg(
+    path_hashes TableOrSubquery
+)
+RETURNS TableOrSubquery AS
+(
+  SELECT
+    path_hash,
+    c.name AS class_name,
+    r.field_name,
+    r.field_type_name,
+    dst.*
+  FROM $path_hashes AS h
+  JOIN heap_graph_reference AS r
+    ON r.owner_id = src.id
+  JOIN heap_graph_object AS src
+    ON h.id = src.id
+  JOIN heap_graph_object AS dst
+    ON dst.id = r.owned_id
+  JOIN heap_graph_class AS c
+    ON dst.type_id = c.id
+);
+
+CREATE PERFETTO MACRO _heap_graph_retained_object_count_agg(
+    path_hashes TableOrSubquery,
+    path_hash_value Expr
+)
+RETURNS TableOrSubquery AS
+(
+  SELECT
+    c.name AS class_name,
+    o.heap_type,
+    o.root_type,
+    o.reachable,
+    sum(o.self_size) AS total_size,
+    sum(o.native_size) AS total_native_size,
+    count() AS count
+  FROM graph_reachable_bfs
+    !(
+      (
+        SELECT
+          IFNULL(parent_id, id) AS source_node_id,
+          IFNULL(id, parent_id) AS dest_node_id
+        FROM _heap_graph_object_min_depth_tree
+      ),
+      (
+        SELECT o.id AS node_id
+        FROM $path_hashes h
+        JOIN heap_graph_object o
+          ON h.id = o.id
+        JOIN heap_graph_class c
+          ON o.type_id = c.id
+        WHERE path_hash IN ($path_hash_value)
+      )) AS b
+  JOIN heap_graph_object AS o
+    ON b.node_id = o.id
+  JOIN heap_graph_class AS c
+    ON o.type_id = c.id
+  GROUP BY
+    class_name,
+    heap_type,
+    root_type,
+    reachable
+  ORDER BY
+    count DESC
+);
+
+CREATE PERFETTO MACRO _heap_graph_retaining_object_count_agg(
+    path_hashes TableOrSubquery,
+    path_hash_value Expr
+)
+RETURNS TableOrSubquery AS
+(
+  SELECT
+    c.name AS class_name,
+    o.heap_type,
+    o.root_type,
+    o.reachable,
+    sum(o.self_size) AS total_size,
+    sum(o.native_size) AS total_native_size,
+    count() AS count
+  FROM graph_reachable_bfs
+    !(
+      (
+        SELECT
+          IFNULL(id, parent_id) AS source_node_id,
+          IFNULL(parent_id, id) AS dest_node_id
+        FROM _heap_graph_object_min_depth_tree
+      ),
+      (
+        SELECT o.id AS node_id
+        FROM $path_hashes h
+        JOIN heap_graph_object o
+          ON h.id = o.id
+        JOIN heap_graph_class c
+          ON o.type_id = c.id
+        WHERE path_hash IN ($path_hash_value)
+      )) AS b
+  JOIN heap_graph_object AS o
+    ON b.node_id = o.id
+  JOIN heap_graph_class AS c
+    ON o.type_id = c.id
+  GROUP BY
+    class_name,
+    heap_type,
+    root_type,
+    reachable
+  ORDER BY
+    count DESC
+);

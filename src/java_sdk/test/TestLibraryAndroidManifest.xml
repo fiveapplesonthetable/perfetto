@@ -1,4 +1,5 @@
-/*
+<?xml version="1.0" encoding="utf-8"?>
+<!--
  * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,24 +13,10 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- */
+ -->
 
-package com.google.perfetto.sdk;
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.google.perfetto.sdk.test">
 
-import dalvik.annotation.optimization.CriticalNative;
-
-public class PerfettoExampleWrapper {
-
-    static {
-        System.loadLibrary("perfetto_jni_wrapper_lib");
-    }
-
-    public static int doRunPerfettoMain(String outputFilePath) {
-        return new PerfettoExampleWrapper().runPerfettoMain(outputFilePath);
-    }
-
-    private native int runPerfettoMain(String outputFilePath);
-
-    @CriticalNative
-    public static native int incrementIntCritical(int value);
-}
+    <uses-sdk android:minSdkVersion="31" />
+</manifest>
