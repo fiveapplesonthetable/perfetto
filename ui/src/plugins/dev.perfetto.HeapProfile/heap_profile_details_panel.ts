@@ -15,9 +15,10 @@
 import m from 'mithril';
 
 import {assertExists, assertFalse} from '../../base/logging';
+import {createPerfettoTable} from '../../trace_processor/sql_utils';
 import {extensions} from '../../components/extensions';
-import {runQuery} from '../../components/query_table/queries';
 import {time} from '../../base/time';
+import {uuidv4Sql} from '../../base/uuid';
 import {
   QueryFlamegraph,
   QueryFlamegraphMetric,
@@ -291,9 +292,11 @@ function flamegraphMetrics(
               name: 'path_hash_stable',
               displayName: 'Path Hash',
               mergeAggregation: 'CONCAT_WITH_COMMA',
+              isVisible: false,
             },
           ],
-          optionalActions: getHeapGraphOptionalActions(trace, false),
+          optionalNodeActions: getHeapGraphNodeOptionalActions(trace, false),
+          optionalRootActions: getHeapGraphRootOptionalActions(trace, false),
         },
         {
           name: 'Object Count',
@@ -322,9 +325,11 @@ function flamegraphMetrics(
               name: 'path_hash_stable',
               displayName: 'Path Hash',
               mergeAggregation: 'CONCAT_WITH_COMMA',
+              isVisible: false,
             },
           ],
-          optionalActions: getHeapGraphOptionalActions(trace, false),
+          optionalNodeActions: getHeapGraphNodeOptionalActions(trace, false),
+          optionalRootActions: getHeapGraphRootOptionalActions(trace, false),
         },
         {
           name: 'Dominated Object Size',
@@ -358,9 +363,11 @@ function flamegraphMetrics(
               name: 'path_hash_stable',
               displayName: 'Path Hash',
               mergeAggregation: 'CONCAT_WITH_COMMA',
+              isVisible: false,
             },
           ],
-          optionalActions: getHeapGraphOptionalActions(trace, true),
+          optionalNodeActions: getHeapGraphNodeOptionalActions(trace, true),
+          optionalRootActions: getHeapGraphRootOptionalActions(trace, true),
         },
         {
           name: 'Dominated Object Count',
@@ -389,9 +396,11 @@ function flamegraphMetrics(
               name: 'path_hash_stable',
               displayName: 'Path Hash',
               mergeAggregation: 'CONCAT_WITH_COMMA',
+              isVisible: false,
             },
           ],
-          optionalActions: getHeapGraphOptionalActions(trace, true),
+          optionalNodeActions: getHeapGraphNodeOptionalActions(trace, true),
+          optionalRootActions: getHeapGraphRootOptionalActions(trace, true),
         },
       ];
     case ProfileType.PERF_SAMPLE:
@@ -493,7 +502,6 @@ function getHeapGraphObjectReferencesView(
     columns: [
       new StandardColumn('path_hash'),
       new StandardColumn('outgoing_reference_count'),
-      new StandardColumn('incoming_reference_count'),
       new StandardColumn('class_name'),
       new StandardColumn('self_size'),
       new StandardColumn('native_size'),
@@ -576,117 +584,193 @@ function getHeapGraphRetainedObjectCountsView(
   };
 }
 
-function getHeapGraphOptionalActions(
+function getHeapGraphDuplicateObjectsView(
+  isDominator: boolean,
+): SqlTableDescription {
+  return {
+    name: `_heap_graph${tableModifier(isDominator)}duplicate_objects`,
+    columns: [
+      new StandardColumn('class_name'),
+      new StandardColumn('path_count'),
+      new StandardColumn('object_count'),
+      new StandardColumn('total_size'),
+      new StandardColumn('total_native_size'),
+    ],
+  };
+}
+
+function getHeapGraphNodeOptionalActions(
   trace: Trace,
   isDominator: boolean,
 ): ReadonlyArray<FlamegraphOptionalAction> {
   return [
     {
-      name: 'Open tab with objects',
+      name: 'Objects',
       execute: async (kv: ReadonlyMap<string, string>) => {
         const value = kv.get('path_hash_stable');
         if (value !== undefined) {
-          const viewName = `_heap_graph${tableModifier(isDominator)}object_references`;
-          const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes`;
+          const uuid = uuidv4Sql();
+          const pathHashTableName = `_heap_graph_filtered_path_hashes_${uuid}`;
+          await createPerfettoTable(
+            trace.engine,
+            pathHashTableName,
+            pathHashesToTableStatement(value),
+          );
+
+          const tableName = `_heap_graph${tableModifier(isDominator)}object_references`;
+          const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${pathHashTableName}`;
           const macroExpr = `_heap_graph_object_references_agg!(${macroArgs})`;
-          const statement = `CREATE OR REPLACE PERFETTO VIEW ${viewName} AS SELECT * FROM ${macroExpr};`;
+          const statement = `CREATE OR REPLACE PERFETTO TABLE ${tableName} AS SELECT * FROM ${macroExpr};`;
 
           // Create view to be returned
-          await runQuery(statement, trace.engine);
+          await trace.engine.query(statement);
           extensions.addLegacySqlTableTab(trace, {
             table: getHeapGraphObjectReferencesView(isDominator),
-            filters: [
-              {
-                op: (cols) => `${cols[0]} IN (${value})`,
-                columns: ['path_hash'],
-              },
-            ],
           });
         }
       },
     },
-    {
-      name: 'Incoming references',
-      execute: async (kv: ReadonlyMap<string, string>) => {
-        const value = kv.get('path_hash_stable');
-        if (value !== undefined) {
-          const viewName = `_heap_graph${tableModifier(isDominator)}incoming_references`;
-          const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes`;
-          const macroExpr = `_heap_graph_incoming_references_agg!(${macroArgs})`;
-          const statement = `CREATE OR REPLACE PERFETTO VIEW ${viewName} AS SELECT * FROM ${macroExpr};`;
 
-          // Create view to be returned
-          await runQuery(statement, trace.engine);
-          extensions.addLegacySqlTableTab(trace, {
-            table: getHeapGraphIncomingReferencesView(isDominator),
-            filters: [
-              {
-                op: (cols) => `${cols[0]} IN (${value})`,
-                columns: ['path_hash'],
-              },
-            ],
-          });
-        }
-      },
+    // Group for Direct References
+    {
+      name: 'Direct References',
+      // No execute function for parent menu items
+      subActions: [
+        {
+          name: 'Incoming references',
+          execute: async (kv: ReadonlyMap<string, string>) => {
+            const value = kv.get('path_hash_stable');
+            if (value !== undefined) {
+              const uuid = uuidv4Sql();
+              const pathHashTableName = `_heap_graph_filtered_path_hashes_${uuid}`;
+              await createPerfettoTable(
+                trace.engine,
+                pathHashTableName,
+                pathHashesToTableStatement(value),
+              );
+
+              const tableName = `_heap_graph${tableModifier(isDominator)}incoming_references`;
+              const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${pathHashTableName}`;
+              const macroExpr = `_heap_graph_incoming_references_agg!(${macroArgs})`;
+              const statement = `CREATE OR REPLACE PERFETTO TABLE ${tableName} AS SELECT * FROM ${macroExpr};`;
+
+              // Create view to be returned
+              await trace.engine.query(statement);
+              extensions.addLegacySqlTableTab(trace, {
+                table: getHeapGraphIncomingReferencesView(isDominator),
+              });
+            }
+          },
+        },
+        {
+          name: 'Outgoing references',
+          execute: async (kv: ReadonlyMap<string, string>) => {
+            const value = kv.get('path_hash_stable');
+            if (value !== undefined) {
+              const uuid = uuidv4Sql();
+              const pathHashTableName = `_heap_graph_filtered_path_hashes_${uuid}`;
+              await createPerfettoTable(
+                trace.engine,
+                pathHashTableName,
+                pathHashesToTableStatement(value),
+              );
+
+              const tableName = `_heap_graph${tableModifier(isDominator)}outgoing_references`;
+              const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${pathHashTableName}`;
+              const macroExpr = `_heap_graph_outgoing_references_agg!(${macroArgs})`;
+              const statement = `CREATE OR REPLACE PERFETTO TABLE ${tableName} AS SELECT * FROM ${macroExpr};`;
+
+              // Create view to be returned
+              await trace.engine.query(statement);
+              extensions.addLegacySqlTableTab(trace, {
+                table: getHeapGraphOutgoingReferencesView(isDominator),
+              });
+            }
+          },
+        },
+      ],
     },
-    {
-      name: 'Outgoing references',
-      execute: async (kv: ReadonlyMap<string, string>) => {
-        const value = kv.get('path_hash_stable');
-        if (value !== undefined) {
-          const viewName = `_heap_graph${tableModifier(isDominator)}outgoing_references`;
-          const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes`;
-          const macroExpr = `_heap_graph_outgoing_references_agg!(${macroArgs})`;
-          const statement = `CREATE OR REPLACE PERFETTO VIEW ${viewName} AS SELECT * FROM ${macroExpr};`;
 
-          // Create view to be returned
-          await runQuery(statement, trace.engine);
-          extensions.addLegacySqlTableTab(trace, {
-            table: getHeapGraphOutgoingReferencesView(isDominator),
-            filters: [
-              {
-                op: (cols) => `${cols[0]} IN (${value})`,
-                columns: ['path_hash'],
-              },
-            ],
-          });
-        }
-      },
+    // Group for Indirect References
+    {
+      name: 'Indirect References',
+      // No execute function for parent menu items
+      subActions: [
+        {
+          name: 'Retained objects',
+          execute: async (kv: ReadonlyMap<string, string>) => {
+            const value = kv.get('path_hash_stable');
+            if (value !== undefined) {
+              const uuid = uuidv4Sql();
+              const pathHashTableName = `_heap_graph_filtered_path_hashes_${uuid}`;
+              await createPerfettoTable(
+                trace.engine,
+                pathHashTableName,
+                pathHashesToTableStatement(value),
+              );
+
+              const tableName = `_heap_graph${tableModifier(isDominator)}retained_object_counts`;
+              const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${pathHashTableName}`;
+              const macroExpr = `_heap_graph_retained_object_count_agg!(${macroArgs})`;
+              const statement = `CREATE OR REPLACE PERFETTO TABLE ${tableName} AS SELECT * FROM ${macroExpr};`;
+
+              // Create view to be returned
+              await trace.engine.query(statement);
+              extensions.addLegacySqlTableTab(trace, {
+                table: getHeapGraphRetainedObjectCountsView(isDominator),
+              });
+            }
+          },
+        },
+        {
+          name: 'Retaining objects',
+          execute: async (kv: ReadonlyMap<string, string>) => {
+            const value = kv.get('path_hash_stable');
+            if (value !== undefined) {
+              const uuid = uuidv4Sql();
+              const pathHashTableName = `_heap_graph_filtered_path_hashes_${uuid}`;
+              await createPerfettoTable(
+                trace.engine,
+                pathHashTableName,
+                pathHashesToTableStatement(value),
+              );
+
+              const tableName = `_heap_graph${tableModifier(isDominator)}retaining_object_counts`;
+              const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${pathHashTableName}`;
+              const macroExpr = `_heap_graph_retaining_object_count_agg!(${macroArgs})`;
+              const statement = `CREATE OR REPLACE PERFETTO TABLE ${tableName} AS SELECT * FROM ${macroExpr};`;
+
+              // Create view to be returned
+              await trace.engine.query(statement);
+              extensions.addLegacySqlTableTab(trace, {
+                table: getHeapGraphRetainingObjectCountsView(isDominator),
+              });
+            }
+          },
+        },
+      ],
     },
-    {
-      name: 'Retained objects',
-      execute: async (kv: ReadonlyMap<string, string>) => {
-        const value = kv.get('path_hash_stable');
-        if (value !== undefined) {
-          const viewName = `_heap_graph${tableModifier(isDominator)}retained_object_counts`;
-          const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${value}`;
-          const macroExpr = `_heap_graph_retained_object_count_agg!(${macroArgs})`;
-          const statement = `CREATE OR REPLACE PERFETTO VIEW ${viewName} AS SELECT * FROM ${macroExpr};`;
+  ];
+}
 
-          // Create view to be returned
-          await runQuery(statement, trace.engine);
-          extensions.addLegacySqlTableTab(trace, {
-            table: getHeapGraphRetainedObjectCountsView(isDominator),
-          });
-        }
-      },
-    },
+function getHeapGraphRootOptionalActions(
+  trace: Trace,
+  isDominator: boolean,
+): ReadonlyArray<FlamegraphOptionalAction> {
+  return [
     {
-      name: 'Retaining objects',
-      execute: async (kv: ReadonlyMap<string, string>) => {
-        const value = kv.get('path_hash_stable');
-        if (value !== undefined) {
-          const viewName = `_heap_graph${tableModifier(isDominator)}retaining_object_counts`;
-          const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes, ${value}`;
-          const macroExpr = `_heap_graph_retaining_object_count_agg!(${macroArgs})`;
-          const statement = `CREATE OR REPLACE PERFETTO VIEW ${viewName} AS SELECT * FROM ${macroExpr};`;
+      name: 'Reference paths by class',
+      execute: async (_kv: ReadonlyMap<string, string>) => {
+        const viewName = `_heap_graph${tableModifier(isDominator)}duplicate_objects`;
+        const macroArgs = `_heap_graph${tableModifier(isDominator)}path_hashes`;
+        const macroExpr = `_heap_graph_duplicate_objects_agg!(${macroArgs})`;
+        const statement = `CREATE OR REPLACE PERFETTO VIEW ${viewName} AS SELECT * FROM ${macroExpr};`;
 
-          // Create view to be returned
-          await runQuery(statement, trace.engine);
-          extensions.addLegacySqlTableTab(trace, {
-            table: getHeapGraphRetainingObjectCountsView(isDominator),
-          });
-        }
+        // Create view to be returned
+        await trace.engine.query(statement);
+        extensions.addLegacySqlTableTab(trace, {
+          table: getHeapGraphDuplicateObjectsView(isDominator),
+        });
       },
     },
   ];
@@ -694,4 +778,16 @@ function getHeapGraphOptionalActions(
 
 function tableModifier(isDominator: boolean): string {
   return isDominator ? '_dominator_' : '_';
+}
+
+function pathHashesToTableStatement(commaSeparatedValues: string): string {
+  // Split the string by commas and trim whitespace
+  const individualValues = commaSeparatedValues.split(',').map((v) => v.trim());
+
+  // Wrap each value with parentheses
+  const wrappedValues = individualValues.map((value) => `(${value})`);
+
+  // Join with commas and create the complete WITH clause
+  const valuesClause = `values${wrappedValues.join(', ')}`;
+  return `WITH temp_table(path_hash) AS (${valuesClause}) SELECT * FROM temp_table`;
 }

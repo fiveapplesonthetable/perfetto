@@ -90,7 +90,12 @@ namespace perfetto::trace_processor::stats {
                                           kSingle,  kError,    kAnalysis, ""), \
   F(fuchsia_non_numeric_counters,         kSingle,  kError,    kAnalysis, ""), \
   F(fuchsia_timestamp_overflow,           kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_record_read_error,            kSingle,  kError,    kAnalysis, ""), \
   F(fuchsia_invalid_event,                kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_invalid_event_arg_type,       kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_invalid_event_arg_name,       kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_unknown_event_arg,            kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_invalid_string_ref,           kSingle,  kError,    kAnalysis, ""), \
   F(gpu_counters_invalid_spec,            kSingle,  kError,    kAnalysis, ""), \
   F(gpu_counters_missing_spec,            kSingle,  kError,    kAnalysis, ""), \
   F(gpu_render_stage_parser_errors,       kSingle,  kError,    kAnalysis, ""), \
@@ -496,9 +501,19 @@ enum Source {
   kAnalysis
 };
 
-// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #if defined(__GNUC__) || defined(__clang__)
+#if defined(__clang__)
+#pragma clang diagnostic push
+// Fix 'error: #pragma system_header ignored in main file' for clang in Google3.
+#pragma clang diagnostic ignored "-Wpragma-system-header-outside-header"
+#endif
+
+// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #pragma GCC system_header
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 // Declares an enum of literals (one for each stat). The enum values of each

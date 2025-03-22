@@ -2282,6 +2282,8 @@ perfetto_filegroup(
         "src/trace_processor/importers/proto/android_camera_event_module.h",
         "src/trace_processor/importers/proto/android_kernel_wakelocks_module.cc",
         "src/trace_processor/importers/proto/android_kernel_wakelocks_module.h",
+        "src/trace_processor/importers/proto/android_kernel_wakelocks_state.cc",
+        "src/trace_processor/importers/proto/android_kernel_wakelocks_state.h",
         "src/trace_processor/importers/proto/android_probes_module.cc",
         "src/trace_processor/importers/proto/android_probes_module.h",
         "src/trace_processor/importers/proto/android_probes_parser.cc",
@@ -2633,6 +2635,7 @@ perfetto_filegroup(
         "src/trace_processor/metrics/sql/android/wattson_app_startup_rails.sql",
         "src/trace_processor/metrics/sql/android/wattson_app_startup_threads.sql",
         "src/trace_processor/metrics/sql/android/wattson_atrace_apps_rails.sql",
+        "src/trace_processor/metrics/sql/android/wattson_atrace_apps_threads.sql",
         "src/trace_processor/metrics/sql/android/wattson_markers_rails.sql",
         "src/trace_processor/metrics/sql/android/wattson_markers_threads.sql",
         "src/trace_processor/metrics/sql/android/wattson_rail_relations.sql",
@@ -3014,6 +3017,14 @@ perfetto_filegroup(
     name = "src_trace_processor_perfetto_sql_stdlib_android_cpu_cpu",
     srcs = [
         "src/trace_processor/perfetto_sql/stdlib/android/cpu/cluster_type.sql",
+    ],
+)
+
+# GN target: //src/trace_processor/perfetto_sql/stdlib/android/dumpsys:dumpsys
+perfetto_filegroup(
+    name = "src_trace_processor_perfetto_sql_stdlib_android_dumpsys_dumpsys",
+    srcs = [
+        "src/trace_processor/perfetto_sql/stdlib/android/dumpsys/show_map.sql",
     ],
 )
 
@@ -3408,6 +3419,7 @@ perfetto_cc_amalgamated_sql(
         ":src_trace_processor_perfetto_sql_stdlib_android_auto_auto",
         ":src_trace_processor_perfetto_sql_stdlib_android_battery_battery",
         ":src_trace_processor_perfetto_sql_stdlib_android_cpu_cpu",
+        ":src_trace_processor_perfetto_sql_stdlib_android_dumpsys_dumpsys",
         ":src_trace_processor_perfetto_sql_stdlib_android_frames_frames",
         ":src_trace_processor_perfetto_sql_stdlib_android_gpu_gpu",
         ":src_trace_processor_perfetto_sql_stdlib_android_memory_heap_graph_heap_graph",
@@ -4206,8 +4218,6 @@ perfetto_filegroup(
 perfetto_filegroup(
     name = "src_traced_probes_probes_src",
     srcs = [
-        "src/traced/probes/kmem_activity_trigger.cc",
-        "src/traced/probes/kmem_activity_trigger.h",
         "src/traced/probes/probes_producer.cc",
         "src/traced/probes/probes_producer.h",
     ],
@@ -4395,6 +4405,223 @@ perfetto_filegroup(
 # Android Java SDK targets
 # ##############################################################################
 
+# GN target: //src/android_sdk/java/main:perfetto_trace_app
+perfetto_android_binary(
+    name = "src_android_sdk_java_main_perfetto_trace_app",
+    manifest = "src/android_sdk/java/main/AndroidManifest.xml",
+    deps = [
+        ":src_android_sdk_java_main_perfetto_trace_lib",
+    ],
+)
+
+# GN target: //src/android_sdk/java/main:perfetto_trace_lib
+perfetto_android_library(
+    name = "src_android_sdk_java_main_perfetto_trace_lib",
+    srcs = [
+        "src/android_sdk/java/main/dev/perfetto/sdk/PerfettoTrace.java",
+        "src/android_sdk/java/main/dev/perfetto/sdk/PerfettoTrackEventExtra.java",
+    ],
+    manifest = "src/android_sdk/java/main/AndroidManifest.xml",
+    deps = [
+        ":src_android_sdk_jni_libperfetto_jni",
+    ],
+    tags = [
+        "notap",
+    ],
+)
+
+# GN target: //src/android_sdk/java/test:perfetto_trace_instrumentation_test
+perfetto_android_instrumentation_test(
+    name = "src_android_sdk_java_test_perfetto_trace_instrumentation_test",
+    app = "src_android_sdk_java_main_perfetto_trace_app",
+    test_app = "src_android_sdk_java_test_perfetto_trace_test_app",
+)
+
+# GN target: //src/android_sdk/java/test:perfetto_trace_test_app
+perfetto_android_binary(
+    name = "src_android_sdk_java_test_perfetto_trace_test_app",
+    testonly = True,
+    manifest = "src/android_sdk/java/test/AndroidTestManifest.xml",
+    instruments = ":src_android_sdk_java_main_perfetto_trace_app",
+    deps = [
+        ":src_android_sdk_java_test_perfetto_trace_test_lib",
+    ],
+)
+
+# GN target: //src/android_sdk/java/test:perfetto_trace_test_lib
+perfetto_android_library(
+    name = "src_android_sdk_java_test_perfetto_trace_test_lib",
+    testonly = True,
+    srcs = [
+        "src/android_sdk/java/test/dev/perfetto/sdk/test/PerfettoTraceTest.java",
+    ],
+    manifest = "src/android_sdk/java/test/AndroidTestManifest.xml",
+    deps = [
+        ":src_android_sdk_java_main_perfetto_trace_lib",
+        ":trace_java_proto_lite",
+    ] + PERFETTO_CONFIG.deps.android_test_common,
+    tags = [
+        "notap",
+    ],
+)
+
+# GN target: //src/android_sdk/jni:libperfetto_jni
+perfetto_android_jni_library(
+    name = "src_android_sdk_jni_libperfetto_jni",
+    srcs = [
+        ":src_android_sdk_jni_libperfetto_jni_src",
+        ":src_android_sdk_nativehelper_nativehelper",
+        ":src_android_sdk_perfetto_sdk_for_jni_perfetto_sdk_for_jni",
+        ":src_android_sdk_perfetto_sdk_for_jni_perfetto_sdk_for_jni_public",
+        ":src_android_stats_android_stats",
+        ":src_android_stats_perfetto_atoms",
+        ":src_protozero_filtering_bytecode_common",
+        ":src_protozero_filtering_bytecode_parser",
+        ":src_protozero_filtering_message_filter",
+        ":src_protozero_filtering_string_filter",
+        ":src_shared_lib_intern_map",
+        ":src_shared_lib_shared_lib",
+        ":src_tracing_client_api_without_backends",
+        ":src_tracing_common",
+        ":src_tracing_core_core",
+        ":src_tracing_in_process_backend",
+        ":src_tracing_ipc_common",
+        ":src_tracing_ipc_consumer_consumer",
+        ":src_tracing_ipc_default_socket",
+        ":src_tracing_ipc_producer_producer",
+        ":src_tracing_ipc_service_service",
+        ":src_tracing_service_service",
+        ":src_tracing_system_backend",
+    ],
+    binary_name = "libperfetto_jni_lib.so",
+    linkopts = [
+        "-llog",
+    ],
+    hdrs = [
+        ":include_perfetto_base_base",
+        ":include_perfetto_ext_base_base",
+        ":include_perfetto_ext_ipc_ipc",
+        ":include_perfetto_ext_tracing_core_core",
+        ":include_perfetto_ext_tracing_ipc_ipc",
+        ":include_perfetto_protozero_protozero",
+        ":include_perfetto_public_abi_base",
+        ":include_perfetto_public_abi_public",
+        ":include_perfetto_public_base",
+        ":include_perfetto_public_protos_protos",
+        ":include_perfetto_public_protozero",
+        ":include_perfetto_public_public",
+        ":include_perfetto_tracing_core_core",
+        ":include_perfetto_tracing_core_forward_decls",
+        ":include_perfetto_tracing_tracing",
+    ],
+    defines = [
+        "PERFETTO_SHLIB_SDK_IMPLEMENTATION",
+    ],
+    deps = [
+        ":libperfetto_c",
+        ":perfetto_ipc",
+        ":protos_perfetto_common_cpp",
+        ":protos_perfetto_common_zero",
+        ":protos_perfetto_config_android_cpp",
+        ":protos_perfetto_config_android_zero",
+        ":protos_perfetto_config_cpp",
+        ":protos_perfetto_config_ftrace_cpp",
+        ":protos_perfetto_config_ftrace_zero",
+        ":protos_perfetto_config_gpu_cpp",
+        ":protos_perfetto_config_gpu_zero",
+        ":protos_perfetto_config_inode_file_cpp",
+        ":protos_perfetto_config_inode_file_zero",
+        ":protos_perfetto_config_interceptors_cpp",
+        ":protos_perfetto_config_interceptors_zero",
+        ":protos_perfetto_config_power_cpp",
+        ":protos_perfetto_config_power_zero",
+        ":protos_perfetto_config_process_stats_cpp",
+        ":protos_perfetto_config_process_stats_zero",
+        ":protos_perfetto_config_profiling_cpp",
+        ":protos_perfetto_config_profiling_zero",
+        ":protos_perfetto_config_statsd_cpp",
+        ":protos_perfetto_config_statsd_zero",
+        ":protos_perfetto_config_sys_stats_cpp",
+        ":protos_perfetto_config_sys_stats_zero",
+        ":protos_perfetto_config_system_info_cpp",
+        ":protos_perfetto_config_system_info_zero",
+        ":protos_perfetto_config_track_event_cpp",
+        ":protos_perfetto_config_track_event_zero",
+        ":protos_perfetto_config_zero",
+        ":protos_perfetto_ipc_cpp",
+        ":protos_perfetto_ipc_ipc",
+        ":protos_perfetto_trace_android_winscope_common_zero",
+        ":protos_perfetto_trace_android_winscope_regular_zero",
+        ":protos_perfetto_trace_android_zero",
+        ":protos_perfetto_trace_chrome_zero",
+        ":protos_perfetto_trace_etw_zero",
+        ":protos_perfetto_trace_filesystem_zero",
+        ":protos_perfetto_trace_ftrace_zero",
+        ":protos_perfetto_trace_gpu_zero",
+        ":protos_perfetto_trace_interned_data_zero",
+        ":protos_perfetto_trace_minimal_zero",
+        ":protos_perfetto_trace_non_minimal_zero",
+        ":protos_perfetto_trace_perfetto_zero",
+        ":protos_perfetto_trace_power_zero",
+        ":protos_perfetto_trace_profiling_zero",
+        ":protos_perfetto_trace_ps_zero",
+        ":protos_perfetto_trace_statsd_zero",
+        ":protos_perfetto_trace_sys_stats_zero",
+        ":protos_perfetto_trace_system_info_zero",
+        ":protos_perfetto_trace_track_event_cpp",
+        ":protos_perfetto_trace_track_event_zero",
+        ":protos_perfetto_trace_translation_zero",
+        ":protozero",
+        ":src_base_base",
+        ":src_base_clock_snapshots",
+        ":src_base_version",
+    ],
+    tags = [
+        "notap",
+    ],
+)
+
+# GN target: //src/android_sdk/jni:libperfetto_jni_src
+perfetto_filegroup(
+    name = "src_android_sdk_jni_libperfetto_jni_src",
+    srcs = [
+        "src/android_sdk/jni/dev_perfetto_sdk_PerfettoTrace.cc",
+        "src/android_sdk/jni/dev_perfetto_sdk_PerfettoTrackEventExtra.cc",
+        "src/android_sdk/jni/dev_perfetto_sdk_PerfettoTrackEventExtra.h",
+    ],
+)
+
+# GN target: //src/android_sdk/nativehelper:nativehelper
+perfetto_filegroup(
+    name = "src_android_sdk_nativehelper_nativehelper",
+    srcs = [
+        "src/android_sdk/nativehelper/JNIHelp.h",
+        "src/android_sdk/nativehelper/nativehelper_utils.h",
+        "src/android_sdk/nativehelper/scoped_local_frame.h",
+        "src/android_sdk/nativehelper/scoped_local_ref.h",
+        "src/android_sdk/nativehelper/scoped_primitive_array.h",
+        "src/android_sdk/nativehelper/scoped_string_chars.h",
+        "src/android_sdk/nativehelper/scoped_utf_chars.h",
+        "src/android_sdk/nativehelper/utils.h",
+    ],
+)
+
+# GN target: //src/android_sdk/perfetto_sdk_for_jni:perfetto_sdk_for_jni
+perfetto_filegroup(
+    name = "src_android_sdk_perfetto_sdk_for_jni_perfetto_sdk_for_jni",
+    srcs = [
+        "src/android_sdk/perfetto_sdk_for_jni/tracing_sdk.cc",
+    ],
+)
+
+# GN target: //src/android_sdk/perfetto_sdk_for_jni:perfetto_sdk_for_jni_public
+perfetto_filegroup(
+    name = "src_android_sdk_perfetto_sdk_for_jni_perfetto_sdk_for_jni_public",
+    srcs = [
+        "src/android_sdk/perfetto_sdk_for_jni/tracing_sdk.h",
+    ],
+)
+
 # GN target: //src/java_sdk/main/cpp:perfetto_example_jni_lib
 perfetto_android_jni_library(
     name = "src_java_sdk_main_cpp_perfetto_example_jni_lib",
@@ -4456,6 +4683,7 @@ perfetto_android_instrumentation_test(
 # GN target: //src/java_sdk/test:perfetto_java_sdk_test_app
 perfetto_android_binary(
     name = "src_java_sdk_test_perfetto_java_sdk_test_app",
+    testonly = True,
     manifest = "src/java_sdk/test/AndroidTestManifest.xml",
     instruments = ":src_java_sdk_main_perfetto_java_sdk_app",
     deps = [
@@ -4466,6 +4694,7 @@ perfetto_android_binary(
 # GN target: //src/java_sdk/test:perfetto_test_lib
 perfetto_android_library(
     name = "src_java_sdk_test_perfetto_test_lib",
+    testonly = True,
     srcs = [
         "src/java_sdk/test/java/com/google/perfetto/sdk/test/SimpleInstrumentationTest.java",
     ],
@@ -4940,6 +5169,7 @@ perfetto_proto_library(
         "protos/perfetto/config/android/android_polled_state_config.proto",
         "protos/perfetto/config/android/android_sdk_sysprop_guard_config.proto",
         "protos/perfetto/config/android/android_system_property_config.proto",
+        "protos/perfetto/config/android/app_wakelock_config.proto",
         "protos/perfetto/config/android/kernel_wakelocks_config.proto",
         "protos/perfetto/config/android/network_trace_config.proto",
         "protos/perfetto/config/android/packages_list_config.proto",
@@ -5722,6 +5952,7 @@ perfetto_proto_library(
         "protos/perfetto/trace/android/android_game_intervention_list.proto",
         "protos/perfetto/trace/android/android_log.proto",
         "protos/perfetto/trace/android/android_system_property.proto",
+        "protos/perfetto/trace/android/app_wakelock_data.proto",
         "protos/perfetto/trace/android/bluetooth_trace.proto",
         "protos/perfetto/trace/android/camera_event.proto",
         "protos/perfetto/trace/android/frame_timeline_event.proto",

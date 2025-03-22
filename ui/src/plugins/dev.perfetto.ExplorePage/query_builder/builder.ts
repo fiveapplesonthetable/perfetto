@@ -18,45 +18,36 @@ import {PageWithTraceAttrs} from '../../../public/page';
 import {Button} from '../../../widgets/button';
 import {SqlModules, SqlTable} from '../../dev.perfetto.SqlModules/sql_modules';
 import {ColumnControllerRow} from './column_controller';
-import {NodeType, QueryNode} from '../query_node';
+import {QueryNode} from '../query_node';
 import {showModal} from '../../../widgets/modal';
 import {DataSourceViewer} from './data_source_viewer';
-import {MenuItem, PopupMenu} from '../../../widgets/menu';
-import {
-  StdlibTableAttrs,
-  StdlibTableNode,
-  StdlibTableSource,
-} from './sources/stdlib_table';
-import {SqlSource, SqlSourceAttrs, SqlSourceNode} from './sources/sql_source';
+import {PopupMenu} from '../../../widgets/menu';
 import {Icons} from '../../../base/semantic_icons';
-import {
-  SlicesSource,
-  SlicesSourceAttrs,
-  SlicesSourceNode,
-} from './sources/slices_source';
 import {Intent} from '../../../widgets/common';
 
 export interface QueryBuilderTable {
   name: string;
   asSqlTable: SqlTable;
-  columnOptions: ColumnControllerRow[];
+  columnOptions: ColumnControllerRow;
   sql: string;
 }
 
 export interface QueryBuilderAttrs extends PageWithTraceAttrs {
   readonly sqlModules: SqlModules;
-  readonly rootNode?: QueryNode;
+  readonly rootNodes: QueryNode[];
   readonly selectedNode?: QueryNode;
 
   readonly onRootNodeCreated: (node: QueryNode) => void;
-  readonly onNodeSelected: (node: QueryNode) => void;
-  readonly visualiseDataMenuItems: (node: QueryNode) => m.Children;
+  readonly onNodeSelected: (node?: QueryNode) => void;
+  readonly renderNodeActionsMenuItems: (node: QueryNode) => m.Children;
+  readonly addSourcePopupMenu: () => m.Children;
 }
 
 interface NodeAttrs {
-  node: QueryNode;
+  readonly node: QueryNode;
   isSelected: boolean;
-  onNodeSelected: (node: QueryNode) => void;
+  readonly onNodeSelected: (node: QueryNode) => void;
+  readonly renderNodeActionsMenuItems: (node: QueryNode) => m.Children;
 }
 
 class NodeBox implements m.ClassComponent<NodeAttrs> {
@@ -75,6 +66,16 @@ class NodeBox implements m.ClassComponent<NodeAttrs> {
         onclick: () => onNodeSelected(node),
       },
       node.getTitle(),
+      m(
+        PopupMenu,
+        {
+          trigger: m(Button, {
+            iconFilled: true,
+            icon: Icons.MoreVert,
+          }),
+        },
+        attrs.renderNodeActionsMenuItems(node),
+      ),
     );
   }
 }
@@ -83,190 +84,65 @@ export class QueryBuilder implements m.ClassComponent<QueryBuilderAttrs> {
   view({attrs}: m.CVnode<QueryBuilderAttrs>) {
     const {
       trace,
-      sqlModules,
-      rootNode,
-      onRootNodeCreated,
+      rootNodes,
       onNodeSelected,
       selectedNode,
+      renderNodeActionsMenuItems,
     } = attrs;
-
-    const chooseSourceButton = (): m.Child => {
-      return m(
-        PopupMenu,
-        {
-          trigger: m(Button, {
-            icon: Icons.Add,
-            intent: Intent.Primary,
-            style: {
-              height: '100px',
-              width: '100px',
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              fontSize: '48px',
-            },
-          }),
-        },
-        m(MenuItem, {
-          label: 'Standard library table',
-          onclick: async () => {
-            const attrs: StdlibTableAttrs = {
-              filters: [],
-              sourceCols: [],
-              groupByColumns: [],
-              aggregations: [],
-              trace,
-              sqlModules,
-              modal: () =>
-                createModal(
-                  'Standard library table',
-                  () => m(StdlibTableSource, attrs),
-                  () => {
-                    const newNode = new StdlibTableNode(attrs);
-                    onRootNodeCreated(newNode);
-                    onNodeSelected(newNode);
-                  },
-                ),
-            };
-            // Adding trivial modal to open the table selection.
-            createModal(
-              'Standard library table',
-              () => m(StdlibTableSource, attrs),
-              () => {},
-            );
-          },
-        }),
-        m(MenuItem, {
-          label: 'Custom slices',
-          onclick: () => {
-            const newSimpleSlicesAttrs: SlicesSourceAttrs = {
-              sourceCols: [],
-              filters: [],
-              groupByColumns: [],
-              aggregations: [],
-            };
-            createModal(
-              'Slices',
-              () => m(SlicesSource, newSimpleSlicesAttrs),
-              () => {
-                const newNode = new SlicesSourceNode(newSimpleSlicesAttrs);
-                onRootNodeCreated(newNode);
-                onNodeSelected(newNode);
-              },
-            );
-          },
-        }),
-        m(MenuItem, {
-          label: 'Custom SQL',
-          onclick: () => {
-            const newSqlSourceAttrs: SqlSourceAttrs = {
-              sourceCols: [],
-              filters: [],
-              groupByColumns: [],
-              aggregations: [],
-            };
-            createModal(
-              'SQL',
-              () => m(SqlSource, newSqlSourceAttrs),
-              () => {
-                const newNode = new SqlSourceNode(newSqlSourceAttrs);
-                onRootNodeCreated(newNode);
-                onNodeSelected(newNode);
-              },
-            );
-          },
-        }),
-      );
-    };
-
-    const renderNodeActions = (curNode: QueryNode) => {
-      return m(
-        PopupMenu,
-        {
-          trigger: m(Button, {
-            iconFilled: true,
-            icon: Icons.MoreVert,
-          }),
-        },
-        attrs.visualiseDataMenuItems(curNode),
-        m(MenuItem, {
-          label: 'Edit',
-          onclick: async () => {
-            const attrsCopy = curNode.getState();
-            switch (curNode.type) {
-              case NodeType.kStdlibTable:
-                createModal(
-                  'Standard library table',
-                  () => m(StdlibTableSource, attrsCopy as StdlibTableAttrs),
-                  () => {
-                    curNode = new StdlibTableNode(
-                      attrsCopy as StdlibTableAttrs,
-                    );
-                    onNodeSelected(curNode);
-                    // TODO: remove this hack after handling multiple roots
-                    onRootNodeCreated(curNode);
-                  },
-                );
-                curNode = new StdlibTableNode(attrsCopy as StdlibTableAttrs);
-                break;
-              case NodeType.kSimpleSlices:
-                createModal(
-                  'Slices',
-                  () => m(SlicesSource, attrsCopy as SlicesSourceAttrs),
-                  () => {
-                    curNode = new SlicesSourceNode(
-                      attrsCopy as SlicesSourceAttrs,
-                    );
-                    onNodeSelected(curNode);
-                    // TODO: remove this hack after handling multiple roots
-                    onRootNodeCreated(curNode);
-                  },
-                );
-                break;
-              case NodeType.kSqlSource:
-                createModal(
-                  'SQL',
-                  () => m(SqlSource, attrsCopy as SqlSourceAttrs),
-                  () => {
-                    curNode = new SqlSourceNode(attrsCopy as SqlSourceAttrs);
-                    onNodeSelected(curNode);
-                    // TODO: remove this hack after handling multiple roots
-                    onRootNodeCreated(curNode);
-                  },
-                );
-            }
-          },
-        }),
-      );
-    };
 
     const renderNodesPanel = (): m.Children => {
       const nodes: m.Child[] = [];
-      let row = 1;
+      const numRoots = rootNodes.length;
 
-      if (!rootNode) {
+      if (numRoots === 0) {
         nodes.push(
-          m('', {style: {gridColumn: 3, gridRow: 2}}, chooseSourceButton()),
+          m(
+            '',
+            {style: {gridColumn: 3, gridRow: 2}},
+            m(
+              PopupMenu,
+              {
+                trigger: m(Button, {
+                  icon: Icons.Add,
+                  intent: Intent.Primary,
+                  style: {
+                    height: '100px',
+                    width: '100px',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    fontSize: '48px',
+                  },
+                }),
+              },
+              attrs.addSourcePopupMenu(),
+            ),
+          ),
         );
       } else {
-        let curNode: QueryNode | undefined = rootNode;
-        while (curNode) {
-          const localCurNode = curNode;
-          nodes.push(
-            m(
-              '',
-              {style: {display: 'flex', gridColumn: 3, gridRow: row}},
-              m(NodeBox, {
-                node: localCurNode,
-                isSelected: selectedNode === localCurNode,
-                onNodeSelected,
-              }),
-              renderNodeActions(curNode),
-            ),
-          );
-          row++;
-          curNode = curNode.nextNode;
-        }
+        let col = 1;
+        rootNodes.forEach((rootNode) => {
+          let row = 1;
+          let curNode: QueryNode | undefined = rootNode;
+          while (curNode) {
+            const localCurNode = curNode;
+            nodes.push(
+              m(
+                '',
+                {style: {display: 'flex', gridColumn: col, gridRow: row}},
+                m(NodeBox, {
+                  node: localCurNode,
+                  isSelected: selectedNode === localCurNode,
+                  onNodeSelected,
+                  renderNodeActionsMenuItems,
+                }),
+              ),
+            );
+            row++;
+            curNode = curNode.nextNode;
+          }
+          col += 1;
+        });
       }
 
       return m(
@@ -274,7 +150,7 @@ export class QueryBuilder implements m.ClassComponent<QueryBuilderAttrs> {
         {
           style: {
             display: 'grid',
-            gridTemplateColumns: 'repeat(5, 1fr)',
+            gridTemplateColumns: `repeat(${numRoots} - 1, 1fr)`,
             gridTemplateRows: 'repeat(3, 1fr)',
             gap: '10px',
           },
