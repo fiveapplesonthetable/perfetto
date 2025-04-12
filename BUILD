@@ -1678,8 +1678,10 @@ perfetto_filegroup(
 perfetto_filegroup(
     name = "src_trace_processor_dataframe_dataframe",
     srcs = [
+        "src/trace_processor/dataframe/cursor.h",
         "src/trace_processor/dataframe/dataframe.cc",
         "src/trace_processor/dataframe/dataframe.h",
+        "src/trace_processor/dataframe/runtime_dataframe_builder.h",
     ],
 )
 
@@ -1689,6 +1691,7 @@ perfetto_filegroup(
     srcs = [
         "src/trace_processor/dataframe/specs.h",
         "src/trace_processor/dataframe/type_set.h",
+        "src/trace_processor/dataframe/value_fetcher.h",
     ],
 )
 
@@ -2810,6 +2813,9 @@ perfetto_filegroup(
     srcs = [
         "src/trace_processor/perfetto_sql/engine/created_function.cc",
         "src/trace_processor/perfetto_sql/engine/created_function.h",
+        "src/trace_processor/perfetto_sql/engine/dataframe_module.cc",
+        "src/trace_processor/perfetto_sql/engine/dataframe_module.h",
+        "src/trace_processor/perfetto_sql/engine/dataframe_shared_storage.h",
         "src/trace_processor/perfetto_sql/engine/perfetto_sql_engine.cc",
         "src/trace_processor/perfetto_sql/engine/perfetto_sql_engine.h",
         "src/trace_processor/perfetto_sql/engine/runtime_table_function.cc",
@@ -3589,7 +3595,8 @@ perfetto_filegroup(
     srcs = [
         "src/trace_processor/sqlite/db_sqlite_table.cc",
         "src/trace_processor/sqlite/db_sqlite_table.h",
-        "src/trace_processor/sqlite/module_lifecycle_manager.h",
+        "src/trace_processor/sqlite/module_state_manager.cc",
+        "src/trace_processor/sqlite/module_state_manager.h",
         "src/trace_processor/sqlite/scoped_db.h",
         "src/trace_processor/sqlite/sql_source.cc",
         "src/trace_processor/sqlite/sql_source.h",
@@ -4466,7 +4473,9 @@ perfetto_android_binary(
 perfetto_android_library(
     name = "src_android_sdk_java_main_perfetto_trace_lib",
     srcs = [
+        "src/android_sdk/java/main/dev/perfetto/sdk/PerfettoNativeMemoryCleaner.java",
         "src/android_sdk/java/main/dev/perfetto/sdk/PerfettoTrace.java",
+        "src/android_sdk/java/main/dev/perfetto/sdk/PerfettoTrackEventBuilder.java",
         "src/android_sdk/java/main/dev/perfetto/sdk/PerfettoTrackEventExtra.java",
     ],
     manifest = "src/android_sdk/java/main/AndroidManifest.xml",
@@ -4633,6 +4642,8 @@ perfetto_android_jni_library(
 perfetto_filegroup(
     name = "src_android_sdk_jni_libperfetto_jni_src",
     srcs = [
+        "src/android_sdk/jni/dev_perfetto_sdk_PerfettoNativeMemoryCleaner.cc",
+        "src/android_sdk/jni/dev_perfetto_sdk_PerfettoNativeMemoryCleaner.h",
         "src/android_sdk/jni/dev_perfetto_sdk_PerfettoTrace.cc",
         "src/android_sdk/jni/dev_perfetto_sdk_PerfettoTrackEventExtra.cc",
         "src/android_sdk/jni/dev_perfetto_sdk_PerfettoTrackEventExtra.h",
@@ -5180,6 +5191,7 @@ perfetto_proto_library(
         "protos/perfetto/common/perf_events.proto",
         "protos/perfetto/common/protolog_common.proto",
         "protos/perfetto/common/sys_stats_counters.proto",
+        "protos/perfetto/common/system_info.proto",
         "protos/perfetto/common/trace_stats.proto",
         "protos/perfetto/common/tracing_service_capabilities.proto",
         "protos/perfetto/common/tracing_service_state.proto",
@@ -6415,7 +6427,6 @@ perfetto_proto_library(
     name = "protos_perfetto_trace_minimal_protos",
     srcs = [
         "protos/perfetto/trace/clock_snapshot.proto",
-        "protos/perfetto/trace/system_info.proto",
         "protos/perfetto/trace/trace_uuid.proto",
         "protos/perfetto/trace/trigger.proto",
     ],

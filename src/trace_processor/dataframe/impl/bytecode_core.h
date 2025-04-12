@@ -102,8 +102,8 @@ PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(
   return base::StackString<64>("Register(%u)", value.index);
 }
 
-PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(Op value) {
-  return base::StackString<64>("Op(%d)", value.index());
+PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(NonNullOp value) {
+  return base::StackString<64>("NonNullOp(%u)", value.index());
 }
 
 PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(
@@ -113,7 +113,18 @@ PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(
 
 PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(
     impl::BoundModifier bound) {
-  return base::StackString<64>("BoundModifier(%d)", bound.index());
+  return base::StackString<64>("BoundModifier(%u)", bound.index());
+}
+
+PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(
+    SortDirection direction) {
+  return base::StackString<64>("SortDirection(%u)",
+                               static_cast<uint32_t>(direction));
+}
+
+PERFETTO_NO_INLINE inline base::StackString<64> ArgToString(
+    NullsLocation location) {
+  return base::StackString<64>("NullsLocation(%u)", location.index());
 }
 
 PERFETTO_NO_INLINE inline void BytecodeFieldToString(

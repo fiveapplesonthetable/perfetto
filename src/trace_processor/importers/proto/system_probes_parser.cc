@@ -55,10 +55,10 @@
 #include "src/trace_processor/types/variadic.h"
 
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
+#include "protos/perfetto/common/system_info.pbzero.h"
 #include "protos/perfetto/trace/ps/process_stats.pbzero.h"
 #include "protos/perfetto/trace/ps/process_tree.pbzero.h"
 #include "protos/perfetto/trace/sys_stats/sys_stats.pbzero.h"
-#include "protos/perfetto/trace/system_info.pbzero.h"
 #include "protos/perfetto/trace/system_info/cpu_info.pbzero.h"
 
 namespace perfetto::trace_processor {
@@ -419,6 +419,8 @@ void SystemProbesParser::ParseSysStats(int64_t ts, ConstBytes blob) {
                                          intern_track("irq_ns"));
     context_->event_tracker->PushCounter(
         ts, static_cast<double>(ct.softirq_ns()), intern_track("softirq_ns"));
+    context_->event_tracker->PushCounter(ts, static_cast<double>(ct.steal_ns()),
+                                         intern_track("steal_ns"));
   }
 
   for (auto it = sys_stats.num_irq(); it; ++it) {
