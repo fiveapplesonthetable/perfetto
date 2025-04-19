@@ -3038,8 +3038,8 @@ TEST_F(TracingServiceImplTest, CommitToForbiddenBufferIsDiscarded) {
   BufferID buf1 = ds2->target_buffer;
 
   // Try to write to the correct buffer.
-  std::unique_ptr<TraceWriter> writer =
-      producer->endpoint()->CreateTraceWriter(buf0);
+  std::unique_ptr<TraceWriter> writer = producer->endpoint()->CreateTraceWriter(
+      buf0, BufferExhaustedPolicy::kStall);
   {
     auto tp = writer->NewTracePacket();
     tp->set_for_testing()->set_str("good_payload");
@@ -3060,7 +3060,8 @@ TEST_F(TracingServiceImplTest, CommitToForbiddenBufferIsDiscarded) {
   ASSERT_TRUE(flush_request.WaitForReply());
 
   // Try to write to the wrong buffer.
-  writer = producer->endpoint()->CreateTraceWriter(buf1);
+  writer = producer->endpoint()->CreateTraceWriter(
+      buf1, BufferExhaustedPolicy::kStall);
   {
     auto tp = writer->NewTracePacket();
     tp->set_for_testing()->set_str("bad_payload");
@@ -3287,8 +3288,8 @@ TEST_F(TracingServiceImplTest, ScrapeBuffersOnProducerDisconnect) {
 
   const auto* ds_inst = producer->GetDataSourceInstance("data_source");
   ASSERT_NE(nullptr, ds_inst);
-  std::unique_ptr<TraceWriter> writer =
-      shmem_arbiter->CreateTraceWriter(ds_inst->target_buffer);
+  std::unique_ptr<TraceWriter> writer = shmem_arbiter->CreateTraceWriter(
+      ds_inst->target_buffer, BufferExhaustedPolicy::kStall);
   // Wait for the TraceWriter to be registered.
   task_runner.RunUntilIdle();
 
@@ -3416,7 +3417,8 @@ class TracingServiceImplScrapingWithSmbTest : public TracingServiceImplTest {
 
     target_buffer_ = ds->target_buffer;
 
-    writer_ = arbiter_->CreateTraceWriter(target_buffer_);
+    writer_ = arbiter_->CreateTraceWriter(target_buffer_,
+                                          BufferExhaustedPolicy::kStall);
     // Wait for the writer to be registered.
     task_runner.RunUntilIdle();
   }
@@ -5633,6 +5635,7 @@ TEST_F(TracingServiceImplTest, CloneSnapshotTriggerProducesEvent) {
   EXPECT_EQ(trigger_hit_event.producer_name(), kMockProducerName);
   EXPECT_EQ(trigger_hit_event.producer_uid(), kMockProducerUid);
   EXPECT_GT(trigger_hit_event.boot_time_ns(), 0ul);
+  EXPECT_EQ(trigger_hit_event.trigger_delay_ms(), 1u);
 
   consumer->DisableTracing();
   producer->WaitForDataSourceStop("ds_1");
@@ -5673,6 +5676,7 @@ TEST_F(TracingServiceImplTest, CloneSessionEmitsTrigger) {
   static constexpr auto kCloneTriggerProducerName = "trigger_producer_name";
   static constexpr uid_t kCloneTriggerProducerUid = 42;
   static constexpr uint64_t kCloneTriggerTimestamp = 456789123;
+  static constexpr uint64_t kCloneTriggerDelayMs = 104;
   {
     auto clone_done = task_runner.CreateCheckpoint("clone_done");
     EXPECT_CALL(*consumer2, OnSessionCloned(_))
@@ -5688,6 +5692,7 @@ TEST_F(TracingServiceImplTest, CloneSessionEmitsTrigger) {
     args.clone_trigger_producer_name = kCloneTriggerProducerName;
     args.clone_trigger_trusted_producer_uid = kCloneTriggerProducerUid;
     args.clone_trigger_boot_time_ns = kCloneTriggerTimestamp;
+    args.clone_trigger_delay_ms = kCloneTriggerDelayMs;
     consumer2->endpoint()->CloneSession(args);
     // CloneSession() will implicitly issue a flush. Linearize with that.
     producer->ExpectFlush(writer.get());
@@ -5729,6 +5734,7 @@ TEST_F(TracingServiceImplTest, CloneSessionEmitsTrigger) {
   EXPECT_EQ(trigger.producer_name(), kCloneTriggerProducerName);
   EXPECT_EQ(trigger.trusted_producer_uid(),
             static_cast<int32_t>(kCloneTriggerProducerUid));
+  EXPECT_EQ(trigger.stop_delay_ms(), kCloneTriggerDelayMs);
 
   // A second ReadBuffers() should not reemit the clone_snapshot_trigger.
   cloned_packets = consumer2->ReadBuffers();
