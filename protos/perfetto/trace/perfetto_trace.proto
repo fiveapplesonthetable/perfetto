@@ -922,6 +922,9 @@ message ChromeConfig {
   // If |json_agent_label_filter| is not empty, only data pertaining to
   // the specified tracing agent label (e.g. "traceEvents") will be returned.
   optional string json_agent_label_filter = 5;
+
+  //  When enabled, event names should not contain package names.
+  optional bool event_package_name_filter_enabled = 6;
 }
 
 // End of protos/perfetto/config/chrome/chrome_config.proto
@@ -992,6 +995,14 @@ message EtwConfig {
   repeated KernelFlag kernel_flags = 1;
 }
 // End of protos/perfetto/config/etw/etw_config.proto
+
+// Begin of protos/perfetto/config/ftrace/frozen_ftrace_config.proto
+
+message FrozenFtraceConfig {
+  // The instance name which stores the previous boot ftrace data.
+  required string instance_name = 1;
+}
+// End of protos/perfetto/config/ftrace/frozen_ftrace_config.proto
 
 // Begin of protos/perfetto/config/ftrace/ftrace_config.proto
 
@@ -3773,7 +3784,7 @@ message TrackEventConfig {
 // Begin of protos/perfetto/config/data_source_config.proto
 
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 136
+// Next id: 137
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -3895,6 +3906,8 @@ message DataSourceConfig {
   optional StatsdTracingConfig statsd_tracing_config = 117 [lazy = true];
   // Data source name: linux.system_info
   optional SystemInfoConfig system_info_config = 119;
+  // Data source name: linux.frozen_ftrace
+  optional FrozenFtraceConfig frozen_ftrace_config = 136 [lazy = true];
 
   // Chrome is special as it doesn't use the perfetto IPC layer. We want to
   // avoid proto serialization and de-serialization there because that would
@@ -7159,7 +7172,10 @@ message CSwitchEtwEvent {
     MAXIMUM_WAIT_REASON = 37;
   }
 
-  optional OldThreadWaitReason old_thread_wait_reason = 6;
+  oneof old_thread_wait_reason_enum_or_int {
+    OldThreadWaitReason old_thread_wait_reason = 6;
+    int32 old_thread_wait_reason_int = 11;
+  }
 
   // Wait mode for the previous thread. The ordering is important as based on
   // the OldThreadWaitMode definition from the link above. The following are the
@@ -7169,7 +7185,10 @@ message CSwitchEtwEvent {
     USER_MODE = 1;
   }
 
-  optional OldThreadWaitMode old_thread_wait_mode = 7;
+  oneof old_thread_wait_mode_enum_or_int {
+    OldThreadWaitMode old_thread_wait_mode = 7;
+    int32 old_thread_wait_mode_int = 12;
+  }
 
   // State of the previous thread. The ordering is important as based on the
   // OldThreadState definition from the link above. The following are the
@@ -7185,7 +7204,10 @@ message CSwitchEtwEvent {
     DEFERRED_READY = 7;
   }
 
-  optional OldThreadState old_thread_state = 8;
+  oneof old_thread_state_enum_or_int {
+    OldThreadState old_thread_state = 8;
+    sint32 old_thread_state_int = 13;
+  }
 
   // Ideal wait time of the previous thread.
   optional sint32 old_thread_wait_ideal_processor = 9;
@@ -7212,7 +7234,10 @@ message ReadyThreadEtwEvent {
     APPLY_INCREMENT_BOOST = 2;
   }
 
-  optional AdjustReason adjust_reason = 2;
+  oneof adjust_reason_enum_or_int {
+    AdjustReason adjust_reason = 2;
+    int32 adjust_reason_int = 5;
+  }
 
   //  The value by which the priority is being adjusted.
   optional sint32 adjust_increment = 3;
@@ -7227,7 +7252,10 @@ message ReadyThreadEtwEvent {
     PROCESS_ADDRESS_SWAPPED_OUT = 0x4;
   }
 
-  optional TraceFlag flag = 4;
+  oneof flag_enum_or_int {
+    TraceFlag flag = 4;
+    TraceFlag flag_int = 6;
+  }
 }
 // End of protos/perfetto/trace/etw/etw.proto
 
