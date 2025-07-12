@@ -310,6 +310,50 @@ class TrackEvent(TestSuite):
         "tid=1","[NULL]"
         """))
 
+  def test_track_event_descriptions(self):
+    return DiffTestBlueprint(
+        trace=Path('track_event_tracks.textproto'),
+        query="""
+        WITH track_with_name AS (
+          SELECT
+            COALESCE(
+              t1.name,
+              'thread=' || thread.name,
+              'process=' || process.name,
+              'tid=' || thread.tid,
+              'pid=' || process.pid
+            ) AS full_name,
+            *
+          FROM track t1
+          LEFT JOIN thread_track t2 USING (id)
+          LEFT JOIN thread USING (utid)
+          LEFT JOIN process_track t3 USING (id)
+          LEFT JOIN process ON t3.upid = process.id
+          ORDER BY id
+        )
+        SELECT
+        t1.full_name AS name,
+        EXTRACT_ARG(t1.source_arg_set_id, 'description') AS description
+        FROM track_with_name t1
+        ORDER BY 1, 2;
+        """,
+        out=Csv("""
+        "name","description"
+        "Default Track","[NULL]"
+        "async","Async events for p1"
+        "async2","[NULL]"
+        "async3","Async events for t2"
+        "event_and_track_async3","[NULL]"
+        "process=p1","Chrome process: p1"
+        "process=p2","[NULL]"
+        "process=p2","[NULL]"
+        "thread=t1","Thread t1"
+        "thread=t2","Thread t2"
+        "thread=t3","[NULL]"
+        "thread=t4","[NULL]"
+        "tid=1","[NULL]"
+        """))
+
   # Instant events
   def test_track_event_instant_slices(self):
     return DiffTestBlueprint(
@@ -946,4 +990,49 @@ class TrackEvent(TestSuite):
         "thread_time",1
         "thread_time",1
         "thread_instruction_count",1
+        """))
+
+  def test_track_event_name_resolution(self):
+    return DiffTestBlueprint(
+        trace=Path('track_event_name_resolution.textproto'),
+        query="""
+        SELECT name
+        FROM track
+        ORDER BY name;
+        """,
+        out=Csv("""
+        "name"
+        "Before Event"
+        "Event Name"
+        "Second Name"
+        """))
+
+  def test_track_event_name_resolution_extended(self):
+    return DiffTestBlueprint(
+        trace=Path('track_event_name_resolution_extended.textproto'),
+        query="""
+        SELECT t.name, t.parent_id is null as is_root
+        FROM track t
+        ORDER BY t.name;
+        """,
+        out=Csv("""
+        "name","is_root"
+        "After Event",1
+        "Child Event",0
+        "Event Name",1
+        "Parent",1
+        "Second Name",1
+        """))
+
+  def test_track_event_name_resolution_null_override(self):
+    return DiffTestBlueprint(
+        trace=Path('track_event_name_resolution_null_override.textproto'),
+        query="""
+        SELECT name
+        FROM track
+        WHERE name IS NOT NULL;
+        """,
+        out=Csv("""
+        "name"
+        "First Name"
         """))
