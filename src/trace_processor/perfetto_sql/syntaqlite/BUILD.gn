@@ -18,14 +18,29 @@ assert(enable_perfetto_trace_processor_sqlite)
 
 # Amalgamated C tokenizer + parser generated from `perfetto.y` (grammar)
 # and `perfetto.synq` (AST node definitions) by `tools/gen_syntaqlite_parser`.
+_syntaqlite_sources = [
+  "syntaqlite_perfetto.c",
+  "syntaqlite_perfetto.h",
+]
+
 source_set("syntaqlite") {
-  sources = [
-    "syntaqlite_perfetto.c",
-    "syntaqlite_perfetto.h",
-  ]
+  sources = _syntaqlite_sources
   deps = [ "../../../../gn:default_deps" ]
   visibility = [
     "../parser:*",
     "../tokenizer",
   ]
+}
+
+# Loadable dialect library consumed by `syntaqlite fmt --dialect`. Links the
+# same amalgamated sources as `source_set("syntaqlite")` as a shared library so
+# the prebuilt syntaqlite CLI can dlopen it when formatting `.sql` files. Not
+# used at runtime by any Perfetto binary.
+#
+# Opts out of `visibility_hidden` so the grammar entry point the CLI dlsym's is
+# exported; without this the linker's dead-strip removes everything.
+shared_library("perfetto_fmt_dialect") {
+  sources = _syntaqlite_sources
+  configs -= [ "//gn/standalone:visibility_hidden" ]
+  deps = [ "../../../../gn:default_deps" ]
 }
