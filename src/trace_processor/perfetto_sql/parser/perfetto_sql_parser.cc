@@ -120,10 +120,15 @@ base::StatusOr<PerfettoSqlParser::CreateFunction::Returns> BuildReturnType(
 // constructor, so every subsequent lookup descends the tree in O(subtree).
 class MacroRewriteBuilder {
  public:
+  // `stmt_doc_offset` is the byte offset of the current statement within
+  // `stmt`.  Syntaqlite v0.5 reports every layer-0 offset (node extents,
+  // spans, macro call offsets) statement-relative, so call sites that
+  // slice `stmt` add this offset to translate into document coordinates.
   MacroRewriteBuilder(SyntaqliteParser* p,
                       const SqlSource& stmt,
+                      uint32_t stmt_doc_offset,
                       const base::FlatHashMap<std::string, Macro>& macros)
-      : p_(p), stmt_(stmt), macros_(macros) {
+      : p_(p), stmt_(stmt), stmt_doc_offset_(stmt_doc_offset), macros_(macros) {
     uint32_t total = syntaqlite_result_macro_count(p_);
     children_.resize(total);
     for (uint32_t i = 0; i < total; i++) {
@@ -141,13 +146,13 @@ class MacroRewriteBuilder {
   // if the node has no recorded extent.
   std::optional<SqlSource> NodeSource(uint32_t node_id) const {
     uint32_t len = 0;
-    uint32_t offset = 0;
-    if (syntaqlite_parser_node_text(p_, node_id, &len, &offset) == nullptr)
+    uint32_t stmt_off = 0;
+    if (syntaqlite_parser_node_text(p_, node_id, &len, &stmt_off) == nullptr)
       return std::nullopt;
+    SqlSource base = stmt_.Substr(stmt_off + stmt_doc_offset_, len);
     if (syntaqlite_node_is_macro_free(p_, node_id))
-      return stmt_.Substr(offset, len);
-    return ApplyChildrenInRange(stmt_.Substr(offset, len), source_rooted_,
-                                offset, len);
+      return base;
+    return ApplyChildrenInRange(std::move(base), source_rooted_, stmt_off, len);
   }
 
  private:
@@ -317,7 +322,7 @@ class MacroRewriteBuilder {
                              uint32_t offset,
                              uint32_t length) const {
     if (parent == SYNTAQLITE_MACRO_PARENT_SOURCE)
-      return stmt_.Substr(offset, length);
+      return stmt_.Substr(offset + stmt_doc_offset_, length);
     uint32_t seg_count = syntaqlite_macro_rewrite_arg_segment_count(p_, parent);
     for (uint32_t i = 0; i < seg_count; i++) {
       auto s = syntaqlite_macro_rewrite_arg_segment_at(p_, parent, i);
@@ -356,6 +361,7 @@ class MacroRewriteBuilder {
 
   SyntaqliteParser* p_;
   const SqlSource& stmt_;
+  uint32_t stmt_doc_offset_;
   const base::FlatHashMap<std::string, Macro>& macros_;
   // children_[parent_idx] = rewrite indices whose `parent_idx` equals that.
   std::vector<std::vector<uint32_t>> children_;
@@ -372,6 +378,17 @@ SqlSource NodeSource(const MacroRewriteBuilder& rb, uint32_t node_id) {
 // ---------------------------------------------------------------------------
 // Per-statement dispatch
 // ---------------------------------------------------------------------------
+
+// Document-relative byte offset of the statement currently held by `p`,
+// or 0 when the parser hasn't started a statement yet (e.g. tokenizer
+// error before any statement boundary was found).  Every layer-0 offset
+// syntaqlite emits for the current statement is measured from this
+// position within the bound source.
+uint32_t CurrentStatementDocOffset(SyntaqliteParser* p) {
+  uint32_t doc_offset = 0;
+  syntaqlite_parser_text(p, &doc_offset, nullptr);
+  return doc_offset;
+}
 
 base::StatusOr<Statement> ParseCreateTable(
     SyntaqliteParser* p,
@@ -478,10 +495,16 @@ Statement ParseCreateIndex(SyntaqliteParser* p,
 
 Statement ParseCreateMacro(SyntaqliteParser* p,
                            const SqlSource& stmt,
+                           uint32_t stmt_doc_offset,
                            const SyntaqliteCreatePerfettoMacroStmt& n) {
   // Macro definitions can't appear inside macro expansions, so every span
   // on this statement lives in the original source — slicing `stmt`
-  // directly keeps line/col information intact for error messages.
+  // directly keeps line/col information intact for error messages.  The
+  // spans carry statement-relative offsets, shifted back to document
+  // coordinates by `stmt_doc_offset`.
+  auto span_src = [&](SyntaqliteTextSpan s) {
+    return stmt.Substr(s.offset + stmt_doc_offset, s.length);
+  };
   std::vector<std::pair<SqlSource, SqlSource>> args;
   if (syntaqlite_node_is_present(n.args)) {
     const auto* list = static_cast<const SyntaqlitePerfettoMacroArgList*>(
@@ -492,9 +515,7 @@ Statement ParseCreateMacro(SyntaqliteParser* p,
           syntaqlite_list_child(p, list, i));
       PERFETTO_CHECK(syntaqlite_span_is_macro_free(&arg->arg_name));
       PERFETTO_CHECK(syntaqlite_span_is_macro_free(&arg->arg_type));
-      args.emplace_back(
-          stmt.Substr(arg->arg_name.offset, arg->arg_name.length),
-          stmt.Substr(arg->arg_type.offset, arg->arg_type.length));
+      args.emplace_back(span_src(arg->arg_name), span_src(arg->arg_type));
     }
   }
   PERFETTO_CHECK(syntaqlite_span_is_macro_free(&n.macro_name));
@@ -502,16 +523,17 @@ Statement ParseCreateMacro(SyntaqliteParser* p,
   PERFETTO_CHECK(syntaqlite_span_is_macro_free(&n.body));
   return PerfettoSqlParser::CreateMacro{
       n.or_replace == SYNTAQLITE_BOOL_TRUE,
-      stmt.Substr(n.macro_name.offset, n.macro_name.length),
+      span_src(n.macro_name),
       std::move(args),
-      stmt.Substr(n.return_type.offset, n.return_type.length),
-      stmt.Substr(n.body.offset, n.body.length),
+      span_src(n.return_type),
+      span_src(n.body),
   };
 }
 
 base::StatusOr<Statement> ParseStatement(SyntaqliteParser* p,
                                          const MacroRewriteBuilder& rb,
                                          const SqlSource& stmt,
+                                         uint32_t stmt_doc_offset,
                                          const SyntaqliteNode* node) {
   // Cast to int to suppress -Wswitch-enum: we intentionally handle only
   // Perfetto-dialect node types; all SQLite statement types fall through to
@@ -529,7 +551,8 @@ base::StatusOr<Statement> ParseStatement(SyntaqliteParser* p,
     case SYNTAQLITE_NODE_CREATE_PERFETTO_INDEX_STMT:
       return ParseCreateIndex(p, node->create_perfetto_index_stmt);
     case SYNTAQLITE_NODE_CREATE_PERFETTO_MACRO_STMT:
-      return ParseCreateMacro(p, stmt, node->create_perfetto_macro_stmt);
+      return ParseCreateMacro(p, stmt, stmt_doc_offset,
+                              node->create_perfetto_macro_stmt);
     case SYNTAQLITE_NODE_INCLUDE_PERFETTO_MODULE_STMT:
       return Statement(PerfettoSqlParser::Include{
           SpanText(p, node->include_perfetto_module_stmt.module_name),
@@ -645,9 +668,13 @@ bool PerfettoSqlParser::Next() {
     if (rc == SYNTAQLITE_PARSE_DONE)
       return false;
     if (rc == SYNTAQLITE_PARSE_ERROR) {
-      uint32_t off = syntaqlite_result_error_offset(impl_->synq);
-      off = std::min(off, static_cast<uint32_t>(stmt.sql().size()));
-      impl_->status = base::ErrStatus("%s%s", stmt.AsTraceback(off).c_str(),
+      // error_offset is statement-relative; shift by the statement's
+      // position within the source to get a document offset.
+      uint64_t off = uint64_t{syntaqlite_result_error_offset(impl_->synq)} +
+                     CurrentStatementDocOffset(impl_->synq);
+      auto clamped =
+          static_cast<uint32_t>(std::min<uint64_t>(off, stmt.sql().size()));
+      impl_->status = base::ErrStatus("%s%s", stmt.AsTraceback(clamped).c_str(),
                                       syntaqlite_result_error_msg(impl_->synq));
       return false;
     }
@@ -658,13 +685,18 @@ bool PerfettoSqlParser::Next() {
       break;
   }
 
-  MacroRewriteBuilder rb(impl_->synq, stmt, impl_->macros);
+  // Every layer-0 offset the parser emits (node extents, spans, macro
+  // rewrite call offsets) is relative to this position within the bound
+  // source; callers that slice `stmt` add it back on.
+  uint32_t stmt_doc_offset = CurrentStatementDocOffset(impl_->synq);
+
+  MacroRewriteBuilder rb(impl_->synq, stmt, stmt_doc_offset, impl_->macros);
   auto root_src = rb.NodeSource(root);
   statement_sql_ = root_src.has_value() ? *std::move(root_src) : stmt;
 
   const auto* node = static_cast<const SyntaqliteNode*>(
       syntaqlite_parser_node(impl_->synq, root));
-  auto result = ParseStatement(impl_->synq, rb, stmt, node);
+  auto result = ParseStatement(impl_->synq, rb, stmt, stmt_doc_offset, node);
   if (!result.ok()) {
     impl_->status = result.status();
     return false;
