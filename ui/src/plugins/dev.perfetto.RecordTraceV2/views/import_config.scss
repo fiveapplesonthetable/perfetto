@@ -1,4 +1,4 @@
-// Copyright (C) 2024 The Android Open Source Project
+// Copyright (C) 2026 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export interface FtraceFilter {
-  // We use an exclude list rather than include list for filtering events, as we
-  // want to include all events by default but we won't know what names are
-  // present initially.
-  excludeList: string[];
-  // Exclude list of CPU numbers (logical cpu). Empty means all CPUs included.
-  cpuFilter: number[];
-}
+.pf-import-config {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 
-export interface FtracePluginState {
-  version: number;
-  filter: FtraceFilter;
-}
+  &__textarea {
+    width: 100%;
+    height: 300px;
+    color: var(--pf-color-text);
+    background: var(--pf-color-void);
+    border: 1px solid var(--pf-color-border);
+    border-radius: 4px;
+    font-family: var(--pf-font-monospace);
 
-export interface FtraceStat {
-  name: string;
-  count: number;
+    &:focus {
+      outline: none;
+      border-color: var(--pf-color-accent);
+    }
+  }
 }
