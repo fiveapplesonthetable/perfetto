@@ -102,9 +102,12 @@ class SyntaqliteFmt(CodeFormatterBase):
       return 127
 
     cmd = [
-        binary, 'fmt',
-        '--dialect', lib,
-        '--dialect-name', 'perfetto',
+        binary,
+        'fmt',
+        '--dialect',
+        lib,
+        '--dialect-name',
+        'perfetto',
     ]
     cmd.append('--check' if check_only else '--in-place')
     cmd += files

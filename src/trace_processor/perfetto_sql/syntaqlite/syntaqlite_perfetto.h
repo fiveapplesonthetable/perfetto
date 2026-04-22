@@ -2050,65 +2050,66 @@ typedef enum SyntaqliteNodeTag {
     SYNTAQLITE_NODE_BINARY_EXPR = 33,
     SYNTAQLITE_NODE_UNARY_EXPR = 34,
     SYNTAQLITE_NODE_LITERAL = 35,
-    SYNTAQLITE_NODE_IDENT_NAME = 36,
-    SYNTAQLITE_NODE_ERROR = 37,
-    SYNTAQLITE_NODE_EXPR_LIST = 38,
-    SYNTAQLITE_NODE_FUNCTION_CALL = 39,
-    SYNTAQLITE_NODE_VARIABLE = 40,
-    SYNTAQLITE_NODE_COLLATE_EXPR = 41,
-    SYNTAQLITE_NODE_RAISE_EXPR = 42,
-    SYNTAQLITE_NODE_QUALIFIED_NAME = 43,
-    SYNTAQLITE_NODE_DROP_STMT = 44,
-    SYNTAQLITE_NODE_ALTER_TABLE_STMT = 45,
-    SYNTAQLITE_NODE_TRANSACTION_STMT = 46,
-    SYNTAQLITE_NODE_SAVEPOINT_STMT = 47,
-    SYNTAQLITE_NODE_RESULT_COLUMN = 48,
-    SYNTAQLITE_NODE_RESULT_COLUMN_LIST = 49,
-    SYNTAQLITE_NODE_SELECT_STMT = 50,
-    SYNTAQLITE_NODE_ORDERING_TERM = 51,
-    SYNTAQLITE_NODE_ORDER_BY_LIST = 52,
-    SYNTAQLITE_NODE_LIMIT_CLAUSE = 53,
-    SYNTAQLITE_NODE_TABLE_REF = 54,
-    SYNTAQLITE_NODE_SUBQUERY_TABLE_SOURCE = 55,
-    SYNTAQLITE_NODE_JOIN_CLAUSE = 56,
-    SYNTAQLITE_NODE_JOIN_PREFIX = 57,
-    SYNTAQLITE_NODE_TRIGGER_EVENT = 58,
-    SYNTAQLITE_NODE_TRIGGER_CMD_LIST = 59,
-    SYNTAQLITE_NODE_CREATE_TRIGGER_STMT = 60,
-    SYNTAQLITE_NODE_CREATE_VIRTUAL_TABLE_STMT = 61,
-    SYNTAQLITE_NODE_PRAGMA_STMT = 62,
-    SYNTAQLITE_NODE_ANALYZE_OR_REINDEX_STMT = 63,
-    SYNTAQLITE_NODE_ATTACH_STMT = 64,
-    SYNTAQLITE_NODE_DETACH_STMT = 65,
-    SYNTAQLITE_NODE_VACUUM_STMT = 66,
-    SYNTAQLITE_NODE_EXPLAIN_STMT = 67,
-    SYNTAQLITE_NODE_CREATE_INDEX_STMT = 68,
-    SYNTAQLITE_NODE_CREATE_VIEW_STMT = 69,
-    SYNTAQLITE_NODE_VALUES_ROW_LIST = 70,
-    SYNTAQLITE_NODE_VALUES_CLAUSE = 71,
-    SYNTAQLITE_NODE_FRAME_BOUND = 72,
-    SYNTAQLITE_NODE_FRAME_SPEC = 73,
-    SYNTAQLITE_NODE_WINDOW_DEF = 74,
-    SYNTAQLITE_NODE_WINDOW_DEF_LIST = 75,
-    SYNTAQLITE_NODE_NAMED_WINDOW_DEF = 76,
-    SYNTAQLITE_NODE_NAMED_WINDOW_DEF_LIST = 77,
-    SYNTAQLITE_NODE_FILTER_OVER = 78,
-    SYNTAQLITE_NODE_PERFETTO_ARG_DEF = 79,
-    SYNTAQLITE_NODE_PERFETTO_ARG_DEF_LIST = 80,
-    SYNTAQLITE_NODE_PERFETTO_MACRO_ARG = 81,
-    SYNTAQLITE_NODE_PERFETTO_MACRO_ARG_LIST = 82,
-    SYNTAQLITE_NODE_PERFETTO_INDEXED_COLUMN = 83,
-    SYNTAQLITE_NODE_PERFETTO_INDEXED_COLUMN_LIST = 84,
-    SYNTAQLITE_NODE_PERFETTO_RETURN_TYPE = 85,
-    SYNTAQLITE_NODE_PERFETTO_TABLE_IMPL = 86,
-    SYNTAQLITE_NODE_CREATE_PERFETTO_TABLE_STMT = 87,
-    SYNTAQLITE_NODE_CREATE_PERFETTO_VIEW_STMT = 88,
-    SYNTAQLITE_NODE_CREATE_PERFETTO_FUNCTION_STMT = 89,
-    SYNTAQLITE_NODE_CREATE_PERFETTO_DELEGATING_FUNCTION_STMT = 90,
-    SYNTAQLITE_NODE_CREATE_PERFETTO_INDEX_STMT = 91,
-    SYNTAQLITE_NODE_CREATE_PERFETTO_MACRO_STMT = 92,
-    SYNTAQLITE_NODE_INCLUDE_PERFETTO_MODULE_STMT = 93,
-    SYNTAQLITE_NODE_DROP_PERFETTO_INDEX_STMT = 94,
+    SYNTAQLITE_NODE_PAREN_EXPR = 36,
+    SYNTAQLITE_NODE_IDENT_NAME = 37,
+    SYNTAQLITE_NODE_ERROR = 38,
+    SYNTAQLITE_NODE_EXPR_LIST = 39,
+    SYNTAQLITE_NODE_FUNCTION_CALL = 40,
+    SYNTAQLITE_NODE_VARIABLE = 41,
+    SYNTAQLITE_NODE_COLLATE_EXPR = 42,
+    SYNTAQLITE_NODE_RAISE_EXPR = 43,
+    SYNTAQLITE_NODE_QUALIFIED_NAME = 44,
+    SYNTAQLITE_NODE_DROP_STMT = 45,
+    SYNTAQLITE_NODE_ALTER_TABLE_STMT = 46,
+    SYNTAQLITE_NODE_TRANSACTION_STMT = 47,
+    SYNTAQLITE_NODE_SAVEPOINT_STMT = 48,
+    SYNTAQLITE_NODE_RESULT_COLUMN = 49,
+    SYNTAQLITE_NODE_RESULT_COLUMN_LIST = 50,
+    SYNTAQLITE_NODE_SELECT_STMT = 51,
+    SYNTAQLITE_NODE_ORDERING_TERM = 52,
+    SYNTAQLITE_NODE_ORDER_BY_LIST = 53,
+    SYNTAQLITE_NODE_LIMIT_CLAUSE = 54,
+    SYNTAQLITE_NODE_TABLE_REF = 55,
+    SYNTAQLITE_NODE_SUBQUERY_TABLE_SOURCE = 56,
+    SYNTAQLITE_NODE_JOIN_CLAUSE = 57,
+    SYNTAQLITE_NODE_JOIN_PREFIX = 58,
+    SYNTAQLITE_NODE_TRIGGER_EVENT = 59,
+    SYNTAQLITE_NODE_TRIGGER_CMD_LIST = 60,
+    SYNTAQLITE_NODE_CREATE_TRIGGER_STMT = 61,
+    SYNTAQLITE_NODE_CREATE_VIRTUAL_TABLE_STMT = 62,
+    SYNTAQLITE_NODE_PRAGMA_STMT = 63,
+    SYNTAQLITE_NODE_ANALYZE_OR_REINDEX_STMT = 64,
+    SYNTAQLITE_NODE_ATTACH_STMT = 65,
+    SYNTAQLITE_NODE_DETACH_STMT = 66,
+    SYNTAQLITE_NODE_VACUUM_STMT = 67,
+    SYNTAQLITE_NODE_EXPLAIN_STMT = 68,
+    SYNTAQLITE_NODE_CREATE_INDEX_STMT = 69,
+    SYNTAQLITE_NODE_CREATE_VIEW_STMT = 70,
+    SYNTAQLITE_NODE_VALUES_ROW_LIST = 71,
+    SYNTAQLITE_NODE_VALUES_CLAUSE = 72,
+    SYNTAQLITE_NODE_FRAME_BOUND = 73,
+    SYNTAQLITE_NODE_FRAME_SPEC = 74,
+    SYNTAQLITE_NODE_WINDOW_DEF = 75,
+    SYNTAQLITE_NODE_WINDOW_DEF_LIST = 76,
+    SYNTAQLITE_NODE_NAMED_WINDOW_DEF = 77,
+    SYNTAQLITE_NODE_NAMED_WINDOW_DEF_LIST = 78,
+    SYNTAQLITE_NODE_FILTER_OVER = 79,
+    SYNTAQLITE_NODE_PERFETTO_ARG_DEF = 80,
+    SYNTAQLITE_NODE_PERFETTO_ARG_DEF_LIST = 81,
+    SYNTAQLITE_NODE_PERFETTO_MACRO_ARG = 82,
+    SYNTAQLITE_NODE_PERFETTO_MACRO_ARG_LIST = 83,
+    SYNTAQLITE_NODE_PERFETTO_INDEXED_COLUMN = 84,
+    SYNTAQLITE_NODE_PERFETTO_INDEXED_COLUMN_LIST = 85,
+    SYNTAQLITE_NODE_PERFETTO_RETURN_TYPE = 86,
+    SYNTAQLITE_NODE_PERFETTO_TABLE_IMPL = 87,
+    SYNTAQLITE_NODE_CREATE_PERFETTO_TABLE_STMT = 88,
+    SYNTAQLITE_NODE_CREATE_PERFETTO_VIEW_STMT = 89,
+    SYNTAQLITE_NODE_CREATE_PERFETTO_FUNCTION_STMT = 90,
+    SYNTAQLITE_NODE_CREATE_PERFETTO_DELEGATING_FUNCTION_STMT = 91,
+    SYNTAQLITE_NODE_CREATE_PERFETTO_INDEX_STMT = 92,
+    SYNTAQLITE_NODE_CREATE_PERFETTO_MACRO_STMT = 93,
+    SYNTAQLITE_NODE_INCLUDE_PERFETTO_MODULE_STMT = 94,
+    SYNTAQLITE_NODE_DROP_PERFETTO_INDEX_STMT = 95,
     SYNTAQLITE_NODE_COUNT
 } SyntaqliteNodeTag;
 SYNQ_STATIC_ASSERT(sizeof(SyntaqliteNodeTag) == sizeof(uint32_t),
@@ -2169,6 +2170,7 @@ typedef struct SyntaqliteExistsExpr {
 typedef struct SyntaqliteInExpr {
     SyntaqliteNodeTag tag;
     SyntaqliteBool negated;
+    SyntaqliteBool bare_source;
     uint32_t operand;
     uint32_t source;
 } SyntaqliteInExpr;
@@ -2405,6 +2407,11 @@ typedef struct SyntaqliteLiteral {
     SyntaqliteTextSpan source;
 } SyntaqliteLiteral;
 
+typedef struct SyntaqliteParenExpr {
+    SyntaqliteNodeTag tag;
+    uint32_t expr;
+} SyntaqliteParenExpr;
+
 typedef struct SyntaqliteIdentName {
     SyntaqliteNodeTag tag;
     SyntaqliteTextSpan source;
@@ -2532,6 +2539,7 @@ typedef struct SyntaqliteTableRef {
     SyntaqliteNodeTag tag;
     SyntaqliteTextSpan table_name;
     SyntaqliteTextSpan schema;
+    SyntaqliteBool has_parens;
     uint32_t alias;
     uint32_t args;
 } SyntaqliteTableRef;
@@ -2869,6 +2877,7 @@ typedef union SyntaqliteNode {
     SyntaqliteBinaryExpr binary_expr;
     SyntaqliteUnaryExpr unary_expr;
     SyntaqliteLiteral literal;
+    SyntaqliteParenExpr paren_expr;
     SyntaqliteIdentName ident_name;
     SyntaqliteError error;
     SyntaqliteExprList expr_list;
@@ -2976,6 +2985,7 @@ typedef union SyntaqliteInExprSource {
     SyntaqliteCompoundSelect compound_select;
     SyntaqliteWithClause with_clause;
     SyntaqliteValuesClause values_clause;
+    SyntaqliteTableRef table_ref;
 } SyntaqliteInExprSource;
 
 static inline int syntaqlite_is_in_expr_source(SyntaqliteNodeTag tag) {
@@ -2986,6 +2996,7 @@ static inline int syntaqlite_is_in_expr_source(SyntaqliteNodeTag tag) {
         case SYNTAQLITE_NODE_COMPOUND_SELECT: return 1;
         case SYNTAQLITE_NODE_WITH_CLAUSE: return 1;
         case SYNTAQLITE_NODE_VALUES_CLAUSE: return 1;
+        case SYNTAQLITE_NODE_TABLE_REF: return 1;
         default: return 0;
     }
 }
@@ -3012,6 +3023,10 @@ static inline const SyntaqliteWithClause* syntaqlite_in_expr_source_as_with_clau
 
 static inline const SyntaqliteValuesClause* syntaqlite_in_expr_source_as_values_clause(const SyntaqliteInExprSource* node) {
     return node->tag == SYNTAQLITE_NODE_VALUES_CLAUSE ? &node->values_clause : NULL;
+}
+
+static inline const SyntaqliteTableRef* syntaqlite_in_expr_source_as_table_ref(const SyntaqliteInExprSource* node) {
+    return node->tag == SYNTAQLITE_NODE_TABLE_REF ? &node->table_ref : NULL;
 }
 
 // ============ Abstract Type: Name ============
@@ -3044,6 +3059,7 @@ typedef union SyntaqliteExpr {
     SyntaqliteNodeTag tag;
     SyntaqliteBinaryExpr binary_expr;
     SyntaqliteUnaryExpr unary_expr;
+    SyntaqliteParenExpr paren_expr;
     SyntaqliteLiteral literal;
     SyntaqliteColumnRef column_ref;
     SyntaqliteVariable variable;
@@ -3067,6 +3083,7 @@ static inline int syntaqlite_is_expr(SyntaqliteNodeTag tag) {
     switch (tag) {
         case SYNTAQLITE_NODE_BINARY_EXPR: return 1;
         case SYNTAQLITE_NODE_UNARY_EXPR: return 1;
+        case SYNTAQLITE_NODE_PAREN_EXPR: return 1;
         case SYNTAQLITE_NODE_LITERAL: return 1;
         case SYNTAQLITE_NODE_COLUMN_REF: return 1;
         case SYNTAQLITE_NODE_VARIABLE: return 1;
@@ -3094,6 +3111,10 @@ static inline const SyntaqliteBinaryExpr* syntaqlite_expr_as_binary_expr(const S
 
 static inline const SyntaqliteUnaryExpr* syntaqlite_expr_as_unary_expr(const SyntaqliteExpr* node) {
     return node->tag == SYNTAQLITE_NODE_UNARY_EXPR ? &node->unary_expr : NULL;
+}
+
+static inline const SyntaqliteParenExpr* syntaqlite_expr_as_paren_expr(const SyntaqliteExpr* node) {
+    return node->tag == SYNTAQLITE_NODE_PAREN_EXPR ? &node->paren_expr : NULL;
 }
 
 static inline const SyntaqliteLiteral* syntaqlite_expr_as_literal(const SyntaqliteExpr* node) {
@@ -3493,6 +3514,10 @@ template <> struct NodeTag<SyntaqliteUnaryExpr> {
 template <> struct NodeTag<SyntaqliteLiteral> {
   static constexpr bool kHasTag = true;
   static constexpr uint32_t kValue = SYNTAQLITE_NODE_LITERAL;
+};
+template <> struct NodeTag<SyntaqliteParenExpr> {
+  static constexpr bool kHasTag = true;
+  static constexpr uint32_t kValue = SYNTAQLITE_NODE_PAREN_EXPR;
 };
 template <> struct NodeTag<SyntaqliteIdentName> {
   static constexpr bool kHasTag = true;

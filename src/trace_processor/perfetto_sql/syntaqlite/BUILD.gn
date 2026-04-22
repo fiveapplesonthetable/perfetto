@@ -43,4 +43,13 @@ shared_library("perfetto_fmt_dialect") {
   sources = _syntaqlite_sources
   configs -= [ "//gn/standalone:visibility_hidden" ]
   deps = [ "../../../../gn:default_deps" ]
+
+  # The syntaqlite CLI that dlopens this library provides its own runtime;
+  # compile the runtime out of this .so to keep it minimal. The extent-hook
+  # callsites in the generated Lemon parser (yy_shift/yy_reduce) remain, so
+  # we defer their resolution to the dlopen host's exported symbols.
+  defines = [ "SYNTAQLITE_OMIT_RUNTIME" ]
+  if (is_mac) {
+    ldflags = [ "-Wl,-undefined,dynamic_lookup" ]
+  }
 }

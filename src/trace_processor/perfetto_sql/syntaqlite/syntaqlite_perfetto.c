@@ -419,6 +419,7 @@ static const SyntaqliteFieldMeta field_meta_exists_expr[] = {
 
 static const SyntaqliteFieldMeta field_meta_in_expr[] = {
     {offsetof(SyntaqliteInExpr, negated), SYNTAQLITE_FIELD_BOOL, "negated", display_bool, sizeof(display_bool) / sizeof(display_bool[0])},
+    {offsetof(SyntaqliteInExpr, bare_source), SYNTAQLITE_FIELD_BOOL, "bare_source", display_bool, sizeof(display_bool) / sizeof(display_bool[0])},
     {offsetof(SyntaqliteInExpr, operand), SYNTAQLITE_FIELD_NODE_ID, "operand", NULL, 0},
     {offsetof(SyntaqliteInExpr, source), SYNTAQLITE_FIELD_NODE_ID, "source", NULL, 0},
 };
@@ -586,6 +587,10 @@ static const SyntaqliteFieldMeta field_meta_literal[] = {
     {offsetof(SyntaqliteLiteral, source), SYNTAQLITE_FIELD_SPAN, "source", NULL, 0},
 };
 
+static const SyntaqliteFieldMeta field_meta_paren_expr[] = {
+    {offsetof(SyntaqliteParenExpr, expr), SYNTAQLITE_FIELD_NODE_ID, "expr", NULL, 0},
+};
+
 static const SyntaqliteFieldMeta field_meta_ident_name[] = {
     {offsetof(SyntaqliteIdentName, source), SYNTAQLITE_FIELD_SPAN, "source", NULL, 0},
 };
@@ -676,6 +681,7 @@ static const SyntaqliteFieldMeta field_meta_limit_clause[] = {
 static const SyntaqliteFieldMeta field_meta_table_ref[] = {
     {offsetof(SyntaqliteTableRef, table_name), SYNTAQLITE_FIELD_SPAN, "table_name", NULL, 0},
     {offsetof(SyntaqliteTableRef, schema), SYNTAQLITE_FIELD_SPAN, "schema", NULL, 0},
+    {offsetof(SyntaqliteTableRef, has_parens), SYNTAQLITE_FIELD_BOOL, "has_parens", display_bool, sizeof(display_bool) / sizeof(display_bool[0])},
     {offsetof(SyntaqliteTableRef, alias), SYNTAQLITE_FIELD_NODE_ID, "alias", NULL, 0},
     {offsetof(SyntaqliteTableRef, args), SYNTAQLITE_FIELD_NODE_ID, "args", NULL, 0},
 };
@@ -1127,6 +1133,7 @@ static const char* const ast_meta_node_names[] = {
     "BinaryExpr",
     "UnaryExpr",
     "Literal",
+    "ParenExpr",
     "IdentName",
     "Error",
     "ExprList",
@@ -1227,6 +1234,7 @@ static const SyntaqliteFieldMeta* const ast_meta_field_meta[] = {
     field_meta_binary_expr, /* BinaryExpr */
     field_meta_unary_expr, /* UnaryExpr */
     field_meta_literal, /* Literal */
+    field_meta_paren_expr, /* ParenExpr */
     field_meta_ident_name, /* IdentName */
     field_meta_error, /* Error */
     NULL, /* ExprList */
@@ -1297,7 +1305,7 @@ static const uint8_t ast_meta_field_meta_counts[] = {
     3, /* CompoundSelect */
     1, /* SubqueryExpr */
     1, /* ExistsExpr */
-    3, /* InExpr */
+    4, /* InExpr */
     3, /* IsExpr */
     4, /* BetweenExpr */
     5, /* LikeExpr */
@@ -1325,6 +1333,7 @@ static const uint8_t ast_meta_field_meta_counts[] = {
     3, /* BinaryExpr */
     2, /* UnaryExpr */
     2, /* Literal */
+    1, /* ParenExpr */
     1, /* IdentName */
     1, /* Error */
     0, /* ExprList */
@@ -1343,7 +1352,7 @@ static const uint8_t ast_meta_field_meta_counts[] = {
     3, /* OrderingTerm */
     0, /* OrderByList */
     2, /* LimitClause */
-    4, /* TableRef */
+    5, /* TableRef */
     2, /* SubqueryTableSource */
     5, /* JoinClause */
     2, /* JoinPrefix */
@@ -1425,6 +1434,7 @@ static const uint8_t ast_meta_list_tags[] = {
     0, /* BinaryExpr */
     0, /* UnaryExpr */
     0, /* Literal */
+    0, /* ParenExpr */
     0, /* IdentName */
     0, /* Error */
     1, /* ExprList */
@@ -1525,6 +1535,7 @@ static const SyntaqliteRangeMetaEntry ast_meta_range_meta[] = {
     {NULL, 0}, /* BinaryExpr */
     {NULL, 0}, /* UnaryExpr */
     {range_meta_literal, 1}, /* Literal */
+    {NULL, 0}, /* ParenExpr */
     {range_meta_ident_name, 1}, /* IdentName */
     {range_meta_error, 1}, /* Error */
     {NULL, 0}, /* ExprList */
@@ -2539,46 +2550,46 @@ static const uint8_t perfetto_fmt_string_data[] = {
     0x53,0x54,0x49,0x4e,0x43,0x54,0x53,0x45,0x4c,0x45,0x43,0x54,0x47,0x52,0x4f,0x55,
     0x50,0x20,0x42,0x59,0x48,0x41,0x56,0x49,0x4e,0x47,0x57,0x49,0x4e,0x44,0x4f,0x57,
     0x20,0x4e,0x55,0x4c,0x4c,0x53,0x20,0x46,0x49,0x52,0x53,0x54,0x20,0x4e,0x55,0x4c,
-    0x4c,0x53,0x20,0x4c,0x41,0x53,0x54,0x20,0x4f,0x46,0x46,0x53,0x45,0x54,0x20,0x4f,
-    0x4e,0x20,0x20,0x55,0x53,0x49,0x4e,0x47,0x20,0x28,0x4a,0x4f,0x49,0x4e,0x4c,0x45,
-    0x46,0x54,0x20,0x4a,0x4f,0x49,0x4e,0x52,0x49,0x47,0x48,0x54,0x20,0x4a,0x4f,0x49,
-    0x4e,0x46,0x55,0x4c,0x4c,0x20,0x4a,0x4f,0x49,0x4e,0x43,0x52,0x4f,0x53,0x53,0x20,
-    0x4a,0x4f,0x49,0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x4a,0x4f,0x49,0x4e,
-    0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x4c,0x45,0x46,0x54,0x20,0x4a,0x4f,0x49,
-    0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x52,0x49,0x47,0x48,0x54,0x20,0x4a,
-    0x4f,0x49,0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x46,0x55,0x4c,0x4c,0x20,
-    0x4a,0x4f,0x49,0x4e,0x44,0x45,0x4c,0x45,0x54,0x45,0x20,0x4f,0x46,0x20,0x3b,0x20,
-    0x54,0x52,0x49,0x47,0x47,0x45,0x52,0x42,0x45,0x46,0x4f,0x52,0x45,0x41,0x46,0x54,
-    0x45,0x52,0x49,0x4e,0x53,0x54,0x45,0x41,0x44,0x20,0x4f,0x46,0x20,0x4f,0x4e,0x20,
-    0x43,0x52,0x45,0x41,0x54,0x45,0x20,0x56,0x49,0x52,0x54,0x55,0x41,0x4c,0x20,0x54,
-    0x41,0x42,0x4c,0x45,0x20,0x55,0x53,0x49,0x4e,0x47,0x20,0x50,0x52,0x41,0x47,0x4d,
-    0x41,0x20,0x52,0x45,0x49,0x4e,0x44,0x45,0x58,0x41,0x4e,0x41,0x4c,0x59,0x5a,0x45,
-    0x41,0x54,0x54,0x41,0x43,0x48,0x20,0x20,0x4b,0x45,0x59,0x20,0x44,0x45,0x54,0x41,
-    0x43,0x48,0x20,0x56,0x41,0x43,0x55,0x55,0x4d,0x45,0x58,0x50,0x4c,0x41,0x49,0x4e,
-    0x20,0x51,0x55,0x45,0x52,0x59,0x20,0x50,0x4c,0x41,0x4e,0x45,0x58,0x50,0x4c,0x41,
-    0x49,0x4e,0x20,0x55,0x4e,0x49,0x51,0x55,0x45,0x20,0x49,0x4e,0x44,0x45,0x58,0x20,
-    0x56,0x49,0x45,0x57,0x56,0x41,0x4c,0x55,0x45,0x53,0x55,0x4e,0x42,0x4f,0x55,0x4e,
-    0x44,0x45,0x44,0x20,0x50,0x52,0x45,0x43,0x45,0x44,0x49,0x4e,0x47,0x20,0x50,0x52,
-    0x45,0x43,0x45,0x44,0x49,0x4e,0x47,0x43,0x55,0x52,0x52,0x45,0x4e,0x54,0x20,0x52,
-    0x4f,0x57,0x20,0x46,0x4f,0x4c,0x4c,0x4f,0x57,0x49,0x4e,0x47,0x55,0x4e,0x42,0x4f,
-    0x55,0x4e,0x44,0x45,0x44,0x20,0x46,0x4f,0x4c,0x4c,0x4f,0x57,0x49,0x4e,0x47,0x52,
-    0x41,0x4e,0x47,0x45,0x52,0x4f,0x57,0x53,0x47,0x52,0x4f,0x55,0x50,0x53,0x20,0x45,
-    0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x4e,0x4f,0x20,0x4f,0x54,0x48,0x45,0x52,0x53,
-    0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x43,0x55,0x52,0x52,0x45,0x4e,0x54,
-    0x20,0x52,0x4f,0x57,0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x47,0x52,0x4f,
-    0x55,0x50,0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x54,0x49,0x45,0x53,0x50,
-    0x41,0x52,0x54,0x49,0x54,0x49,0x4f,0x4e,0x20,0x42,0x59,0x46,0x49,0x4c,0x54,0x45,
-    0x52,0x20,0x28,0x2e,0x2e,0x2e,0x54,0x41,0x42,0x4c,0x45,0x28,0x20,0x50,0x45,0x52,
-    0x46,0x45,0x54,0x54,0x4f,0x20,0x54,0x41,0x42,0x4c,0x45,0x20,0x20,0x50,0x45,0x52,
-    0x46,0x45,0x54,0x54,0x4f,0x20,0x56,0x49,0x45,0x57,0x20,0x20,0x50,0x45,0x52,0x46,
-    0x45,0x54,0x54,0x4f,0x20,0x46,0x55,0x4e,0x43,0x54,0x49,0x4f,0x4e,0x20,0x52,0x45,
-    0x54,0x55,0x52,0x4e,0x53,0x20,0x44,0x45,0x4c,0x45,0x47,0x41,0x54,0x45,0x53,0x20,
-    0x54,0x4f,0x20,0x20,0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x49,0x4e,0x44,
-    0x45,0x58,0x20,0x20,0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x4d,0x41,0x43,
-    0x52,0x4f,0x20,0x41,0x53,0x20,0x49,0x4e,0x43,0x4c,0x55,0x44,0x45,0x20,0x50,0x45,
-    0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x4d,0x4f,0x44,0x55,0x4c,0x45,0x20,0x44,0x52,
-    0x4f,0x50,0x20,0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x49,0x4e,0x44,0x45,
-    0x58,0x20,
+    0x4c,0x53,0x20,0x4c,0x41,0x53,0x54,0x20,0x4f,0x46,0x46,0x53,0x45,0x54,0x20,0x28,
+    0x29,0x4f,0x4e,0x20,0x20,0x55,0x53,0x49,0x4e,0x47,0x20,0x28,0x4a,0x4f,0x49,0x4e,
+    0x4c,0x45,0x46,0x54,0x20,0x4a,0x4f,0x49,0x4e,0x52,0x49,0x47,0x48,0x54,0x20,0x4a,
+    0x4f,0x49,0x4e,0x46,0x55,0x4c,0x4c,0x20,0x4a,0x4f,0x49,0x4e,0x43,0x52,0x4f,0x53,
+    0x53,0x20,0x4a,0x4f,0x49,0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x4a,0x4f,
+    0x49,0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x4c,0x45,0x46,0x54,0x20,0x4a,
+    0x4f,0x49,0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x52,0x49,0x47,0x48,0x54,
+    0x20,0x4a,0x4f,0x49,0x4e,0x4e,0x41,0x54,0x55,0x52,0x41,0x4c,0x20,0x46,0x55,0x4c,
+    0x4c,0x20,0x4a,0x4f,0x49,0x4e,0x44,0x45,0x4c,0x45,0x54,0x45,0x20,0x4f,0x46,0x20,
+    0x3b,0x20,0x54,0x52,0x49,0x47,0x47,0x45,0x52,0x42,0x45,0x46,0x4f,0x52,0x45,0x41,
+    0x46,0x54,0x45,0x52,0x49,0x4e,0x53,0x54,0x45,0x41,0x44,0x20,0x4f,0x46,0x20,0x4f,
+    0x4e,0x20,0x43,0x52,0x45,0x41,0x54,0x45,0x20,0x56,0x49,0x52,0x54,0x55,0x41,0x4c,
+    0x20,0x54,0x41,0x42,0x4c,0x45,0x20,0x55,0x53,0x49,0x4e,0x47,0x20,0x50,0x52,0x41,
+    0x47,0x4d,0x41,0x20,0x52,0x45,0x49,0x4e,0x44,0x45,0x58,0x41,0x4e,0x41,0x4c,0x59,
+    0x5a,0x45,0x41,0x54,0x54,0x41,0x43,0x48,0x20,0x20,0x4b,0x45,0x59,0x20,0x44,0x45,
+    0x54,0x41,0x43,0x48,0x20,0x56,0x41,0x43,0x55,0x55,0x4d,0x45,0x58,0x50,0x4c,0x41,
+    0x49,0x4e,0x20,0x51,0x55,0x45,0x52,0x59,0x20,0x50,0x4c,0x41,0x4e,0x45,0x58,0x50,
+    0x4c,0x41,0x49,0x4e,0x20,0x55,0x4e,0x49,0x51,0x55,0x45,0x20,0x49,0x4e,0x44,0x45,
+    0x58,0x20,0x56,0x49,0x45,0x57,0x56,0x41,0x4c,0x55,0x45,0x53,0x55,0x4e,0x42,0x4f,
+    0x55,0x4e,0x44,0x45,0x44,0x20,0x50,0x52,0x45,0x43,0x45,0x44,0x49,0x4e,0x47,0x20,
+    0x50,0x52,0x45,0x43,0x45,0x44,0x49,0x4e,0x47,0x43,0x55,0x52,0x52,0x45,0x4e,0x54,
+    0x20,0x52,0x4f,0x57,0x20,0x46,0x4f,0x4c,0x4c,0x4f,0x57,0x49,0x4e,0x47,0x55,0x4e,
+    0x42,0x4f,0x55,0x4e,0x44,0x45,0x44,0x20,0x46,0x4f,0x4c,0x4c,0x4f,0x57,0x49,0x4e,
+    0x47,0x52,0x41,0x4e,0x47,0x45,0x52,0x4f,0x57,0x53,0x47,0x52,0x4f,0x55,0x50,0x53,
+    0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x4e,0x4f,0x20,0x4f,0x54,0x48,0x45,
+    0x52,0x53,0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x43,0x55,0x52,0x52,0x45,
+    0x4e,0x54,0x20,0x52,0x4f,0x57,0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x47,
+    0x52,0x4f,0x55,0x50,0x20,0x45,0x58,0x43,0x4c,0x55,0x44,0x45,0x20,0x54,0x49,0x45,
+    0x53,0x50,0x41,0x52,0x54,0x49,0x54,0x49,0x4f,0x4e,0x20,0x42,0x59,0x46,0x49,0x4c,
+    0x54,0x45,0x52,0x20,0x28,0x2e,0x2e,0x2e,0x54,0x41,0x42,0x4c,0x45,0x28,0x20,0x50,
+    0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x54,0x41,0x42,0x4c,0x45,0x20,0x20,0x50,
+    0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x56,0x49,0x45,0x57,0x20,0x20,0x50,0x45,
+    0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x46,0x55,0x4e,0x43,0x54,0x49,0x4f,0x4e,0x20,
+    0x52,0x45,0x54,0x55,0x52,0x4e,0x53,0x20,0x44,0x45,0x4c,0x45,0x47,0x41,0x54,0x45,
+    0x53,0x20,0x54,0x4f,0x20,0x20,0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x49,
+    0x4e,0x44,0x45,0x58,0x20,0x20,0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x4d,
+    0x41,0x43,0x52,0x4f,0x20,0x41,0x53,0x20,0x49,0x4e,0x43,0x4c,0x55,0x44,0x45,0x20,
+    0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x4d,0x4f,0x44,0x55,0x4c,0x45,0x20,
+    0x44,0x52,0x4f,0x50,0x20,0x50,0x45,0x52,0x46,0x45,0x54,0x54,0x4f,0x20,0x49,0x4e,
+    0x44,0x45,0x58,0x20,
 };
 
 static const uint32_t perfetto_fmt_string_offsets[] = {
@@ -2592,19 +2603,19 @@ static const uint32_t perfetto_fmt_string_offsets[] = {
     1007,1008,1009,1010,1011,1012,1014,1016,1017,1019,1022,1024,1025,1026,1028,1030,
     1032,1034,1037,1038,1042,1049,1058,1064,1070,1078,1083,1087,1089,1094,1099,1104,
     1108,1115,1125,1137,1147,1161,1165,1177,1188,1193,1203,1213,1219,1229,1247,1269,
-    1271,1286,1292,1300,1306,1312,1324,1335,1343,1346,1354,1358,1367,1377,1386,1396,
-    1408,1425,1443,1460,1466,1470,1471,1479,1485,1490,1500,1504,1524,1531,1538,1545,
-    1552,1559,1564,1571,1577,1595,1602,1609,1615,1620,1626,1645,1655,1666,1676,1695,
-    1700,1704,1710,1728,1748,1762,1775,1787,1795,1798,1804,1820,1835,1854,1862,1875,
-    1891,1907,1910,1934,1954,
+    1271,1286,1292,1300,1306,1312,1324,1335,1343,1345,1348,1356,1360,1369,1379,1388,
+    1398,1410,1427,1445,1462,1468,1472,1473,1481,1487,1492,1502,1506,1526,1533,1540,
+    1547,1554,1561,1566,1573,1579,1597,1604,1611,1617,1622,1628,1647,1657,1668,1678,
+    1697,1702,1706,1712,1730,1750,1764,1777,1789,1797,1800,1806,1822,1837,1856,1864,
+    1877,1893,1909,1912,1936,1956,
 };
 
-static const uint32_t perfetto_fmt_string_count = 228;
+static const uint32_t perfetto_fmt_string_count = 229;
 
 static const uint16_t perfetto_fmt_enum_display[] = {
     12,13,14,15,110,111,112,113,114,115,116,117,118,119,120,121,
     122,123,124,125,126,127,128,129,111,110,130,131,141,142,143,144,
-    67,153,154,68,170,171,172,173,174,175,176,177,178,
+    67,153,154,68,171,172,173,174,175,176,177,178,179,
 };
 
 static const uint32_t perfetto_fmt_enum_display_count = 45;
@@ -2724,21 +2735,25 @@ static const uint8_t perfetto_fmt_ops[] = {
     4,0,0,0,0,0,
     0,0,3,0,0,0,
     7,0,0,0,0,0,
-    25,1,0,3,0,0,
+    25,2,0,3,0,0,
     17,0,0,0,2,0,
     0,0,17,0,0,0,
     11,0,0,0,2,0,
     0,0,18,0,0,0,
     12,0,0,0,0,0,
+    17,1,0,0,2,0,
+    2,3,0,0,0,0,
+    11,0,0,0,10,0,
     6,0,0,0,0,0,
     0,0,0,0,0,0,
     8,0,0,0,0,0,
     4,0,0,0,0,0,
-    2,2,0,0,0,0,
+    2,3,0,0,0,0,
     9,0,0,0,0,0,
     4,0,0,0,0,0,
     0,0,3,0,0,0,
     7,0,0,0,0,0,
+    12,0,0,0,0,0,
     19,0,2,0,3,0,
     25,1,0,3,0,0,
     0,0,19,0,0,0,
@@ -3536,6 +3551,11 @@ static const uint8_t perfetto_fmt_ops[] = {
     21,0,24,0,0,0,
     23,1,20,0,0,0,
     1,1,0,0,0,0,
+    6,0,0,0,0,0,
+    0,0,0,0,0,0,
+    2,0,0,0,0,0,
+    0,0,3,0,0,0,
+    7,0,0,0,0,0,
     1,0,0,0,0,0,
     20,0,0,0,2,0,
     1,0,0,0,0,0,
@@ -3780,20 +3800,24 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,11,0,0,0,
     12,0,0,0,0,0,
     1,0,0,0,0,0,
-    10,3,0,0,10,0,
+    10,4,0,0,10,0,
     6,0,0,0,0,0,
     0,0,0,0,0,0,
     8,0,0,0,0,0,
     4,0,0,0,0,0,
-    2,3,0,0,0,0,
+    2,4,0,0,0,0,
     9,0,0,0,0,0,
     4,0,0,0,0,0,
     0,0,3,0,0,0,
     7,0,0,0,0,0,
+    11,0,0,0,4,0,
+    17,2,0,0,2,0,
+    0,0,168,0,0,0,
     12,0,0,0,0,0,
-    10,2,0,0,3,0,
+    12,0,0,0,0,0,
+    10,3,0,0,3,0,
     0,0,10,0,0,0,
-    2,2,0,0,0,0,
+    2,3,0,0,0,0,
     12,0,0,0,0,0,
     6,0,0,0,0,0,
     0,0,0,0,0,0,
@@ -3814,12 +3838,12 @@ static const uint8_t perfetto_fmt_ops[] = {
     2,2,0,0,0,0,
     10,3,0,0,4,0,
     5,0,0,0,0,0,
-    0,0,168,0,0,0,
+    0,0,169,0,0,0,
     2,3,0,0,0,0,
     12,0,0,0,0,0,
     10,4,0,0,10,0,
     6,0,0,0,0,0,
-    0,0,169,0,0,0,
+    0,0,170,0,0,0,
     8,0,0,0,0,0,
     4,0,0,0,0,0,
     2,4,0,0,0,0,
@@ -3838,13 +3862,13 @@ static const uint8_t perfetto_fmt_ops[] = {
     10,3,0,0,6,0,
     8,0,0,0,0,0,
     3,0,0,0,0,0,
-    0,0,168,0,0,0,
+    0,0,169,0,0,0,
     2,3,0,0,0,0,
     9,0,0,0,0,0,
     12,0,0,0,0,0,
     10,4,0,0,10,0,
     6,0,0,0,0,0,
-    0,0,169,0,0,0,
+    0,0,170,0,0,0,
     8,0,0,0,0,0,
     4,0,0,0,0,0,
     2,4,0,0,0,0,
@@ -3857,7 +3881,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     12,0,0,0,0,0,
     2,0,0,0,0,0,
     19,0,0,0,2,0,
-    0,0,179,0,0,0,
+    0,0,180,0,0,0,
     11,0,0,0,14,0,
     19,0,1,0,2,0,
     0,0,105,0,0,0,
@@ -3866,7 +3890,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,97,0,0,0,
     10,1,0,0,5,0,
     6,0,0,0,0,0,
-    0,0,180,0,0,0,
+    0,0,181,0,0,0,
     2,1,0,0,0,0,
     7,0,0,0,0,0,
     12,0,0,0,0,0,
@@ -3875,7 +3899,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     12,0,0,0,0,0,
     22,0,0,0,0,0,
     14,0,0,0,0,0,
-    0,0,181,0,0,0,
+    0,0,182,0,0,0,
     15,0,67,0,0,0,
     5,0,0,0,0,0,
     16,0,0,0,0,0,
@@ -3883,7 +3907,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,2,0,0,2,0,
     0,0,73,0,0,0,
     12,0,0,0,0,0,
-    0,0,182,0,0,0,
+    0,0,183,0,0,0,
     17,3,0,0,2,0,
     0,0,75,0,0,0,
     12,0,0,0,0,0,
@@ -3895,19 +3919,19 @@ static const uint8_t perfetto_fmt_ops[] = {
     1,0,0,0,0,0,
     0,0,29,0,0,0,
     19,4,0,0,2,0,
-    0,0,183,0,0,0,
+    0,0,184,0,0,0,
     11,0,0,0,8,0,
     19,4,1,0,2,0,
-    0,0,184,0,0,0,
+    0,0,185,0,0,0,
     11,0,0,0,4,0,
     19,4,2,0,2,0,
-    0,0,185,0,0,0,
+    0,0,186,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     0,0,29,0,0,0,
     2,5,0,0,0,0,
-    0,0,186,0,0,0,
+    0,0,187,0,0,0,
     2,6,0,0,0,0,
     10,7,0,0,4,0,
     5,0,0,0,0,0,
@@ -3924,7 +3948,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     12,0,0,0,0,0,
     5,0,0,0,0,0,
     0,0,37,0,0,0,
-    0,0,187,0,0,0,
+    0,0,188,0,0,0,
     17,3,0,0,2,0,
     0,0,75,0,0,0,
     12,0,0,0,0,0,
@@ -3934,14 +3958,14 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,11,0,0,0,
     12,0,0,0,0,0,
     1,0,0,0,0,0,
-    0,0,188,0,0,0,
+    0,0,189,0,0,0,
     1,2,0,0,0,0,
     20,4,0,0,4,0,
     0,0,0,0,0,0,
     1,4,0,0,0,0,
     0,0,3,0,0,0,
     12,0,0,0,0,0,
-    0,0,189,0,0,0,
+    0,0,190,0,0,0,
     20,1,0,0,3,0,
     1,1,0,0,0,0,
     0,0,11,0,0,0,
@@ -3958,9 +3982,9 @@ static const uint8_t perfetto_fmt_ops[] = {
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     19,2,1,0,2,0,
-    0,0,190,0,0,0,
-    11,0,0,0,2,0,
     0,0,191,0,0,0,
+    11,0,0,0,2,0,
+    0,0,192,0,0,0,
     12,0,0,0,0,0,
     20,1,0,0,5,0,
     0,0,29,0,0,0,
@@ -3973,17 +3997,17 @@ static const uint8_t perfetto_fmt_ops[] = {
     1,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
-    0,0,192,0,0,0,
+    0,0,193,0,0,0,
     2,0,0,0,0,0,
     0,0,10,0,0,0,
     2,1,0,0,0,0,
     10,2,0,0,3,0,
-    0,0,193,0,0,0,
+    0,0,194,0,0,0,
     2,2,0,0,0,0,
     12,0,0,0,0,0,
-    0,0,194,0,0,0,
-    2,0,0,0,0,0,
     0,0,195,0,0,0,
+    2,0,0,0,0,0,
+    0,0,196,0,0,0,
     20,0,0,0,3,0,
     0,0,29,0,0,0,
     1,0,0,0,0,0,
@@ -3993,18 +4017,18 @@ static const uint8_t perfetto_fmt_ops[] = {
     2,1,0,0,0,0,
     12,0,0,0,0,0,
     19,0,1,0,2,0,
-    0,0,196,0,0,0,
-    11,0,0,0,2,0,
     0,0,197,0,0,0,
+    11,0,0,0,2,0,
+    0,0,198,0,0,0,
     12,0,0,0,0,0,
     5,0,0,0,0,0,
     2,1,0,0,0,0,
     6,0,0,0,0,0,
     0,0,72,0,0,0,
     17,3,0,0,2,0,
-    0,0,198,0,0,0,
-    12,0,0,0,0,0,
     0,0,199,0,0,0,
+    12,0,0,0,0,0,
+    0,0,200,0,0,0,
     17,4,0,0,2,0,
     0,0,75,0,0,0,
     12,0,0,0,0,0,
@@ -4014,7 +4038,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,11,0,0,0,
     12,0,0,0,0,0,
     1,0,0,0,0,0,
-    0,0,186,0,0,0,
+    0,0,187,0,0,0,
     1,2,0,0,0,0,
     6,0,0,0,0,0,
     0,0,84,0,0,0,
@@ -4039,7 +4063,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,2,0,0,2,0,
     0,0,73,0,0,0,
     12,0,0,0,0,0,
-    0,0,200,0,0,0,
+    0,0,201,0,0,0,
     17,3,0,0,2,0,
     0,0,75,0,0,0,
     12,0,0,0,0,0,
@@ -4077,41 +4101,41 @@ static const uint8_t perfetto_fmt_ops[] = {
     3,0,0,0,0,0,
     16,0,0,0,0,0,
     6,0,0,0,0,0,
-    0,0,201,0,0,0,
+    0,0,202,0,0,0,
     8,0,0,0,0,0,
     3,0,0,0,0,0,
     2,0,0,0,0,0,
     9,0,0,0,0,0,
     7,0,0,0,0,0,
     19,0,0,0,2,0,
-    0,0,202,0,0,0,
+    0,0,203,0,0,0,
     11,0,0,0,18,0,
     19,0,1,0,3,0,
     24,1,0,0,0,0,
-    0,0,203,0,0,0,
+    0,0,204,0,0,0,
     11,0,0,0,13,0,
     19,0,2,0,2,0,
-    0,0,204,0,0,0,
+    0,0,205,0,0,0,
     11,0,0,0,9,0,
     19,0,3,0,3,0,
     24,1,0,0,0,0,
-    0,0,205,0,0,0,
+    0,0,206,0,0,0,
     11,0,0,0,4,0,
     19,0,4,0,2,0,
-    0,0,206,0,0,0,
+    0,0,207,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     19,0,1,0,2,0,
-    0,0,207,0,0,0,
+    0,0,208,0,0,0,
     11,0,0,0,8,0,
     19,0,2,0,2,0,
-    0,0,208,0,0,0,
+    0,0,209,0,0,0,
     11,0,0,0,4,0,
     19,0,3,0,2,0,
-    0,0,209,0,0,0,
+    0,0,210,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
@@ -4120,16 +4144,16 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,27,0,0,0,
     2,3,0,0,0,0,
     19,1,1,0,2,0,
-    0,0,210,0,0,0,
+    0,0,211,0,0,0,
     11,0,0,0,12,0,
     19,1,2,0,2,0,
-    0,0,211,0,0,0,
+    0,0,212,0,0,0,
     11,0,0,0,8,0,
     19,1,3,0,2,0,
-    0,0,212,0,0,0,
+    0,0,213,0,0,0,
     11,0,0,0,4,0,
     19,1,4,0,2,0,
-    0,0,213,0,0,0,
+    0,0,214,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
     12,0,0,0,0,0,
@@ -4142,7 +4166,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     8,0,0,0,0,0,
     4,0,0,0,0,0,
     10,1,0,0,6,0,
-    0,0,214,0,0,0,
+    0,0,215,0,0,0,
     8,0,0,0,0,0,
     3,0,0,0,0,0,
     2,1,0,0,0,0,
@@ -4190,7 +4214,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     16,0,0,0,0,0,
     10,0,0,0,11,0,
     6,0,0,0,0,0,
-    0,0,215,0,0,0,
+    0,0,216,0,0,0,
     8,0,0,0,0,0,
     4,0,0,0,0,0,
     0,0,5,0,0,0,
@@ -4212,7 +4236,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,29,0,0,0,
     1,1,0,0,0,0,
     17,2,0,0,2,0,
-    0,0,216,0,0,0,
+    0,0,217,0,0,0,
     12,0,0,0,0,0,
     22,0,0,0,0,0,
     14,0,0,0,0,0,
@@ -4238,7 +4262,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     11,0,0,0,12,0,
     19,0,1,0,10,0,
     6,0,0,0,0,0,
-    0,0,217,0,0,0,
+    0,0,218,0,0,0,
     8,0,0,0,0,0,
     4,0,0,0,0,0,
     2,2,0,0,0,0,
@@ -4254,10 +4278,10 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,1,0,0,2,0,
     0,0,102,0,0,0,
     12,0,0,0,0,0,
-    0,0,218,0,0,0,
+    0,0,219,0,0,0,
     1,0,0,0,0,0,
     10,2,0,0,3,0,
-    0,0,188,0,0,0,
+    0,0,189,0,0,0,
     2,2,0,0,0,0,
     12,0,0,0,0,0,
     10,3,0,0,8,0,
@@ -4283,7 +4307,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,1,0,0,2,0,
     0,0,102,0,0,0,
     12,0,0,0,0,0,
-    0,0,219,0,0,0,
+    0,0,220,0,0,0,
     1,0,0,0,0,0,
     10,2,0,0,8,0,
     0,0,0,0,0,0,
@@ -4304,7 +4328,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,1,0,0,2,0,
     0,0,102,0,0,0,
     12,0,0,0,0,0,
-    0,0,220,0,0,0,
+    0,0,221,0,0,0,
     1,0,0,0,0,0,
     0,0,0,0,0,0,
     10,2,0,0,6,0,
@@ -4317,7 +4341,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,3,0,0,0,
     7,0,0,0,0,0,
     5,0,0,0,0,0,
-    0,0,221,0,0,0,
+    0,0,222,0,0,0,
     2,3,0,0,0,0,
     5,0,0,0,0,0,
     0,0,76,0,0,0,
@@ -4328,7 +4352,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,1,0,0,2,0,
     0,0,102,0,0,0,
     12,0,0,0,0,0,
-    0,0,220,0,0,0,
+    0,0,221,0,0,0,
     1,0,0,0,0,0,
     0,0,0,0,0,0,
     10,2,0,0,6,0,
@@ -4341,19 +4365,19 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,3,0,0,0,
     7,0,0,0,0,0,
     5,0,0,0,0,0,
-    0,0,221,0,0,0,
+    0,0,222,0,0,0,
     2,3,0,0,0,0,
     5,0,0,0,0,0,
-    0,0,222,0,0,0,
+    0,0,223,0,0,0,
     1,4,0,0,0,0,
     6,0,0,0,0,0,
     0,0,72,0,0,0,
     17,1,0,0,2,0,
     0,0,102,0,0,0,
     12,0,0,0,0,0,
-    0,0,223,0,0,0,
+    0,0,224,0,0,0,
     1,0,0,0,0,0,
-    0,0,186,0,0,0,
+    0,0,187,0,0,0,
     1,2,0,0,0,0,
     0,0,0,0,0,0,
     8,0,0,0,0,0,
@@ -4368,7 +4392,7 @@ static const uint8_t perfetto_fmt_ops[] = {
     17,1,0,0,2,0,
     0,0,102,0,0,0,
     12,0,0,0,0,0,
-    0,0,224,0,0,0,
+    0,0,225,0,0,0,
     1,0,0,0,0,0,
     0,0,0,0,0,0,
     10,4,0,0,6,0,
@@ -4381,46 +4405,46 @@ static const uint8_t perfetto_fmt_ops[] = {
     0,0,3,0,0,0,
     7,0,0,0,0,0,
     5,0,0,0,0,0,
-    0,0,221,0,0,0,
+    0,0,222,0,0,0,
     1,2,0,0,0,0,
     5,0,0,0,0,0,
-    0,0,225,0,0,0,
-    1,3,0,0,0,0,
     0,0,226,0,0,0,
-    1,0,0,0,0,0,
+    1,3,0,0,0,0,
     0,0,227,0,0,0,
     1,0,0,0,0,0,
-    0,0,186,0,0,0,
+    0,0,228,0,0,0,
+    1,0,0,0,0,0,
+    0,0,187,0,0,0,
     1,1,0,0,0,0,
 };
 
-static const uint32_t perfetto_fmt_ops_count = 10692;
+static const uint32_t perfetto_fmt_ops_count = 10770;
 
 static const uint32_t perfetto_fmt_dispatch[] = {
     0xffff0000,0x00000023,0x00230029,0x004c0005,0x00510009,0x005a0005,0x005f0009,0x0068000a,
-    0x0072000f,0x00810021,0x00a20009,0x00ab001b,0x00c60013,0x00d90005,0x00de0003,0x00e10033,
-    0x01140083,0x01970005,0x019c000d,0x01a90005,0x01ae005c,0x020a0005,0x020f002f,0x023e001c,
-    0x025a0005,0x025f000f,0x026e0025,0x02930005,0x02980039,0x02d10011,0x02e20005,0x02e7005a,
-    0x03410045,0x03860015,0x039b0002,0x039d0001,0x039e0001,0x039f0005,0x03a40005,0x03a90023,
-    0x03cc0001,0x03cd0003,0x03d00015,0x03e50005,0x03ea0007,0x03f1001a,0x040b000c,0x0417000e,
-    0x0425000e,0x04330005,0x04380041,0x0479000a,0x04830005,0x04880005,0x048d0014,0x04a1000d,
-    0x04ae002f,0x04dd0001,0x04de0011,0x04ef0006,0x04f5002d,0x05220011,0x05330010,0x05430010,
-    0x05530008,0x055b0002,0x055d0009,0x05660007,0x056d0023,0x0590001d,0x05ad000d,0x05ba0007,
-    0x05c10015,0x05d6001e,0x05f40029,0x061d0005,0x06220003,0x06250005,0x062a0014,0x063e0006,
-    0x06440005,0x06490003,0x064c0005,0x06510001,0x06520005,0x0657000f,0x06660001,0x0667001d,
-    0x06840015,0x06990018,0x06b10017,0x06c80011,0x06d90017,0x06f00002,0x06f20004,
+    0x00720013,0x00850021,0x00a60009,0x00af001b,0x00ca0013,0x00dd0005,0x00e20003,0x00e50033,
+    0x01180083,0x019b0005,0x01a0000d,0x01ad0005,0x01b2005c,0x020e0005,0x0213002f,0x0242001c,
+    0x025e0005,0x0263000f,0x02720025,0x02970005,0x029c0039,0x02d50011,0x02e60005,0x02eb005a,
+    0x03450045,0x038a0015,0x039f0002,0x03a10001,0x03a20005,0x03a70001,0x03a80005,0x03ad0005,
+    0x03b20023,0x03d50001,0x03d60003,0x03d90015,0x03ee0005,0x03f30007,0x03fa001a,0x0414000c,
+    0x0420000e,0x042e000e,0x043c0005,0x04410041,0x0482000a,0x048c0005,0x04910005,0x04960018,
+    0x04ae000d,0x04bb002f,0x04ea0001,0x04eb0011,0x04fc0006,0x0502002d,0x052f0011,0x05400010,
+    0x05500010,0x05600008,0x05680002,0x056a0009,0x05730007,0x057a0023,0x059d001d,0x05ba000d,
+    0x05c70007,0x05ce0015,0x05e3001e,0x06010029,0x062a0005,0x062f0003,0x06320005,0x06370014,
+    0x064b0006,0x06510005,0x06560003,0x06590005,0x065e0001,0x065f0005,0x0664000f,0x06730001,
+    0x0674001d,0x06910015,0x06a60018,0x06be0017,0x06d50011,0x06e60017,0x06fd0002,0x06ff0004,
 };
 
-static const uint32_t perfetto_fmt_dispatch_count = 95;
+static const uint32_t perfetto_fmt_dispatch_count = 96;
 
 static const uint8_t perfetto_fmt_prec_table[] = {
     6,0,6,0,7,0,7,0,7,0,4,0,4,0,4,0,
     4,0,3,0,3,0,2,128,1,0,5,1,5,1,5,1,
     5,1,8,0,8,0,8,0,0,127,0,127,0,127,255,127,
-    3,0,3,0,3,0,3,0,9,0,
+    3,0,3,0,3,0,3,0,255,127,9,0,
 };
 
-static const uint32_t perfetto_fmt_prec_table_count = 58;
+static const uint32_t perfetto_fmt_prec_table_count = 60;
 
 static const uint32_t perfetto_fmt_expr_meta[] = {
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
@@ -4428,16 +4452,16 @@ static const uint32_t perfetto_fmt_expr_meta[] = {
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0x00000000,0x00001400,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
-    0xffffffff,0x00001cff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
+    0xffffffff,0xffffffff,0x00001dff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
     0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
-    0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
+    0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,
 };
 
-static const uint32_t perfetto_fmt_expr_meta_count = 95;
+static const uint32_t perfetto_fmt_expr_meta_count = 96;
 
 
 #endif  /* SYNTAQLITE_PERFETTO_DIALECT_FMT_H */
@@ -4497,6 +4521,7 @@ static const uint8_t perfetto_roles_data[] = {
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x07,0x00,0x02,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -4512,7 +4537,7 @@ static const uint8_t perfetto_roles_data[] = {
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-    0x09,0x00,0x00,0x02,0x00,0x00,0x00,0x00,
+    0x09,0x00,0x00,0x03,0x00,0x00,0x00,0x00,
     0x0a,0x00,0x01,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -4555,13 +4580,13 @@ static const uint8_t perfetto_roles_data[] = {
     0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 };
 
-static const uint32_t perfetto_roles_count = 95;
+static const uint32_t perfetto_roles_count = 96;
 
 /* Macro definition metadata for the perfetto dialect. */
 /* Each entry is 8 bytes: node_tag(u16) + 4 field indices + 2 pad. */
 
 static const uint8_t perfetto_macro_defs_data[] = {
-    0x5c,0x00,0x00,0x03,0x04,0x00,0x00,0x00,
+    0x5d,0x00,0x00,0x03,0x04,0x00,0x00,0x00,
 };
 
 static const uint32_t perfetto_macro_defs_count = 1;
@@ -6919,6 +6944,16 @@ uint32_t synq_parser_scan_macro_args(SyntaqliteParser* p,
 
     int is_skip = synq_token_is_skip(ttype);
 
+    // The fallback-macro path stores the whole call as a single
+    // TK_ID, so the main token loop in parser.c never sees tokens
+    // inside the call and never calls `synq_parser_record_comment`
+    // for them. Record them here instead so consumers that ask
+    // "are there any comments in byte range [call_off, call_end)?"
+    // (notably the formatter's structured-args bail) see the truth.
+    if (ttype == SYNTAQLITE_TK_COMMENT && p->collect_tokens) {
+      synq_parser_record_comment(p, pos, (uint32_t)tlen);
+    }
+
     if (ttype == SYNTAQLITE_TK_LP) {
       depth++;
     } else if (ttype == SYNTAQLITE_TK_RP) {
@@ -7780,10 +7815,17 @@ SYNTAQLITE_API const char* syntaqlite_parser_span_text(
     uint32_t* out_offset) {
   if (out_offset)
     *out_offset = 0;
-  if (!span || span->length == 0) {
+  if (!span) {
     *out_len = 0;
     return NULL;
   }
+  // A span's offset is positional metadata that is always meaningful for
+  // an in-range span, independent of length.  A zero-length span can be
+  // either an absent field (zero-initialized `{0,0,0,0}` — offset 0 is
+  // the sentinel) or a genuine empty-but-quoted token like `""`
+  // (non-zero offset + quote flag set).  Callers distinguish the two via
+  // `TextSpan::is_quoted`; our job here is to surface the real offset in
+  // both cases rather than collapsing to 0.
   uint32_t stmt_len = p->stmt_end_offset > p->stmt_start_offset
                           ? p->stmt_end_offset - p->stmt_start_offset
                           : 0;
@@ -8758,6 +8800,7 @@ static inline uint32_t synq_parse_exists_expr(
 static inline uint32_t synq_parse_in_expr(
     SynqParseCtx *ctx,
     SyntaqliteBool negated,
+    SyntaqliteBool bare_source,
     uint32_t operand,
     uint32_t source
 ) {
@@ -8765,6 +8808,7 @@ static inline uint32_t synq_parse_in_expr(
         &(SyntaqliteInExpr){
             .tag = SYNTAQLITE_NODE_IN_EXPR,
             .negated = negated,
+            .bare_source = bare_source,
             .operand = operand,
             .source = source
         }, (uint32_t)sizeof(SyntaqliteInExpr));
@@ -9156,6 +9200,14 @@ static inline uint32_t synq_parse_literal(
         }, (uint32_t)sizeof(SyntaqliteLiteral));
 }
 
+static inline uint32_t synq_parse_paren_expr(SynqParseCtx *ctx, uint32_t expr) {
+    return synq_parse_build(ctx,
+        &(SyntaqliteParenExpr){
+            .tag = SYNTAQLITE_NODE_PAREN_EXPR,
+            .expr = expr
+        }, (uint32_t)sizeof(SyntaqliteParenExpr));
+}
+
 static inline uint32_t synq_parse_ident_name(
     SynqParseCtx *ctx,
     SyntaqliteTextSpan source
@@ -9379,6 +9431,7 @@ static inline uint32_t synq_parse_table_ref(
     SynqParseCtx *ctx,
     SyntaqliteTextSpan table_name,
     SyntaqliteTextSpan schema,
+    SyntaqliteBool has_parens,
     uint32_t alias,
     uint32_t args
 ) {
@@ -9387,6 +9440,7 @@ static inline uint32_t synq_parse_table_ref(
             .tag = SYNTAQLITE_NODE_TABLE_REF,
             .table_name = table_name,
             .schema = schema,
+            .has_parens = has_parens,
             .alias = alias,
             .args = args
         }, (uint32_t)sizeof(SyntaqliteTableRef));
@@ -10142,6 +10196,16 @@ typedef struct SynqUpsertValue {
   uint32_t clauses;
   uint32_t returning;
 } SynqUpsertValue;
+
+// paren_exprlist: optional `LP exprlist RP` tail. Tracks whether the
+// parens were present so callers can distinguish `foo` (has_parens=0)
+// from `foo()` (has_parens=1, args=NULL_NODE) — relevant for table /
+// table-valued function references where the two forms are distinct
+// productions in the SQLite grammar.
+typedef struct SynqParenExprlistValue {
+  uint32_t args;
+  SyntaqliteBool has_parens;
+} SynqParenExprlistValue;
 /* END GRAMMAR_TYPES */
 
 #define YYPARSEFREENEVERNULL 1
@@ -10426,6 +10490,7 @@ static inline SyntaqliteTextSpan synq_error_span(SynqParseCtx* pCtx) {
 typedef union {
   int yyinit;
   SynqPerfettoParseTOKENTYPE yy0;
+  SynqParenExprlistValue yy126;
   SynqConstraintValue yy344;
   SynqColumnNameValue yy358;
   int yy390;
@@ -13972,7 +14037,8 @@ static YYACTIONTYPE yy_reduce(
         break;
       case 30: /* expr ::= expr in_op LP exprlist RP */
 {
-    yymsp[-4].minor.yy639 = synq_parse_in_expr(pCtx, (SyntaqliteBool)yymsp[-3].minor.yy390, yymsp[-4].minor.yy639, yymsp[-1].minor.yy639);
+    yymsp[-4].minor.yy639 = synq_parse_in_expr(pCtx, (SyntaqliteBool)yymsp[-3].minor.yy390,
+                           SYNTAQLITE_BOOL_FALSE, yymsp[-4].minor.yy639, yymsp[-1].minor.yy639);
 }
         break;
       case 31: /* expr ::= expr in_op LP select RP */
@@ -13980,14 +14046,26 @@ static YYACTIONTYPE yy_reduce(
     pCtx->saw_subquery = 1;
     // Pass the raw select node directly — InExpr's fmt block already adds
     // the surrounding parens, so wrapping in SubqueryExpr would double them.
-    yymsp[-4].minor.yy639 = synq_parse_in_expr(pCtx, (SyntaqliteBool)yymsp[-3].minor.yy390, yymsp[-4].minor.yy639, yymsp[-1].minor.yy639);
+    yymsp[-4].minor.yy639 = synq_parse_in_expr(pCtx, (SyntaqliteBool)yymsp[-3].minor.yy390,
+                           SYNTAQLITE_BOOL_FALSE, yymsp[-4].minor.yy639, yymsp[-1].minor.yy639);
 }
         break;
       case 32: /* expr ::= expr in_op nm dbnm paren_exprlist */
 {
-    // Table-valued function IN expression - stub for now
-    (void)yymsp[-2].minor.yy0; (void)yymsp[-1].minor.yy0; (void)yymsp[0].minor.yy639;
-    yymsp[-4].minor.yy639 = synq_parse_in_expr(pCtx, (SyntaqliteBool)yymsp[-3].minor.yy390, yymsp[-4].minor.yy639, SYNTAQLITE_NULL_NODE);
+    SyntaqliteTextSpan table_name;
+    SyntaqliteTextSpan schema;
+    if (yymsp[-1].minor.yy0.z != NULL) {
+        table_name = synq_span_dequote(pCtx, yymsp[-1].minor.yy0);
+        schema = synq_span_dequote(pCtx, yymsp[-2].minor.yy0);
+    } else {
+        table_name = synq_span_dequote(pCtx, yymsp[-2].minor.yy0);
+        schema = SYNQ_NO_SPAN;
+    }
+    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema,
+                                         yymsp[0].minor.yy126.has_parens,
+                                         SYNTAQLITE_NULL_NODE, yymsp[0].minor.yy126.args);
+    yymsp[-4].minor.yy639 = synq_parse_in_expr(pCtx, (SyntaqliteBool)yymsp[-3].minor.yy390,
+                           SYNTAQLITE_BOOL_TRUE, yymsp[-4].minor.yy639, tref);
 }
         break;
       case 33: /* dbnm ::= */
@@ -13997,14 +14075,16 @@ static YYACTIONTYPE yy_reduce(
 { yymsp[-1].minor.yy0 = yymsp[0].minor.yy0; }
         break;
       case 35: /* paren_exprlist ::= */
-      case 419: /* perfetto_arg_def_list ::= */ yytestcase(yyruleno==419);
-      case 425: /* perfetto_table_schema ::= */ yytestcase(yyruleno==425);
-      case 427: /* perfetto_table_impl ::= */ yytestcase(yyruleno==427);
-      case 433: /* perfetto_macro_arg_list ::= */ yytestcase(yyruleno==433);
-{ yymsp[1].minor.yy639 = SYNTAQLITE_NULL_NODE; }
+{
+    yymsp[1].minor.yy126.args = SYNTAQLITE_NULL_NODE;
+    yymsp[1].minor.yy126.has_parens = SYNTAQLITE_BOOL_FALSE;
+}
         break;
       case 36: /* paren_exprlist ::= LP exprlist RP */
-{ yymsp[-2].minor.yy639 = synq_pass(pCtx, yymsp[-1].minor.yy639); }
+{
+    yymsp[-2].minor.yy126.args = synq_pass(pCtx, yymsp[-1].minor.yy639);
+    yymsp[-2].minor.yy126.has_parens = SYNTAQLITE_BOOL_TRUE;
+}
         break;
       case 37: /* expr ::= expr ISNULL|NOTNULL */
 {
@@ -14756,7 +14836,6 @@ static YYACTIONTYPE yy_reduce(
         break;
       case 132: /* eidlist_opt ::= LP eidlist RP */
       case 166: /* idlist_opt ::= LP idlist RP */ yytestcase(yyruleno==166);
-      case 177: /* expr ::= LP expr RP */ yytestcase(yyruleno==177);
       case 324: /* trigger_cmd ::= scanpt select scanpt */ yytestcase(yyruleno==324);
 {
     yymsp[-2].minor.yy639 = synq_pass(pCtx, yymsp[-1].minor.yy639);
@@ -14877,14 +14956,18 @@ static YYACTIONTYPE yy_reduce(
       case 151: /* xfullname ::= nm */
 {
     yylhsminor.yy639 = synq_parse_table_ref(pCtx,
-        synq_span_dequote(pCtx, yymsp[0].minor.yy0), SYNQ_NO_SPAN, SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
+        synq_span_dequote(pCtx, yymsp[0].minor.yy0), SYNQ_NO_SPAN,
+        SYNTAQLITE_BOOL_FALSE,
+        SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
 }
   yymsp[0].minor.yy639 = yylhsminor.yy639;
         break;
       case 152: /* xfullname ::= nm DOT nm */
 {
     yylhsminor.yy639 = synq_parse_table_ref(pCtx,
-        synq_span_dequote(pCtx, yymsp[0].minor.yy0), synq_span_dequote(pCtx, yymsp[-2].minor.yy0), SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
+        synq_span_dequote(pCtx, yymsp[0].minor.yy0), synq_span_dequote(pCtx, yymsp[-2].minor.yy0),
+        SYNTAQLITE_BOOL_FALSE,
+        SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
 }
   yymsp[-2].minor.yy639 = yylhsminor.yy639;
         break;
@@ -14892,7 +14975,9 @@ static YYACTIONTYPE yy_reduce(
 {
     uint32_t alias = synq_parse_ident_name(pCtx, synq_span_dequote(pCtx, yymsp[0].minor.yy0));
     yylhsminor.yy639 = synq_parse_table_ref(pCtx,
-        synq_span_dequote(pCtx, yymsp[-2].minor.yy0), synq_span_dequote(pCtx, yymsp[-4].minor.yy0), alias, SYNTAQLITE_NULL_NODE);
+        synq_span_dequote(pCtx, yymsp[-2].minor.yy0), synq_span_dequote(pCtx, yymsp[-4].minor.yy0),
+        SYNTAQLITE_BOOL_FALSE,
+        alias, SYNTAQLITE_NULL_NODE);
 }
   yymsp[-4].minor.yy639 = yylhsminor.yy639;
         break;
@@ -14900,7 +14985,9 @@ static YYACTIONTYPE yy_reduce(
 {
     uint32_t alias = synq_parse_ident_name(pCtx, synq_span_dequote(pCtx, yymsp[0].minor.yy0));
     yylhsminor.yy639 = synq_parse_table_ref(pCtx,
-        synq_span_dequote(pCtx, yymsp[-2].minor.yy0), SYNQ_NO_SPAN, alias, SYNTAQLITE_NULL_NODE);
+        synq_span_dequote(pCtx, yymsp[-2].minor.yy0), SYNQ_NO_SPAN,
+        SYNTAQLITE_BOOL_FALSE,
+        alias, SYNTAQLITE_NULL_NODE);
 }
   yymsp[-2].minor.yy639 = yylhsminor.yy639;
         break;
@@ -15018,6 +15105,11 @@ static YYACTIONTYPE yy_reduce(
       case 202: /* nmorerr ::= error */ yytestcase(yyruleno==202);
 {
     yymsp[0].minor.yy639 = synq_parse_error(pCtx, synq_error_span(pCtx));
+}
+        break;
+      case 177: /* expr ::= LP expr RP */
+{
+    yymsp[-2].minor.yy639 = synq_parse_paren_expr(pCtx, yymsp[-1].minor.yy639);
 }
         break;
       case 178: /* expr ::= expr PLUS|MINUS expr */
@@ -15500,7 +15592,9 @@ static YYACTIONTYPE yy_reduce(
         table_name = synq_span_dequote(pCtx, yymsp[-3].minor.yy0);
         schema = SYNQ_NO_SPAN;
     }
-    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema, alias, SYNTAQLITE_NULL_NODE);
+    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema,
+                                         SYNTAQLITE_BOOL_FALSE,
+                                         alias, SYNTAQLITE_NULL_NODE);
     if (yymsp[-4].minor.yy639 == SYNTAQLITE_NULL_NODE) {
         yymsp[-4].minor.yy639 = tref;
     } else {
@@ -15525,7 +15619,9 @@ static YYACTIONTYPE yy_reduce(
         table_name = synq_span_dequote(pCtx, yymsp[-4].minor.yy0);
         schema = SYNQ_NO_SPAN;
     }
-    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema, alias, SYNTAQLITE_NULL_NODE);
+    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema,
+                                         SYNTAQLITE_BOOL_FALSE,
+                                         alias, SYNTAQLITE_NULL_NODE);
     if (yymsp[-5].minor.yy639 == SYNTAQLITE_NULL_NODE) {
         yymsp[-5].minor.yy639 = tref;
     } else {
@@ -15549,7 +15645,9 @@ static YYACTIONTYPE yy_reduce(
         table_name = synq_span_dequote(pCtx, yymsp[-6].minor.yy0);
         schema = SYNQ_NO_SPAN;
     }
-    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema, alias, yymsp[-3].minor.yy639);
+    uint32_t tref = synq_parse_table_ref(pCtx, table_name, schema,
+                                         SYNTAQLITE_BOOL_TRUE,
+                                         alias, yymsp[-3].minor.yy639);
     if (yymsp[-7].minor.yy639 == SYNTAQLITE_NULL_NODE) {
         yymsp[-7].minor.yy639 = tref;
     } else {
@@ -15833,7 +15931,9 @@ static YYACTIONTYPE yy_reduce(
       case 321: /* trigger_cmd ::= UPDATE orconf trnm tridxby SET setlist from where_opt scanpt */
 {
     uint32_t tbl = synq_parse_table_ref(pCtx,
-        synq_span(pCtx, yymsp[-6].minor.yy0), SYNQ_NO_SPAN, SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
+        synq_span(pCtx, yymsp[-6].minor.yy0), SYNQ_NO_SPAN,
+        SYNTAQLITE_BOOL_FALSE,
+        SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
     yymsp[-8].minor.yy639 = synq_parse_update_stmt(pCtx,
         SYNTAQLITE_NULL_NODE, SYNTAQLITE_BOOL_FALSE,
         (SyntaqliteConflictAction)yymsp[-7].minor.yy390, tbl,
@@ -15844,7 +15944,9 @@ static YYACTIONTYPE yy_reduce(
       case 322: /* trigger_cmd ::= scanpt insert_cmd INTO trnm idlist_opt select upsert scanpt */
 {
     uint32_t tbl = synq_parse_table_ref(pCtx,
-        synq_span(pCtx, yymsp[-4].minor.yy0), SYNQ_NO_SPAN, SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
+        synq_span(pCtx, yymsp[-4].minor.yy0), SYNQ_NO_SPAN,
+        SYNTAQLITE_BOOL_FALSE,
+        SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
     yymsp[-7].minor.yy639 = synq_parse_insert_stmt(pCtx,
         SYNTAQLITE_NULL_NODE, SYNTAQLITE_BOOL_FALSE,
         (SyntaqliteConflictAction)yymsp[-6].minor.yy390, tbl, yymsp[-3].minor.yy639, yymsp[-2].minor.yy639,
@@ -15854,7 +15956,9 @@ static YYACTIONTYPE yy_reduce(
       case 323: /* trigger_cmd ::= DELETE FROM trnm tridxby where_opt scanpt */
 {
     uint32_t tbl = synq_parse_table_ref(pCtx,
-        synq_span(pCtx, yymsp[-3].minor.yy0), SYNQ_NO_SPAN, SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
+        synq_span(pCtx, yymsp[-3].minor.yy0), SYNQ_NO_SPAN,
+        SYNTAQLITE_BOOL_FALSE,
+        SYNTAQLITE_NULL_NODE, SYNTAQLITE_NULL_NODE);
     yymsp[-5].minor.yy639 = synq_parse_delete_stmt(pCtx,
         SYNTAQLITE_NULL_NODE, SYNTAQLITE_BOOL_FALSE,
         tbl,
@@ -16289,6 +16393,12 @@ static YYACTIONTYPE yy_reduce(
     };
 }
   yymsp[-5].minor.yy0 = yylhsminor.yy0;
+        break;
+      case 419: /* perfetto_arg_def_list ::= */
+      case 425: /* perfetto_table_schema ::= */ yytestcase(yyruleno==425);
+      case 427: /* perfetto_table_impl ::= */ yytestcase(yyruleno==427);
+      case 433: /* perfetto_macro_arg_list ::= */ yytestcase(yyruleno==433);
+{ yymsp[1].minor.yy639 = SYNTAQLITE_NULL_NODE; }
         break;
       case 420: /* perfetto_arg_def_list ::= perfetto_arg_def_list_ne */
       case 434: /* perfetto_macro_arg_list ::= perfetto_macro_arg_list_ne */ yytestcase(yyruleno==434);
