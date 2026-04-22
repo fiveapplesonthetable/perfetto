@@ -31,6 +31,8 @@
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wmissing-variable-declarations"
 #pragma clang diagnostic ignored "-Wimplicit-int-conversion"
+#pragma clang diagnostic ignored "-Wimplicit-int-enum-cast"
+#pragma clang diagnostic ignored "-Wimplicit-void-ptr-cast"
 #pragma clang diagnostic ignored "-Wshorten-64-to-32"
 #elif defined(__GNUC__) && !defined(__cplusplus)
 #pragma GCC diagnostic ignored "-Wold-style-declaration"
