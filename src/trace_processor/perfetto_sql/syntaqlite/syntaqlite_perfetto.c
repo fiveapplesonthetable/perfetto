@@ -23,6 +23,8 @@
 #ifndef __cplusplus
 #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
+#else
+#pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
 #endif
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wextra-semi-stmt"
