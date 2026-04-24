@@ -20,6 +20,7 @@ import "protos/perfetto/common/system_info.proto";
 import "protos/perfetto/common/trace_stats.proto";
 import "protos/perfetto/config/trace_config.proto";
 import "protos/perfetto/trace/extension_descriptor.proto";
+import "protos/perfetto/trace/android/android_binder_parcel.proto";
 import "protos/perfetto/trace/android/android_game_intervention_list.proto";
 import "protos/perfetto/trace/android/android_log.proto";
 import "protos/perfetto/trace/android/android_system_property.proto";
@@ -267,6 +268,11 @@ message TracePacket {
     CpuPerUidData cpu_per_uid_data = 119;
 
     EvdevEvent evdev_event = 121;
+
+    // One half of an AIDL binder transaction with field-level, AIDL-typed
+    // annotations. Emitted by libbinder_parcel_tracing.so (linked against
+    // libperfetto_c). Four halves pair via txn_id into one logical RPC.
+    AndroidBinderParcelEvent android_binder_parcel = 123;
 
     // This field is only used for testing.
     // In previous versions of this proto this field had the id 268435455

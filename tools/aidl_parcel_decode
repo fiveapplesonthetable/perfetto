@@ -1,0 +1,429 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""aidl_parcel_decode — pretty-print android.binder.parcel events.
+
+Reads a `.perfetto-trace` file produced by the Perfetto android.binder.parcel
+data source and emits a human-readable listing of every AIDL binder
+transaction captured, including per-field decoded values.
+
+This is a minimal standalone decoder: it does not depend on
+trace_processor or the compiled perfetto_trace_pb2. It walks the
+protobuf wire format directly for the handful of field numbers it
+cares about.
+
+Usage:
+    aidl_parcel_decode TRACE_FILE [--interface PATTERN] [--method PATTERN]
+                                  [--grouped-by-txn] [--max-preview N]
+"""
+
+from __future__ import annotations
+
+import argparse
+import struct
+import sys
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Iterator, List, Optional, Tuple
+
+# --------------------------------------------------------------------------
+# Protobuf wire format constants and helpers.
+# --------------------------------------------------------------------------
+
+WIRE_VARINT = 0
+WIRE_FIXED64 = 1
+WIRE_LEN_DELIM = 2
+WIRE_FIXED32 = 5
+
+
+def read_varint(buf: memoryview, pos: int) -> Tuple[int, int]:
+    val = 0
+    shift = 0
+    while True:
+        b = buf[pos]
+        pos += 1
+        val |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return val, pos
+        shift += 7
+        if shift > 70:
+            raise ValueError("varint too long at pos %d" % pos)
+
+
+def zigzag_decode(n: int) -> int:
+    return (n >> 1) ^ -(n & 1)
+
+
+def iter_fields(buf: memoryview) -> Iterator[Tuple[int, int, Any]]:
+    """Yield (field_number, wire_type, value) for each top-level field."""
+    pos = 0
+    n = len(buf)
+    while pos < n:
+        tag, pos = read_varint(buf, pos)
+        field_num = tag >> 3
+        wire = tag & 7
+        if wire == WIRE_VARINT:
+            v, pos = read_varint(buf, pos)
+            yield field_num, wire, v
+        elif wire == WIRE_FIXED64:
+            v = struct.unpack_from("<Q", buf, pos)[0]
+            pos += 8
+            yield field_num, wire, v
+        elif wire == WIRE_LEN_DELIM:
+            length, pos = read_varint(buf, pos)
+            yield field_num, wire, bytes(buf[pos:pos + length])
+            pos += length
+        elif wire == WIRE_FIXED32:
+            v = struct.unpack_from("<I", buf, pos)[0]
+            pos += 4
+            yield field_num, wire, v
+        else:
+            # Unknown wire type — skip the rest.
+            return
+
+
+# --------------------------------------------------------------------------
+# Proto field numbers (from android_binder_parcel.proto & trace_packet.proto).
+# --------------------------------------------------------------------------
+
+TRACE_FIELD_PACKET = 1  # Trace: repeated TracePacket packet = 1
+PACKET_FIELD_ANDROID_BINDER_PARCEL = 123  # TracePacket.android_binder_parcel
+
+# AndroidBinderParcelEvent
+BPE_INTERFACE_NAME = 1
+BPE_CODE = 2
+BPE_FLAGS = 3
+BPE_RETURNED_STATUS = 4
+BPE_DIRECTION = 5
+BPE_TXN_ID = 6
+BPE_RECORDED_TRANSACTION = 7
+BPE_ANNOTATION = 8
+BPE_WALL_CLOCK_NS = 9
+BPE_DURATION_NS = 10
+BPE_PID = 11
+BPE_TID = 12
+BPE_METHOD_NAME = 13
+BPE_METADATA = 14
+BPE_ONEWAY = 15
+BPE_THREAD_NAME = 16
+
+# ParcelFieldAnnotation
+PFA_FIELD_NAME = 1
+PFA_AIDL_TYPE = 2
+PFA_PARCEL_OFFSET = 3
+PFA_BYTE_LENGTH = 4
+PFA_KIND = 5
+PFA_INT_PREVIEW = 6
+PFA_DOUBLE_PREVIEW = 7
+PFA_STRING_PREVIEW = 8
+PFA_BYTES_PREVIEW = 9
+PFA_BINDER_DESCRIPTOR_PREVIEW = 10
+PFA_NESTED = 11
+PFA_SENSITIVE = 12
+PFA_NULLABLE = 13
+PFA_IS_NULL = 14
+PFA_UTF8_IN_CPP = 15
+PFA_ELEMENT_COUNT = 16
+PFA_ELEMENT_AIDL_TYPE = 17
+PFA_DIRECTION_MARKER = 18
+PFA_PARCELABLE_STABILITY = 19
+PFA_FD_SIZE_BYTES = 20
+PFA_FD_KIND = 21
+
+DIRECTION_LABEL = {0: "?", 1: "CLIENT_SEND", 2: "SERVER_RECV", 3: "SERVER_REPLY", 4: "CLIENT_RECV"}
+KIND_LABEL = {
+    0: "UNSPECIFIED",
+    1: "PRIMITIVE",
+    2: "STRING",
+    3: "STRONG_BINDER",
+    4: "FILE_DESCRIPTOR",
+    5: "PARCELABLE",
+    6: "TYPED_OBJECT",
+    7: "ARRAY",
+    8: "VECTOR",
+    9: "BYTES",
+    10: "INTERFACE_TOKEN",
+    11: "OPAQUE",
+}
+
+
+# --------------------------------------------------------------------------
+# Decoded structures.
+# --------------------------------------------------------------------------
+
+@dataclass
+class Annotation:
+    field_name: str = ""
+    aidl_type: str = ""
+    parcel_offset: int = 0
+    byte_length: int = 0
+    kind: int = 0
+    int_preview: Optional[int] = None
+    double_preview: Optional[float] = None
+    string_preview: Optional[str] = None
+    bytes_preview: Optional[bytes] = None
+    binder_descriptor_preview: Optional[str] = None
+    nested: List["Annotation"] = field(default_factory=list)
+    sensitive: bool = False
+    nullable: bool = False
+    is_null: bool = False
+    utf8_in_cpp: bool = False
+    element_count: int = 0
+    element_aidl_type: str = ""
+    direction_marker: str = ""
+    parcelable_stability: str = ""
+    fd_size_bytes: int = 0
+    fd_kind: str = ""
+
+
+@dataclass
+class BinderEvent:
+    interface_name: str = ""
+    code: int = 0
+    flags: int = 0
+    returned_status: Optional[int] = None
+    direction: int = 0
+    txn_id: int = 0
+    recorded_transaction_len: int = 0
+    annotations: List[Annotation] = field(default_factory=list)
+    wall_clock_ns: int = 0
+    duration_ns: int = 0
+    pid: int = 0
+    tid: int = 0
+    method_name: str = ""
+    oneway: bool = False
+    thread_name: str = ""
+
+
+def decode_annotation(buf: memoryview) -> Annotation:
+    a = Annotation()
+    for fn, wire, val in iter_fields(buf):
+        if fn == PFA_FIELD_NAME:
+            a.field_name = val.decode("utf-8", "replace")
+        elif fn == PFA_AIDL_TYPE:
+            a.aidl_type = val.decode("utf-8", "replace")
+        elif fn == PFA_PARCEL_OFFSET:
+            a.parcel_offset = val
+        elif fn == PFA_BYTE_LENGTH:
+            a.byte_length = val
+        elif fn == PFA_KIND:
+            a.kind = val
+        elif fn == PFA_INT_PREVIEW:
+            a.int_preview = zigzag_decode(val)
+        elif fn == PFA_DOUBLE_PREVIEW:
+            a.double_preview = struct.unpack("<d", struct.pack("<Q", val))[0]
+        elif fn == PFA_STRING_PREVIEW:
+            a.string_preview = val.decode("utf-8", "replace")
+        elif fn == PFA_BYTES_PREVIEW:
+            a.bytes_preview = val
+        elif fn == PFA_BINDER_DESCRIPTOR_PREVIEW:
+            a.binder_descriptor_preview = val.decode("utf-8", "replace")
+        elif fn == PFA_NESTED:
+            a.nested.append(decode_annotation(memoryview(val)))
+        elif fn == PFA_SENSITIVE:
+            a.sensitive = bool(val)
+        elif fn == PFA_NULLABLE:
+            a.nullable = bool(val)
+        elif fn == PFA_IS_NULL:
+            a.is_null = bool(val)
+        elif fn == PFA_UTF8_IN_CPP:
+            a.utf8_in_cpp = bool(val)
+        elif fn == PFA_ELEMENT_COUNT:
+            a.element_count = val
+        elif fn == PFA_ELEMENT_AIDL_TYPE:
+            a.element_aidl_type = val.decode("utf-8", "replace")
+        elif fn == PFA_DIRECTION_MARKER:
+            a.direction_marker = val.decode("utf-8", "replace")
+        elif fn == PFA_PARCELABLE_STABILITY:
+            a.parcelable_stability = val.decode("utf-8", "replace")
+        elif fn == PFA_FD_SIZE_BYTES:
+            a.fd_size_bytes = val
+        elif fn == PFA_FD_KIND:
+            a.fd_kind = val.decode("utf-8", "replace")
+    return a
+
+
+def decode_binder_event(buf: memoryview) -> BinderEvent:
+    e = BinderEvent()
+    for fn, wire, val in iter_fields(buf):
+        if fn == BPE_INTERFACE_NAME:
+            e.interface_name = val.decode("utf-8", "replace")
+        elif fn == BPE_CODE:
+            e.code = val
+        elif fn == BPE_FLAGS:
+            e.flags = val
+        elif fn == BPE_RETURNED_STATUS:
+            e.returned_status = zigzag_decode(val) if wire == WIRE_VARINT else val
+        elif fn == BPE_DIRECTION:
+            e.direction = val
+        elif fn == BPE_TXN_ID:
+            e.txn_id = val  # fixed64
+        elif fn == BPE_RECORDED_TRANSACTION:
+            e.recorded_transaction_len = len(val)
+        elif fn == BPE_ANNOTATION:
+            e.annotations.append(decode_annotation(memoryview(val)))
+        elif fn == BPE_WALL_CLOCK_NS:
+            e.wall_clock_ns = val
+        elif fn == BPE_DURATION_NS:
+            e.duration_ns = val
+        elif fn == BPE_PID:
+            e.pid = val
+        elif fn == BPE_TID:
+            e.tid = val
+        elif fn == BPE_METHOD_NAME:
+            e.method_name = val.decode("utf-8", "replace")
+        elif fn == BPE_ONEWAY:
+            e.oneway = bool(val)
+        elif fn == BPE_THREAD_NAME:
+            e.thread_name = val.decode("utf-8", "replace")
+    return e
+
+
+def iter_trace_packets(buf: memoryview) -> Iterator[memoryview]:
+    for fn, wire, val in iter_fields(buf):
+        if fn == TRACE_FIELD_PACKET and wire == WIRE_LEN_DELIM:
+            yield memoryview(val)
+
+
+def find_binder_event(packet: memoryview) -> Optional[BinderEvent]:
+    for fn, wire, val in iter_fields(packet):
+        if fn == PACKET_FIELD_ANDROID_BINDER_PARCEL and wire == WIRE_LEN_DELIM:
+            return decode_binder_event(memoryview(val))
+    return None
+
+
+# --------------------------------------------------------------------------
+# Rendering.
+# --------------------------------------------------------------------------
+
+def format_preview(a: Annotation, max_preview: int) -> str:
+    if a.is_null:
+        return "null"
+    if a.sensitive:
+        return "<sensitive>"
+    if a.int_preview is not None:
+        return str(a.int_preview)
+    if a.double_preview is not None:
+        return "%g" % a.double_preview
+    if a.string_preview is not None:
+        s = a.string_preview
+        if len(s) > max_preview:
+            s = s[:max_preview] + "…"
+        return repr(s)
+    if a.bytes_preview is not None:
+        b = a.bytes_preview[:max_preview]
+        rest = "" if len(a.bytes_preview) <= max_preview else " …"
+        return "bytes(%d)=%s%s" % (len(a.bytes_preview), b.hex(), rest)
+    if a.binder_descriptor_preview is not None:
+        return "IBinder<%s>" % a.binder_descriptor_preview
+    if a.kind == 4:  # FILE_DESCRIPTOR
+        return "fd(%s, %d bytes)" % (a.fd_kind or "?", a.fd_size_bytes)
+    if a.nested:
+        return "{%d children}" % len(a.nested)
+    return ""
+
+
+def print_annotation(a: Annotation, depth: int, max_preview: int, out) -> None:
+    indent = "    " * (depth + 1)
+    marks = []
+    if a.nullable:
+        marks.append("@nullable")
+    if a.utf8_in_cpp:
+        marks.append("@utf8InCpp")
+    if a.direction_marker:
+        marks.append(a.direction_marker)
+    mark_str = " " + ",".join(marks) if marks else ""
+    kind_str = KIND_LABEL.get(a.kind, "?")
+    elem_str = ""
+    if a.element_count or a.element_aidl_type:
+        elem_str = " [%s x%d]" % (a.element_aidl_type or "?", a.element_count)
+    preview = format_preview(a, max_preview)
+    out.write("%s%-20s %-28s kind=%-16s @%-5d len=%-5d%s%s = %s\n" % (
+        indent, a.field_name or "<unnamed>", a.aidl_type or "",
+        kind_str, a.parcel_offset, a.byte_length, elem_str, mark_str, preview))
+    for child in a.nested:
+        print_annotation(child, depth + 1, max_preview, out)
+
+
+def print_event(e: BinderEvent, max_preview: int, out) -> None:
+    direction = DIRECTION_LABEL.get(e.direction, "?")
+    status = "" if e.returned_status is None else (" status=%d" % e.returned_status)
+    oneway = " ONEWAY" if e.oneway else ""
+    method = (" %s()" % e.method_name) if e.method_name else ""
+    rec = (" rec=%dB" % e.recorded_transaction_len) if e.recorded_transaction_len else ""
+    out.write(
+        "\n=== [%s] %s%s code=%d flags=0x%x pid=%d tid=%d%s%s txn=0x%016x%s%s (%d annotations)\n"
+        % (direction, e.interface_name, method, e.code, e.flags, e.pid, e.tid,
+           oneway, status, e.txn_id,
+           " thread=" + e.thread_name if e.thread_name else "",
+           rec, len(e.annotations)))
+    for a in e.annotations:
+        print_annotation(a, 0, max_preview, out)
+
+
+# --------------------------------------------------------------------------
+# Main.
+# --------------------------------------------------------------------------
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("trace", help="Path to .perfetto-trace file")
+    ap.add_argument("--interface", help="Only events whose interface_name contains this substring")
+    ap.add_argument("--method", help="Only events whose method_name contains this substring")
+    ap.add_argument("--grouped-by-txn", action="store_true",
+                    help="Group CLIENT_SEND/SERVER_RECV/SERVER_REPLY/CLIENT_RECV under a single txn_id")
+    ap.add_argument("--max-preview", type=int, default=128,
+                    help="Truncate string/bytes previews to this many chars/bytes (default 128)")
+    ap.add_argument("--summary", action="store_true",
+                    help="Emit a per-interface summary table instead of the full listing")
+    args = ap.parse_args(argv)
+
+    with open(args.trace, "rb") as fh:
+        raw = fh.read()
+    buf = memoryview(raw)
+
+    events: List[BinderEvent] = []
+    for packet in iter_trace_packets(buf):
+        ev = find_binder_event(packet)
+        if ev is None:
+            continue
+        if args.interface and args.interface not in ev.interface_name:
+            continue
+        if args.method and args.method not in ev.method_name:
+            continue
+        events.append(ev)
+
+    if not events:
+        print("No android.binder.parcel events matched.", file=sys.stderr)
+        return 1
+
+    if args.summary:
+        from collections import Counter
+        per_iface = Counter(e.interface_name for e in events)
+        total_annotations = sum(len(e.annotations) for e in events)
+        print("Total events: %d  annotations: %d" % (len(events), total_annotations))
+        print("By interface:")
+        for iface, n in per_iface.most_common():
+            print("  %-60s  %d" % (iface, n))
+        return 0
+
+    if args.grouped_by_txn:
+        events.sort(key=lambda e: (e.txn_id, e.direction))
+
+    for ev in events:
+        print_event(ev, args.max_preview, sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -66,6 +66,7 @@ PERFETTO_PB_MSG_DECL(perfetto_protos_KernelWakelockData);
 PERFETTO_PB_MSG_DECL(perfetto_protos_LayersSnapshotProto);
 PERFETTO_PB_MSG_DECL(perfetto_protos_MemoryTrackerSnapshot);
 PERFETTO_PB_MSG_DECL(perfetto_protos_ModuleSymbols);
+PERFETTO_PB_MSG_DECL(perfetto_protos_AndroidBinderParcelEvent);
 PERFETTO_PB_MSG_DECL(perfetto_protos_NetworkPacketBundle);
 PERFETTO_PB_MSG_DECL(perfetto_protos_NetworkPacketEvent);
 PERFETTO_PB_MSG_DECL(perfetto_protos_PackagesList);
@@ -214,6 +215,11 @@ PERFETTO_PB_FIELD(perfetto_protos_TracePacket,
                   perfetto_protos_AndroidLogPacket,
                   android_log,
                   39);
+PERFETTO_PB_FIELD(perfetto_protos_TracePacket,
+                  MSG,
+                  perfetto_protos_AndroidBinderParcelEvent,
+                  android_binder_parcel,
+                  123);
 PERFETTO_PB_FIELD(perfetto_protos_TracePacket,
                   MSG,
                   perfetto_protos_SystemInfo,
