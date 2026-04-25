@@ -50,6 +50,8 @@ main thread, look at any `toggle#N` slice — expand it and you see
 a `f2fs_sync_file` slice underneath. The main thread is in `D`
 state for the duration.
 
+![Buggy trace zoomed onto `toggle#0`. The slice details show the main thread is mostly Uninterruptible Sleep — it's blocked on the f2fs flush triggered by SharedPreferences.commit().](../images/main-thread-io/before.png)
+
 ### Fix
 
 `apply()` schedules the write on a background thread and returns
@@ -69,6 +71,8 @@ After-trace: **39 toggles, 0.17 ms each — 9.2× faster.** The
 main thread no longer enters `D` state inside the toggle slice;
 the actual disk write happens later on the background thread that
 SharedPreferences manages.
+
+![Fixed trace zoomed onto `toggle#0`. Same UI thread bind, no Uninterruptible Sleep — the disk write is deferred to SharedPreferences' background writer.](../images/main-thread-io/after.png)
 
 ## Second pattern: synchronous Room query in `onCreate`
 

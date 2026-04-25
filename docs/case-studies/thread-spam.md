@@ -51,6 +51,8 @@ spawned + framework + runtime). In the UI the process expands to
 show a wall of one-shot thread tracks; each track has a single
 ~10 ms `Running` slice and then disappears.
 
+![Buggy trace zoomed onto a `dispatch#0` slice on the main thread. Below it, a forest of `Net-N` worker threads each appear briefly and exit; the process track list balloons.](../images/thread-spam/before.png)
+
 ### Fix
 
 Use a fixed-size thread pool. Submit work; the pool reuses the
@@ -77,6 +79,8 @@ After-trace: **34 distinct threads** (4 pool workers + framework
 cost on the hot path. Average dispatch slice drops from 0.37 ms
 to 0.16 ms (the difference is the cost of `new Thread().start()`
 itself).
+
+![Fixed trace zoomed onto a `dispatch#0` slice. Below it the same four `Net` worker threads handle every dispatch; no per-request thread creation visible.](../images/thread-spam/after.png)
 
 ## Second pattern: per-request `OkHttpClient`
 

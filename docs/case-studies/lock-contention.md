@@ -51,6 +51,8 @@ though we have 16 threads. In the UI, look at the worker thread
 tracks: most are in the `Blocked` state with `Lock contention on
 …` slices, only one is `Running`.
 
+![Buggy trace zoomed onto a `BadCache.compute` slice. Above the selected slice, sched tracks for the 16 worker threads show one Running, fifteen Blocked. Lock-contention slices fill the Blocked rows.](../images/lock-contention/before.png)
+
 ### Fix
 
 Compute outside the lock; publish inside:
@@ -69,6 +71,8 @@ After-trace: **131,192 ops, 0.54 ms each** — **13.6× more
 throughput, 11.6× faster per op**. All 16 worker threads are now
 `Running` in parallel; lock contention slices drop to ~1.2% of
 ops.
+
+![Fixed trace zoomed onto a `GoodCache.compute` slice. The 16 worker tracks above are uniformly Running — they parallelise because the critical section shrank to a single store.](../images/lock-contention/after.png)
 
 ## Second pattern: UI-thread contender
 

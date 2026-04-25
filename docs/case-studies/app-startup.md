@@ -73,6 +73,8 @@ inside it match the `Trace.beginSection` calls each initialiser
 wraps itself in. The breakdown is the punch list — every entry is
 a candidate to move off the startup path.
 
+![Buggy startup trace zoomed onto the `bindApplication` slice. Search bar shows "bindApplication"; the slice is highlighted on the main thread; the bottom-panel slice details report Duration ~2.6 s with most of it Sleeping (the SDK init `Thread.sleep` calls). Below, the Actual Frame Timeline shows no frames presented during this window.](../images/app-startup/before.png)
+
 ### Fix
 
 Move the work to a background thread. Keep `Application.onCreate`
@@ -111,6 +113,8 @@ inits still happen and still take the same time, but they happen
 on the background thread after `Application.onCreate` has
 returned, so the launcher activity gets to its first frame
 immediately.
+
+![Fixed startup trace zoomed onto the `bindApplication` slice. The slice is now ~64 ms wide; the three init slices have moved off the main thread (visible as separate slices on the AppInit background thread). The first Choreographer#doFrame slice fires almost immediately after.](../images/app-startup/after.png)
 
 ## Second pattern: ContentProvider init storm
 

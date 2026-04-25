@@ -59,6 +59,8 @@ Before-trace: **parseQuadratic, 10 calls, 44.3 ms each** for a
 `Running` for the entire slice; the GC track is busy in parallel
 (those substrings are pure garbage).
 
+![Buggy trace zoomed onto a `parseQuadratic` slice on the Parser thread. The thread is Running for the whole slice; CPU scheduling tracks above show the worker pinned to one core.](../images/cpu-spin/before.png)
+
 ### Fix
 
 Index-based scan; never allocate a substring:
@@ -81,6 +83,8 @@ After-trace: **parseLinear, 10 calls, 26.6 ms each** — 1.7×
 faster on this input, with the gap widening as input grows. The
 GC track goes quiet because the per-iteration allocations are
 gone.
+
+![Fixed trace zoomed onto a `parseLinear` slice. Same Running pattern but the slice is shorter; the GC daemon track in the same window is empty.](../images/cpu-spin/after.png)
 
 ## Second pattern: layout measure pass that's O(n²)
 

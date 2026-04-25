@@ -59,6 +59,8 @@ slices** (`Background concurrent mark compact GC` and
 generating so much garbage that the GC thread is permanently
 busy.
 
+![Buggy GC trace zoomed onto a `buildLogLine` slice. The slice itself runs ~237 ms; above and below, the GC daemon thread track is densely populated with concurrent mark-compact slices — the heap is constantly being collected.](../images/gc-pauses/before.png)
+
 ### Fix
 
 One reusable `StringBuilder`. Same logic, no per-character
@@ -79,6 +81,8 @@ for (int i = 0; i < 10000; i++) {
 After-trace: **449 buildLogLine calls, 0.80 ms each, 0 GC
 slices** in the captured 6 s window. **295× faster per call,
 15× more throughput, and the GC stops running entirely.**
+
+![Fixed GC trace zoomed onto a `buildLogLine` slice. The slice is now ~0.8 ms; the GC daemon thread track is empty for the whole window — no allocations means no collections.](../images/gc-pauses/after.png)
 
 ## Second pattern: autoboxing pressure
 

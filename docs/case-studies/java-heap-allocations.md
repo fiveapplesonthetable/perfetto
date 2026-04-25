@@ -73,6 +73,8 @@ For `what` is allocating, open the
 on the captured heap dump and read the Java heap sampler's
 flamegraph rooted at `onTextChanged`.
 
+![Buggy trace zoomed onto an `onTextChanged` slice. The slice details show a long Running portion; the GC thread track above runs concurrent mark-compact slices in parallel.](../images/java-heap-alloc/before.png)
+
 ### Fix
 
 Reuse the list and a `StringBuilder`; filter before allocating:
@@ -101,6 +103,8 @@ private List<String> search(String q) {
 After-trace: **39 calls, 12.4 ms each, 15 GC slices.** Every
 allocation that doesn't contribute to a result is gone, and the
 ones that do come from one reused buffer.
+
+![Fixed trace zoomed onto an `onTextChanged` slice. Same call rate, shorter Running portion, fewer GC slices visible above on the GC thread.](../images/java-heap-alloc/after.png)
 
 ## Second pattern: autoboxing in a tight numeric loop
 

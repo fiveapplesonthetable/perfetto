@@ -55,6 +55,8 @@ In the trace UI, scroll the Binder Transactions track for
 matching transaction on the receiving side — the system_server
 binder thread pool fills up with these.
 
+![Buggy trace zoomed onto a `checkNetwork` slice. Every onPreDraw fires one cross-process binder call to system_server's ConnectivityService.](../images/binder-spam/before.png)
+
 ### Fix
 
 Subscribe once via `NetworkCallback`; cache the answer locally;
@@ -81,6 +83,8 @@ Same SQL, after-trace: **470 calls, 0.54 ms per call** — 4.2×
 faster. The remaining 0.54 ms is the per-frame cost of running the
 listener at all (text formatting, view tree work). The binder
 call is gone.
+
+![Fixed trace zoomed onto a `checkNetwork` slice. Same call rate, no binder transaction underneath — the work now reads from a cached AtomicBoolean.](../images/binder-spam/after.png)
 
 ## Second pattern: ContentObserver-backed LiveData
 
