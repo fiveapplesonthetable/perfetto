@@ -19,34 +19,28 @@ map for each tutorial, see the artifacts branch:
 
 ## Available
 
-- [Frame jank](frame-jank.md) — `RecyclerView`/`ListView` adapter
-  doing synchronous bitmap decode on the UI thread. Frame timeline
-  + main-thread track. **Heap graph not needed.**
+- [Frame jank](frame-jank.md) — synchronous bitmap decode in
+  `getView`. 274/275 binds > 16 ms before, 0 after.
+- [App startup](app-startup.md) — three SDKs initialised serially
+  in `Application.onCreate`. `bindApplication` 2.6 s → 64 ms (41×).
+- [Binder spam](binder-spam.md) — `ConnectivityManager` from
+  `onPreDraw`. Per-frame cost 2.29 ms → 0.54 ms.
+- [Lock contention](lock-contention.md) — long critical section on
+  one mutex, 16-thread pool. 13.6× throughput.
+- [Main-thread I/O](main-thread-io.md) — `SharedPreferences.commit`
+  in a callback. 1.58 ms → 0.17 ms (9.2×).
+- [Java heap allocations](java-heap-allocations.md) — fresh
+  `ArrayList` + 5,000 fresh `String`s per keystroke.
+- [GC pauses](gc-pauses.md) — `String + char` in a hot loop.
+  236.9 ms → 0.80 ms (295×); 259 GC slices → 0.
+- [CPU spinning](cpu-spinning.md) — O(n²) substring-based parser.
+- [Short-lived thread spam](thread-spam.md) — one `Thread()` per
+  request. 232 → 34 distinct threads in process.
 
 ## Planned
 
-In rough sequencing order — earlier topics teach UI primitives
-(frame timeline, sched tracks, atrace categories) that later ones
-re-use:
-
-1. App startup (cold/warm) — `Application.onCreate` synchronously
-   initializing several SDKs in series. App Startup library + lazy
-   init.
-2. Binder spam — calling a `ConnectivityManager` API from
-   `onPreDraw`. `ftrace binder/*` + callstack sampling.
-3. Lock contention — `synchronized` cache hammered from a 16-thread
-   pool. ART `Lock contention` slices.
-4. Main-thread I/O — `SharedPreferences.commit` in `onResume`.
-   `f2fs/*` ftrace + sched.
-5. Java heap allocations over time — search screen allocating a
-   fresh `ArrayList` per keystroke. `java_hprof_config` sampler.
-6. Native heap — JNI bridge with leaked `malloc` on the error path.
-   `heapprofd`.
-7. GC pauses — string concatenation in a hot loop. ART `GC` slices
-   + frame timeline.
-8. CPU spinning — hand-rolled JSON parser with O(n²) substring.
-   `linux.perf` callstack sampling.
-9. Short-lived thread spam — `Thread { }.start()` per item.
+- Native heap — JNI bridge with leaked `malloc` on the error path.
+  `heapprofd`.
    `task/task_newtask` ftrace.
 10. Wakelocks / 24-hour battery — `LocationManager` request without
     `removeUpdates`; `JobService` that never calls `jobFinished`.
