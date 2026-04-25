@@ -1,24 +1,28 @@
-# Java heap profile: object growth over time
+# Java heap: profiling and growth over time
 
-When Java memory grows but you don't know what's holding it, the
-right tool is a sequence of heap profile snapshots taken over the
-suspect window. Perfetto's `android.java_hprof` data source with
-`continuous_dump_config` captures one snapshot every N
-milliseconds and writes them all into the same trace, so you can
-compare them side-by-side to see what's growing.
+Two perfetto data sources answer different questions about a
+Java app's heap:
+
+- **`android.heapprofd` with `heaps: "com.android.art"`** — the
+  *Java heap profile*. Samples allocations as they happen; gives
+  you a flamegraph rooted at the Java method that allocated each
+  byte. Use it to answer "what code is allocating?".
+- **`android.java_hprof` with `continuous_dump_config`** — Java
+  heap *dumps*. Captures a full retention snapshot every N
+  milliseconds; comparing snapshots shows growth over time. Use
+  it to answer "what objects are growing?" and (with the
+  [Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md))
+  "what's keeping each object alive?".
+
+This tutorial uses both. The trace config enables them together
+so a single capture answers either question.
 
 This is part of the
 [Android performance tutorials](perf-tutorial-series.md) series.
-For a single-snapshot, post-hoc *Heap Dump Explorer* analysis of
-retention paths, see the
-[Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
-guide.
 
 ## Capture
 
-The reference is upstream at
-[`test/configs/java_hprof.cfg`](https://github.com/google/perfetto/blob/main/test/configs/java_hprof.cfg).
-Continuous-dump configuration:
+Both data sources, one config:
 
 ```
 data_sources {
@@ -26,160 +30,166 @@ data_sources {
     name: "android.java_hprof"
     java_hprof_config {
       process_cmdline: "com.example.perfetto.heapalloc"
-      continuous_dump_config {
-        dump_phase_ms: 2000      # first snapshot 2 s after capture starts
-        dump_interval_ms: 2000   # then every 2 s
-      }
+      continuous_dump_config { dump_phase_ms: 2000 dump_interval_ms: 2000 }
+    }
+  }
+}
+data_sources {
+  config {
+    name: "android.heapprofd"
+    heapprofd_config {
+      sampling_interval_bytes: 4096
+      pid: <PID>                                # set at capture time
+      heaps: "com.android.art"                  # ART = Java heap
+      continuous_dump_config { dump_phase_ms: 1000 dump_interval_ms: 1000 }
     }
   }
 }
 ```
 
-A 14-second capture with these intervals produces 5–6 snapshots —
-enough to see growth but not so many that the trace bloats.
-
-Full tutorial config:
+Full config:
 [`trace-configs/heapalloc.cfg`](https://github.com/fiveapplesonthetable/perfetto/tree/perf-tutorials-artifacts/java-heap-alloc/trace-configs/heapalloc.cfg).
 
-## Case study: a static "cache" that's never evicted
+The reference upstream configs are
+[`test/configs/java_hprof.cfg`](https://github.com/google/perfetto/blob/main/test/configs/java_hprof.cfg)
+and
+[`test/configs/heapprofd.cfg`](https://github.com/google/perfetto/blob/main/test/configs/heapprofd.cfg).
 
-A search/lookup screen accumulates entries in a static `List` for
-"caching", but never evicts. The list grows linearly with use:
+```bash
+$ adb shell am start -n com.example.perfetto.heapalloc/.HeapAllocActivity
+$ sleep 4
+$ PID=$(adb shell pidof com.example.perfetto.heapalloc)
+$ sed "s/pid: 0/pid: $PID/" trace-configs/heapalloc.cfg > /tmp/jhp.cfg
+$ adb push /tmp/jhp.cfg /data/local/tmp/jhp.cfg
+$ adb shell perfetto --txt -c /data/local/tmp/jhp.cfg -o /data/local/tmp/heap.pftrace
+$ adb pull /data/local/tmp/heap.pftrace
+```
+
+Both data sources need Android 12+. `android.heapprofd` with
+`heaps: "com.android.art"` may not capture Java samples on every
+device — Cuttlefish is occasionally flaky. The `java_hprof`
+side is reliable wherever the runtime supports heap dumps.
+
+## Case study: a hot path that allocates a fresh buffer per tick
+
+Every tick, the buggy demo allocates 1,024 fresh 4 KiB byte[]
+objects (~4 MiB) and discards them:
 
 ```java
-public static final List<String> CACHE = new ArrayList<>();
-
-private void onTick() {
-    for (int i = 0; i < 5000; i++) {
-        CACHE.add("entry-" + n + "-" + i);
-    }
+for (int i = 0; i < 1024; i++) {
+    byte[] b = new byte[4096];                   // fresh alloc
+    b[0] = (byte) i;
 }
 ```
 
-Each tick adds 5,000 fresh `String` objects. Twelve ticks = 60,000
-strings pinned forever, growing the heap by ~3 MiB on top of the
-framework baseline.
+12 ticks = ~50 MiB of short-lived garbage attributed to
+`onTick`. The fixed version preallocates the array of buffers
+once at class load and reuses them on every tick — the per-tick
+allocation rate is zero.
 
-### Find it: compare snapshots
+### Find it: heap profile (allocation flamegraph)
 
-The data source emits one snapshot per `dump_interval_ms`. Each
-snapshot is queryable via `heap_graph_object` rows tagged with the
-sample timestamp:
+When the heap profile data source captures cleanly, the bottom
+panel shows a flamegraph rooted at the allocating Java method.
+On a real device the buggy demo's flamegraph is dominated by
+`HeapAllocActivity$1.run -> byte[]`; the fixed demo's is empty.
+
+```sql
+-- Per-snapshot total allocated bytes (heapprofd's continuous dump).
+SELECT graph_sample_ts/1e9 AS sec, SUM(size)/1e6 AS allocated_mb
+FROM heap_profile_allocation
+WHERE upid = (SELECT upid FROM process WHERE name = 'com.example.perfetto.heapalloc')
+GROUP BY graph_sample_ts ORDER BY sec;
+```
+
+### Find it: heap dump (retention growth)
+
+When you want to know what's *currently on the heap* across
+time — not just allocation rate — use the multi-snapshot heap
+dump. Each snapshot is a full retention graph queryable via
+`heap_graph_object`:
 
 ```sql
 SELECT graph_sample_ts/1e9       AS sec,
        COUNT(*)                  AS objects,
-       SUM(self_size)/1024       AS kib
+       SUM(self_size) / 1e6      AS reachable_mb
 FROM heap_graph_object
 WHERE upid = (SELECT upid FROM process WHERE name = 'com.example.perfetto.heapalloc')
-GROUP BY graph_sample_ts
-ORDER BY sec;
+GROUP BY graph_sample_ts ORDER BY sec;
 ```
 
-Buggy trace, 5 snapshots over 8 s:
+Each diamond on the **Heap Profile** track in the UI is one
+snapshot; click any diamond to load that snapshot's heap into
+the bottom panel. The flamegraph shown is the heap *composition*
+(which classes own how many bytes), not allocation flow.
 
-| sec | objects | kib |
-|---|---|---|
-| 0 | 342,613 | 23,113 |
-| 2 | 390,132 | 25,193 |
-| 4 | 430,205 | 26,288 |
-| 6 | 470,277 | 27,199 |
-| 8 | 338,797 | 24,263 |
+![Buggy trace, com.example.perfetto.heapalloc process expanded. Multiple Heap Profile diamonds visible across the process timeline. Bottom panel: "Java heap graph" view of the latest snapshot, flamegraph dominated by primitive arrays and `java.lang.String`.](../images/java-heap-alloc/before-snapshots.png)
 
-Every snapshot is bigger than the last while the demo is
-allocating; the final snapshot drops because `am dumpheap`'s
-implicit GC reclaims unused space at trace end. The growth rate
-across snapshots is the diagnostic — a healthy app's snapshots
-fluctuate around a baseline rather than rising monotonically.
-
-In the UI, every snapshot appears as a diamond on the process's
-**Heap Profile** track. Click any diamond to load that snapshot's
-heap into the bottom panel:
-
-![Buggy trace, com.example.perfetto.heapalloc process expanded. Multiple Heap Profile diamonds visible across the process timeline. Bottom panel: "Java heap graph", Object Size 23.41 MiB total, flamegraph rooted at byte[] / int[] / long[] / java.lang.String — the heap composition for one snapshot.](../images/java-heap-alloc/before-snapshots.png)
-
-For per-class diff between two snapshots, the
+To compare snapshots and find what's *growing* between them
+(what's getting added but not collected), open the trace in the
 [Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
-is the right tool — open the trace, pick the latest diamond, and
-read the *Classes* tab sorted by Retained.
+and use its Classes tab on each snapshot.
 
 ### Fix
 
-Bound the cache. `LruCache` evicts the oldest entry past a fixed
-capacity:
+For the per-tick allocation, allocate once and reuse:
 
 ```java
-public static final LruCache<String, String> CACHE = new LruCache<>(1024);
-
-private void onTick() {
-    for (int i = 0; i < 5000; i++) {
-        String k = "entry-" + n + "-" + i;
-        CACHE.put(k, k);
-    }
+private static final byte[][] REUSED;
+static {
+    REUSED = new byte[1024][];
+    for (int i = 0; i < REUSED.length; i++) REUSED[i] = new byte[4096];
 }
+
+// per-tick: read REUSED[i], no allocation.
 ```
 
-Insertion rate is unchanged — the same 5,000 puts/sec. But the
-cache holds at most 1,024 entries; everything past that gets
-evicted to GC immediately.
+For larger Java structures: prefer primitive collections
+(`IntArray`, `androidx.collection.LongSparseArray`) over the
+boxed equivalents.
 
 ### Verify
 
-After-trace, 5 snapshots over 8 s:
+After-trace, the heap profile flamegraph (when it captures) is
+empty for the demo's onTick callsite. The multi-snapshot heap
+dump shows comparable retention to before (the static `REUSED`
+array now holds the buffers permanently — that's the trade
+of preallocation), but the *delta* between successive snapshots
+is near zero rather than growing:
 
-| sec | objects | kib |
+![Fixed trace, same process expanded. Same diamond pattern over time, similar absolute heap size (REUSED array is retained), but the growth between snapshots is ~zero rather than monotonic.](../images/java-heap-alloc/after-snapshots.png)
+
+The single-number scorecard depends on the question:
+
+- **Allocation rate** (heap profile): total bytes from
+  `heap_profile_allocation` attributed to your callsite.
+- **Retention growth** (heap dump): the slope of `SUM(self_size)`
+  across snapshots, restricted to your process.
+
+## When to reach for which
+
+| Question | Data source | UI view |
 |---|---|---|
-| 0 | 357,384 | 23,330 |
-| 2 | 415,120 | 25,619 |
-| 4 | 465,190 | 26,842 |
-| 6 | 515,265 | 28,065 |
-| 8 | 292,012 | 22,517 |
+| "Where is my code allocating?" | `heapprofd` + `heaps: "com.android.art"` | Java heap samples flamegraph |
+| "What's growing on the heap?" | `java_hprof` + `continuous_dump_config` | Multiple Heap Profile diamonds |
+| "What's keeping object X alive?" | `java_hprof` (single snapshot) | [Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md) |
 
-Comparable to the buggy trace at first glance — both show heap
-growth as the demo runs. The difference is what's *retained*: in
-the buggy trace, the static `CACHE` list keeps every string alive;
-in the fixed trace, only the last 1,024 are reachable, the rest
-are unreachable garbage waiting to be collected. ART's Background
-GC eventually reclaims the unreachable, which is why the final
-snapshot is smaller than in the buggy trace.
+## Second pattern: autoboxing in a tight numeric loop
 
-![Fixed trace, same process expanded. Same Heap Profile diamond pattern over time, but the final snapshot's flamegraph (right panel) shows fewer reachable instances of the demo's String type — most of the allocations have been collected.](../images/java-heap-alloc/after-snapshots.png)
-
-The single-number scorecard, per-snapshot:
-
-```sql
--- Find the largest snapshot's app-attributable retained bytes.
-SELECT MAX(s.retained) / 1e6 AS peak_mb
-FROM (
-  SELECT graph_sample_ts, SUM(self_size) AS retained
-  FROM heap_graph_object
-  WHERE upid = (SELECT upid FROM process WHERE name = 'com.example.perfetto.heapalloc')
-  GROUP BY graph_sample_ts
-) s;
-```
-
-Track this across releases. Monotonic growth across snapshots in
-a single trace, or peak growth across releases, is the regression
-signal.
-
-## Second pattern: autoboxing-driven retention
-
-A common variant in Kotlin code that crosses Java APIs: a
-`List<Long>` becomes a `List<Long>` (boxed `Long` objects). Each
-element pins ~24 bytes of heap that wouldn't exist with primitive
-`LongArray`. The continuous-snapshot pattern shows the same
-shape — count of `java.lang.Long` rising linearly with collection
-size. Fix: switch to primitive collections
-(`LongArray`, `androidx.collection.LongSparseArray`).
+`List<Long>` instead of `LongArray` allocates a fresh `Long` box
+per add. The heap profile's flamegraph shows
+`Integer.valueOf` / `Long.valueOf` dominating; the multi-snapshot
+heap dump shows `java.lang.Long` count rising linearly.
+Different views, same diagnosis. Fix: switch to primitive
+collections.
 
 ## See also
 
 - [Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
-  — for retention-graph analysis on a single snapshot (find what
-  is keeping each retained object alive).
-- [GC pauses](gc-pauses.md) — for the runtime *consequence* of
-  high allocation rates.
-- [Java heap dumps](/docs/data-sources/java-heap-profiler.md) —
-  the upstream reference for the `android.java_hprof` data source.
+  — single-snapshot retention analysis.
+- [GC pauses](gc-pauses.md) — runtime consequence of high
+  allocation rate.
+- [Native heap leaks](native-heap.md) — same `heapprofd` data
+  source, but for malloc/free instead of Java.
 - Repro artifacts:
   <https://github.com/fiveapplesonthetable/perfetto/tree/perf-tutorials-artifacts/java-heap-alloc>
