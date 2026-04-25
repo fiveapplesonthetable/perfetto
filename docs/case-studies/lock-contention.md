@@ -68,6 +68,29 @@ tracks: most are in the `Blocked` state with `Lock contention on
 
 ![Buggy trace zoomed onto a `BadCache.compute` slice. Above the selected slice, sched tracks for the 16 worker threads show one Running, fifteen Blocked. Lock-contention slices fill the Blocked rows.](../images/lock-contention/before.png)
 
+The slices that say it most concretely are the
+`Lock contention on a monitor lock (owner tid: N)` slices that
+ART emits via the `dalvik` atrace category. Searching for "owner
+tid: 8175" — the holder during one window — and zooming out a
+little shows the same `Lock contention on a monitor lock (owner
+tid: 8175)` slice on the other 15 worker threads, all simultaneously:
+
+![Buggy trace zoomed onto Lock contention slices. Sixteen pool-4-thread-N tracks all show "Lock contention on a monitor lock (owner tid: 8175)" slices in parallel — fifteen workers blocked waiting for thread 8175. Selected slice in the bottom panel: 96.7% Sleeping, 0.1% Runnable, 2.7% Running.](../images/lock-contention/before-contention.png)
+
+The slice name is the diagnostic. `(owner tid: 8175)` names the
+thread that's currently holding the monitor — pool-4-thread-1 in
+this trace. The slice's body is the time the *waiting* thread
+spent blocked. 96.7% sleeping is what serialisation looks like.
+This data source — `dalvik` atrace — is what the tutorial's trace
+config enables specifically for this signal:
+
+```
+atrace_categories: "dalvik"
+```
+
+Without it the contention is invisible to the trace; the threads
+just look "blocked" with no slice explaining why.
+
 ### Fix
 
 Compute outside the lock; publish inside:
