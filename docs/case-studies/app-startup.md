@@ -52,6 +52,20 @@ public class StartupApp extends Application {
 Cold start now waits ~2.5 s before the launcher activity even
 runs `onCreate`.
 
+### Read the trace top-down
+
+Open the trace and find the StartupDemo process. Its main thread
+is the only one doing work in the cold-start window — the rest of
+the threads (`Heap thread pool`, `RenderThread`, `Profile Saver`)
+are quiet. The single big slice on the main thread is
+`bindApplication`:
+
+![StartupDemo process expanded. The main thread runs one continuous bindApplication slice that covers most of the cold-start window. Other process threads are mostly idle.](../images/app-startup/before-wide.png)
+
+`bindApplication` is the framework's name for "between
+`Application.attachBaseContext` and the launcher activity's
+`onCreate`". Anything inside it delays the first frame.
+
 ### Find it
 
 Open the trace, find the app's main thread, look at the
@@ -115,6 +129,20 @@ returned, so the launcher activity gets to its first frame
 immediately.
 
 ![Fixed startup trace zoomed onto the `bindApplication` slice. The slice is now ~64 ms wide; the three init slices have moved off the main thread (visible as separate slices on the AppInit background thread). The first Choreographer#doFrame slice fires almost immediately after.](../images/app-startup/after.png)
+
+The same process-tracks view tells the wider story. There's a new
+`AppInit` worker thread carrying the three init slices in series
+— same total work, just no longer blocking the launcher:
+
+![Fixed StartupDemo process expanded. A new AppInit worker thread runs the three init slices serially; the main thread is free of bindApplication immediately and can render its first frame.](../images/app-startup/after-wide.png)
+
+What this is *not* doing: it's not making the SDKs faster. The
+inits still take 2.55 s of wall-clock time on the worker. The
+win is purely "don't make the user wait" — the inits finish
+asynchronously while the user is already interacting with the
+launcher. For SDKs that the launcher actually needs (e.g. analytics
+to log the first screen), use a `CountDownLatch` or a
+`completableFuture`-style wait at the call site, not at startup.
 
 ## Second pattern: ContentProvider init storm
 

@@ -97,11 +97,28 @@ Each `getView` call decodes the asset from scratch on the UI thread.
 The PNGs are 2048×2048, so each decode allocates 16 MiB and takes
 tens of milliseconds — too long to fit inside a 16 ms vsync window.
 
+### Read the trace top-down
+
+Before zooming in, look at the JankDemo process row in context.
+Expanded, it shows the main thread, the RenderThread, and a
+handful of framework threads. The main thread track is densely
+populated with `BadAdapter.getView` slices in a regular cadence
+— that cadence is the scroll velocity:
+
+![JankDemo process expanded, showing the main thread densely populated with BadAdapter.getView slices repeating across the scroll window.](../images/frame-jank/before-wide.png)
+
+Already at this zoom, two anomalies stand out: the rate of
+`BadAdapter.getView` slices is roughly one every 30 ms (so the
+main thread is binding flat-out), and the frame timeline tracks
+underneath are striped red rather than green. Either signal alone
+would prompt a closer look.
+
 ### Find the jank
 
-Search for the slice name (`/` opens search), then press `f` to zoom
-to the selection. The Actual Frame Timeline track is the one to
-read — green slices are healthy frames, red are missed deadlines:
+Search for the slice name (`/` opens search), then press `f` to
+zoom to the selection. The Actual Frame Timeline track is the one
+to read — green slices are healthy frames, red are missed
+deadlines:
 
 ![Perfetto UI zoomed onto a `BadAdapter.getView` slice. Expected Timeline (green) and Actual Timeline alternating red ("App Deadline Missed") and yellow show frames missing the vsync deadline because the main thread is busy decoding. Selected slice details in the bottom panel: BadAdapter.getView, duration 33 ms.](../images/frame-jank/02-buggy-jank.png)
 
@@ -118,6 +135,18 @@ The selected `BadAdapter.getView` slice in the bottom panel reports
 holds across the trace: 274 of 275 `getView` calls take longer than
 16 ms, average 33.87 ms. Every one of those binds is a missed
 frame.
+
+Zooming back out (press `w` a few times) shows the same shape
+repeating across the entire scroll. Every dark band on the Actual
+Timeline is one missed frame; the gap between bands is exactly the
+duration of the next decode:
+
+![Mid-zoom view of the buggy trace. The Actual Timeline below the BadAdapter.getView slices is a near-continuous red bar — every frame missed its deadline for the duration of the scroll.](../images/frame-jank/before-pattern.png)
+
+The pattern matters because it tells you this isn't a one-off
+hiccup or a startup blip — it's the steady-state behaviour of the
+scroll. A trace from a real user session would look the same:
+sustained red for as long as the screen is being scrolled.
 
 ### Confirm with SQL (optional)
 
@@ -177,9 +206,26 @@ Recapture, re-load:
 
 The Actual Timeline is now uniformly green. The selected
 `GoodAdapter.getView` slice reports **27 µs** — three orders of
-magnitude faster than the buggy version's 33 ms. The same SQL on the
-fixed trace returns `App Deadline Missed`: 1 frame total, against
-222 before — a 99.5% reduction.
+magnitude faster than the buggy version's 33 ms. The same SQL on
+the fixed trace returns `App Deadline Missed`: 1 frame total,
+against 222 before — a 99.5% reduction.
+
+Zoom back out and the contrast is unmistakable — the entire scroll
+window is green:
+
+![Mid-zoom view of the fixed trace. The Actual Timeline is uniformly green for the whole scroll; the GoodAdapter.getView binds underneath are tiny green slivers.](../images/frame-jank/after-pattern.png)
+
+The same process-tracks view from the start of the investigation
+also looks different — the main thread is no longer pegged. There's
+a new "BitmapDecoder" worker thread in the process that does the
+actual decode work; the main thread is mostly idle between binds:
+
+![Process tracks for the fixed app. The new BitmapDecoder worker thread carries the decode work; the main thread is mostly idle.](../images/frame-jank/after-wide.png)
+
+Splitting the work this way is the standard pattern for any
+"slow per-bind work": move it to a worker, cache the result, fall
+back to a placeholder during the wait. `Glide`, `Coil`, `Picasso`
+are all variants of this pattern with extra ergonomics.
 
 `COUNT(*) FROM slice WHERE name = 'GoodAdapter.getView' AND dur > 16000000` is the
 regression signal: any frame above 16 ms on the bind path is jank.

@@ -39,6 +39,23 @@ root.getViewTreeObserver().addOnPreDrawListener(() -> {
 `getActiveNetworkInfo()` makes a binder call to `system_server`'s
 `ConnectivityService`. Per frame.
 
+### Read the trace top-down
+
+The `BinderSpamDemo` process row, expanded, looks normal at first
+glance: a steady cadence of `checkNetwork` slices on the main
+thread once per frame. The smoking gun is on the *receiving*
+side. Find the `system_server` process and expand its binder
+thread tracks — there's a constant trickle of incoming
+`ConnectivityService.getActiveNetworkInfo` transactions, each
+caused by one of those `checkNetwork` slices in the app:
+
+![BinderSpamDemo process with checkNetwork slices on the main thread. Every slice corresponds to a binder transaction visible on the system_server side.](../images/binder-spam/before-wide.png)
+
+This is the shape every "per-frame system call" bug takes: a
+regular pulse on the app's main thread, paired with a regular
+pulse on the receiving system service. Once you've seen it,
+you'll spot it immediately on real-app traces.
+
 ### Find it
 
 ```sql
@@ -85,6 +102,22 @@ listener at all (text formatting, view tree work). The binder
 call is gone.
 
 ![Fixed trace zoomed onto a `checkNetwork` slice. Same call rate, no binder transaction underneath — the work now reads from a cached AtomicBoolean.](../images/binder-spam/after.png)
+
+Zoom out and the wider context reflects the same change. The
+`system_server` binder tracks are quiet during the same window.
+The app process row is also quieter — fewer scheduling events,
+because the listener no longer wakes the binder thread pool:
+
+![Fixed BinderSpamDemo process with checkNetwork slices but no matching binder activity on system_server. The listener is now a pure-local read.](../images/binder-spam/after-wide.png)
+
+The cost saved by killing one per-frame binder call is small in
+isolation. The reason this matters in real apps is that
+`getActiveNetworkInfo` is one of *dozens* of system services
+that look "free" but cost a binder round trip — `getDisplayInfo`,
+`getDisplayMetrics`, `getRunningAppProcesses`, `getMyMemoryState`,
+location, sensors, accessibility. Per-frame pings to any of these
+add up to several milliseconds of pure overhead before your app
+has done any actual work.
 
 ## Second pattern: ContentObserver-backed LiveData
 
