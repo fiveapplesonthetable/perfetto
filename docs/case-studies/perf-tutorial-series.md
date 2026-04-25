@@ -46,13 +46,17 @@ map for each tutorial, see the artifacts branch:
 - [Native heap leaks](native-heap.md) — JNI `malloc()` without
   `free()`. 17 MB allocated, 17 MB net unreleased → 0 MB net.
   Uses the `heapprofd` data source.
+- [Long-trace battery](long-trace-battery.md) — background poll
+  that prevents Doze. 290 polls/min → 0. Uses the `long_trace.cfg`
+  pattern + `android.power` + power ftrace events.
 
 ## Planned
 
-- 24-hour battery — `JobService` never calling `jobFinished`,
-  `LocationManager` request without `removeUpdates`. Long-trace
-  battery config (extends the [Wakelocks](wakelocks.md) tutorial
-  to multi-day captures).
+(Every major shape — jank, startup, binder, lock, I/O, java
+allocation, GC, CPU spinning, threads, wakelocks, view inflation,
+DB on UI, native heap, long-trace battery — has a worked
+tutorial. Further depth lives upstream in
+[`/docs/data-sources/`](/docs/data-sources/).)
 
 Each tutorial follows the same shape as the [Heap Dump
 Explorer](/docs/visualization/heap-dump-explorer.md) doc: capture →
