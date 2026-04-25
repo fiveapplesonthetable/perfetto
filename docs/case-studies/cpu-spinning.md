@@ -19,12 +19,30 @@ atrace_categories: "sched"
 atrace_apps: "com.example.perfetto.cpuspin"
 ```
 
-For a callstack flamegraph on the spinning thread, layer in the
-`linux.perf` data source (or use
-[simpleperf](https://developer.android.com/ndk/guides/simpleperf-intro)
-out-of-band). The atrace section markers in the demo
-(`Trace.beginSection("parseQuadratic")`) give you the slice
-boundary; sampled callstacks underneath give you the body.
+…plus the `linux.perf` data source for callstack sampling.
+Without it, the slice tells you "this method ran for 44 ms" but
+not what *inside* the method took the time. With it, every CPU on
+which the target process is running gets sampled at 100 Hz and
+each sample carries a full callstack:
+
+```
+data_sources: {
+  config {
+    name: "linux.perf"
+    perf_event_config {
+      all_cpus: true
+      sampling_frequency: 100
+      target_cmdline: "com.example.perfetto.cpuspin"
+    }
+  }
+}
+```
+
+This is the same data source the
+[`traced_perf` example config](https://github.com/google/perfetto/blob/main/test/configs/traced_perf.cfg)
+exercises; for symbol resolution on user-build APKs you'll
+additionally want `proguard.txt` mappings via
+[`tools/symbolize`](https://perfetto.dev/docs/data-sources/native-heap-profiler#symbolization).
 
 Full config:
 [`trace-configs/cpuspin.cfg`](https://github.com/fiveapplesonthetable/perfetto/tree/perf-tutorials-artifacts/cpu-spin/trace-configs/cpuspin.cfg).
@@ -56,6 +74,15 @@ tracks above show one core pegged at 100%; other cores are mostly
 idle. This is the textbook "compute-bound on one thread" shape:
 
 ![CpuSpinDemo expanded; Parser thread running parseQuadratic slices, sched track green for the entire slice, one CPU core pegged.](../images/cpu-spin/before-wide.png)
+
+Above the `Parser` row you also see a `Parser Callstacks` track
+— each green tick is one `linux.perf` sample with a captured
+callstack. With 100 Hz sampling on the Parser thread for ~5 s of
+trace, the demo collects ~9,400 samples across 200 unique
+callstacks. Clicking the Callstacks track opens a flamegraph for
+the time range you've selected:
+
+![CpuSpinDemo with the Parser Callstacks track visible above the Parser thread. Each tick is one perf_sample. The selected parseQuadratic slice on the Parser thread reports 96.6% Running.](../images/cpu-spin/before-perf.png)
 
 The wider context matters because *what's on the rest of the
 machine* tells you whether parallelising would help. Here the
