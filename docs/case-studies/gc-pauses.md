@@ -40,6 +40,20 @@ for (int i = 0; i < 10000; i++) {
 10,000 short-lived `String`s per call, called 60 times per second.
 ART's allocator and GC quietly burn through the budget.
 
+### Read the trace top-down
+
+The GcDemo process expanded shows the main thread doing
+`buildLogLine` work, plus a *constantly-busy* `Heap thread pool
+worker`. The GC thread track is essentially never idle —
+`Background concurrent mark compact GC` slices run back-to-back
+for the entire trace:
+
+![GcDemo expanded; main thread runs buildLogLine slices; Heap thread pool worker is densely covered by mark-compact GC slices in parallel.](../images/gc-pauses/before-wide.png)
+
+That density is the difference between a high-allocation app
+(where the GC kicks in occasionally) and a *broken* one (where
+the GC can't keep up with the allocator and runs continuously).
+
 ### Find it
 
 ```sql
@@ -83,6 +97,19 @@ slices** in the captured 6 s window. **295× faster per call,
 15× more throughput, and the GC stops running entirely.**
 
 ![Fixed GC trace zoomed onto a `buildLogLine` slice. The slice is now ~0.8 ms; the GC daemon thread track is empty for the whole window — no allocations means no collections.](../images/gc-pauses/after.png)
+
+Wide view confirms the GC thread is empty across the whole
+trace; the main thread is running `buildLogLine` ~15× more often,
+each call 295× faster:
+
+![Fixed GcDemo wide. Main thread runs buildLogLine very densely; Heap thread pool worker is empty.](../images/gc-pauses/after-wide.png)
+
+The lesson generalises beyond `String + char`: any per-iteration
+allocation in a hot loop will produce this trace shape on a
+device under enough load. Watch the `Heap thread pool worker`
+density as a coarse health metric — a healthy app has
+gaps between collections; a sick one looks like the buggy
+trace above.
 
 ## Second pattern: autoboxing pressure
 

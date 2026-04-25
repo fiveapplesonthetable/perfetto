@@ -38,6 +38,21 @@ prefs.edit().putBoolean("k" + n, n % 2 == 0).commit();
 `commit()` is synchronous — it writes the prefs XML and `fsync`s
 before returning. On the main thread.
 
+### Read the trace top-down
+
+The MainIODemo process expanded shows the main thread carrying
+all 50 toggle slices in series — each one a tiny island
+separated by a few ms of sleep. Above the main thread, the
+filesystem ftrace events (`f2fs_sync_file_enter` /
+`_exit`) appear underneath each toggle, exactly aligned:
+
+![MainIODemo process expanded; toggle slices on the main thread, each one paired with an f2fs_sync_file event on the kernel ftrace track.](../images/main-thread-io/before-wide.png)
+
+The pairing is the smoking gun. Wherever a toggle on the main
+thread overlaps with an `f2fs_sync_file` event, the main thread
+was in uninterruptible sleep for that interval — the user can't
+interact with the UI during it.
+
 ### Find it
 
 ```sql
@@ -73,6 +88,18 @@ the actual disk write happens later on the background thread that
 SharedPreferences manages.
 
 ![Fixed trace zoomed onto `toggle#0`. Same UI thread bind, no Uninterruptible Sleep — the disk write is deferred to SharedPreferences' background writer.](../images/main-thread-io/after.png)
+
+The wide view shows the same 50 toggles on the main thread, but
+the `f2fs_sync_file` events are now batched onto a different
+thread and timed independently of the toggles:
+
+![Fixed MainIODemo process. Toggles on the main thread are tight; f2fs_sync_file events appear on a different thread (SharedPreferences' background writer), decoupled from the toggle cadence.](../images/main-thread-io/after-wide.png)
+
+This is also why `apply()` is the right answer for *most*
+SharedPreferences uses, but not all: if you absolutely must know
+the write succeeded before your code continues (e.g. a security
+config you're about to honour), `commit()` is the only API that
+gives you that guarantee — but call it from a background thread.
 
 ## Second pattern: synchronous Room query in `onCreate`
 

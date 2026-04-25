@@ -38,6 +38,21 @@ synchronized (LOCK) {
 Sixteen workers all behind one mutex doing 5 ms of compute = a
 serial pipeline.
 
+### Read the trace top-down
+
+The `LockDemo` process expanded shows the 16 worker threads plus
+the framework threads. The naked-eye signal: only one of the
+workers is `Running` at any moment; the other 15 sit `Blocked`
+for the entire window. Sched tracks make this very visible —
+each worker shows green-Running slivers separated by long
+red-Blocked stretches:
+
+![LockDemo process expanded showing 16 worker threads. One is Running at any time; the rest are Blocked. Sched tracks dominated by red.](../images/lock-contention/before-wide.png)
+
+A pool of N threads on a single mutex is the textbook
+serialisation pattern. The CPU cores above are mostly idle —
+you're not compute-bound, you're contention-bound.
+
 ### Find it
 
 ```sql
@@ -73,6 +88,18 @@ throughput, 11.6× faster per op**. All 16 worker threads are now
 ops.
 
 ![Fixed trace zoomed onto a `GoodCache.compute` slice. The 16 worker tracks above are uniformly Running — they parallelise because the critical section shrank to a single store.](../images/lock-contention/after.png)
+
+The wide view confirms it: all 16 worker threads are `Running`
+densely in parallel; the CPU cores above are pegged. You've gone
+from compute-on-one-core to compute-on-all-cores with one
+structural change to the critical section:
+
+![Fixed LockDemo with all 16 workers Running in parallel; sched tracks dense green across all rows.](../images/lock-contention/after-wide.png)
+
+The general lesson: a `synchronized` block whose body is more
+than a single store/load is a candidate for shrinking. Move every
+read or computation that doesn't depend on shared mutable state
+*outside* the lock.
 
 ## Second pattern: UI-thread contender
 

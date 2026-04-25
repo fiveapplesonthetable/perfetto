@@ -55,6 +55,22 @@ return hits;
 
 Each keystroke = one fresh `ArrayList` + 5,000 fresh `String`s.
 
+### Read the trace top-down
+
+The HeapAllocDemo process expanded shows two relevant tracks:
+the main thread (running `onTextChanged` slices) and a `Heap
+thread pool worker` (running `Background concurrent mark compact
+GC` slices). The two are tightly interleaved — every keystroke
+triggers a GC shortly after, because each call allocates more
+short-lived garbage:
+
+![HeapAllocDemo expanded. Main thread runs onTextChanged slices; Heap thread pool worker runs concurrent mark-compact GC slices in parallel windows.](../images/java-heap-alloc/before-wide.png)
+
+This is the canonical "allocation rate too high" pattern. The
+GC's job is to keep up with the allocation rate; the more you
+allocate, the more often it runs, the more CPU it competes for
+with the work that's allocating in the first place.
+
 ### Find it
 
 ```sql
@@ -105,6 +121,19 @@ allocation that doesn't contribute to a result is gone, and the
 ones that do come from one reused buffer.
 
 ![Fixed trace zoomed onto an `onTextChanged` slice. Same call rate, shorter Running portion, fewer GC slices visible above on the GC thread.](../images/java-heap-alloc/after.png)
+
+The wide view also shows the GC tracks emptier:
+
+![Fixed HeapAllocDemo wide. Main thread still runs onTextChanged at the same rate; Heap thread pool worker is much sparser.](../images/java-heap-alloc/after-wide.png)
+
+There's a useful diagnostic step that didn't fit in the case
+study above: when the allocation rate stays high *after* you
+think you've reduced it, run the
+[Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
+on a heap dump captured at the same moment. The flamegraph rooted
+at the suspect method tells you exactly which line is still
+allocating. Allocation-flamegraph + GC-track-density is the pair
+of signals that converges this kind of investigation.
 
 ## Second pattern: autoboxing in a tight numeric loop
 

@@ -47,6 +47,21 @@ while (s.length() > 0) {
 `s.substring(comma + 1)` makes a fresh `String` of the rest of
 the input every iteration — O(n) per step, O(n²) overall.
 
+### Read the trace top-down
+
+The CpuSpinDemo process expanded shows the parser running on a
+dedicated `Parser` thread. That thread is `Running` (green sched
+state) for the entire `parseQuadratic` slice. The CPU sched
+tracks above show one core pegged at 100%; other cores are mostly
+idle. This is the textbook "compute-bound on one thread" shape:
+
+![CpuSpinDemo expanded; Parser thread running parseQuadratic slices, sched track green for the entire slice, one CPU core pegged.](../images/cpu-spin/before-wide.png)
+
+The wider context matters because *what's on the rest of the
+machine* tells you whether parallelising would help. Here the
+other cores are idle — parallelising would help. If they were
+busy, the bottleneck would already be elsewhere.
+
 ### Find it
 
 ```sql
@@ -85,6 +100,19 @@ GC track goes quiet because the per-iteration allocations are
 gone.
 
 ![Fixed trace zoomed onto a `parseLinear` slice. Same Running pattern but the slice is shorter; the GC daemon track in the same window is empty.](../images/cpu-spin/after.png)
+
+Wide view: same Parser thread, narrower Running stretches per
+parse, GC daemon track quiet. The CPU core that was pinned is
+now bursty rather than constant:
+
+![Fixed CpuSpinDemo wide. Parser thread Running stretches are shorter; CPU core utilization is bursty rather than pinned.](../images/cpu-spin/after-wide.png)
+
+For a flamegraph rooted at the parser to attribute the cost
+*within* the slice, layer in `linux.perf` callstack sampling on
+the same trace config. The flamegraph then shows which lines of
+the parse loop the thread spends its time in — on the buggy
+version it's `String.substring`; on the fixed one it's evenly
+distributed across `charAt`.
 
 ## Second pattern: layout measure pass that's O(n²)
 
