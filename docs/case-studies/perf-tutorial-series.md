@@ -36,15 +36,22 @@ map for each tutorial, see the artifacts branch:
 - [CPU spinning](cpu-spinning.md) — O(n²) substring-based parser.
 - [Short-lived thread spam](thread-spam.md) — one `Thread()` per
   request. 232 → 34 distinct threads in process.
+- [Wakelocks](wakelocks.md) — `PowerManager.WakeLock.acquire()`
+  without `release()`. Activate/deactivate count delta is the
+  scorecard.
+- [View inflation jank](view-inflation.md) — 30-deep nested
+  `LinearLayout` per row. 3.12 ms → 0.41 ms (7.6×).
+- [Database on UI thread](db-on-ui-thread.md) — `getWritableDatabase()`
+  + heavy query in `onCreate`. 328 ms blocking → off-thread.
 
 ## Planned
 
 - Native heap — JNI bridge with leaked `malloc` on the error path.
-  `heapprofd`.
-   `task/task_newtask` ftrace.
-10. Wakelocks / 24-hour battery — `LocationManager` request without
-    `removeUpdates`; `JobService` that never calls `jobFinished`.
-    Long-trace battery config.
+  `heapprofd` data source.
+- 24-hour battery — `JobService` never calling `jobFinished`,
+  `LocationManager` request without `removeUpdates`. Long-trace
+  battery config (extends the [Wakelocks](wakelocks.md) tutorial
+  to multi-day captures).
 
 Each tutorial follows the same shape as the [Heap Dump
 Explorer](/docs/visualization/heap-dump-explorer.md) doc: capture →
