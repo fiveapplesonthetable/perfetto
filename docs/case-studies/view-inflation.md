@@ -44,6 +44,22 @@ for (int i = 0; i < 30; i++) {
 Each scroll causes the framework to walk the entire 30-deep tree
 twice (`measure` then `layout`) per visible row.
 
+### Read the trace top-down
+
+The ViewInflateDemo process expanded shows the main thread
+running a steady cadence of `DeepAdapter.getView` slices. Open
+any one of them and the inside is dominated by *framework*
+slices — `inflate`, `measure`, `layout`, `obtainView`. The
+adapter's own code is barely visible:
+
+![ViewInflateDemo expanded; main thread runs DeepAdapter.getView slices densely. Inside each, framework measure/layout slices stack deeply.](../images/view-inflation/before-wide.png)
+
+This shape distinguishes inflation jank from the other
+"slow per-bind" patterns ([decode jank](frame-jank.md),
+[allocation jank](java-heap-allocations.md)). The cost isn't
+your code — it's the framework walking your view tree because
+the tree is too tall.
+
 ### Find it
 
 ```sql
@@ -80,6 +96,17 @@ After-trace: **FlatAdapter.getView, 354 calls, 0.41 ms each —
 7.6× faster.**
 
 ![Fixed trace zoomed onto a `FlatAdapter.getView` slice. Same UI thread, ~0.41 ms slice; no nested measure/layout work because the row is a single TextView.](../images/view-inflation/after.png)
+
+Wide view: same scroll cadence, much shorter binds, no nested
+framework slices inside each one:
+
+![Fixed ViewInflateDemo wide. Main thread still runs FlatAdapter.getView at the same scroll rate, but each slice is tiny.](../images/view-inflation/after-wide.png)
+
+Practical rule of thumb: if `View.measure` slices in your trace
+nest more than 5 deep on a single bind, your layout has too
+many levels. The Layout Inspector in Android Studio shows the
+hierarchy; `ConstraintLayout` is the standard fix because it
+produces single-level trees for most designs.
 
 ## Second pattern: deeply nested `ConstraintLayout` chains
 

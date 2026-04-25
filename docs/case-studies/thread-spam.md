@@ -38,6 +38,21 @@ new Thread(() -> {
 
 200 threads, each running for ~10 ms then exiting.
 
+### Read the trace top-down
+
+The ThreadSpamDemo process expanded is the giveaway. The process
+group balloons to hundreds of rows — every `Net-N` thread that
+ever ran shows up in the track list, even after it exits. Each
+row has one ~10 ms green slice and then nothing:
+
+![ThreadSpamDemo expanded — the track list shows hundreds of Net-N rows, one per request, each with a single short Running slice.](../images/thread-spam/before-wide.png)
+
+Two costs are hiding in this picture: the kernel cost of
+creating and destroying every thread, and the ART cost of
+attaching/detaching them to the runtime (each new thread
+allocates per-thread JIT state, profile data, etc.). On a real
+device under load, both can become user-visible.
+
 ### Find it
 
 ```sql
@@ -81,6 +96,18 @@ to 0.16 ms (the difference is the cost of `new Thread().start()`
 itself).
 
 ![Fixed trace zoomed onto a `dispatch#0` slice. Below it the same four `Net` worker threads handle every dispatch; no per-request thread creation visible.](../images/thread-spam/after.png)
+
+The wide view collapses dramatically — instead of a forest of
+short-lived threads, you see four steady `Net` worker rows that
+share the work:
+
+![Fixed ThreadSpamDemo wide. Four steady Net worker threads, each carrying many dispatch slices over time; no per-request thread creation in the track list.](../images/thread-spam/after-wide.png)
+
+For most apps, `Dispatchers.IO` (Kotlin coroutines) or
+`AppExecutors.io()` (the Architecture Components pattern) is the
+right one-liner replacement. For libraries you depend on,
+`AppCompatDelegate.setLifecycleAware(true)` and similar APIs
+lean on shared system pools rather than per-component ones.
 
 ## Second pattern: per-request `OkHttpClient`
 

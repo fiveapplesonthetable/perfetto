@@ -44,6 +44,21 @@ try (Cursor c = db.rawQuery(
 }
 ```
 
+### Read the trace top-down
+
+The DbUiDemo process expanded shows the main thread carrying a
+single big `openAndQueryOnUiThread` slice. Inside it, sched
+states alternate Running and Uninterruptible Sleep — the latter
+is the kernel-side disk wait. The Frame Timeline tracks below
+have no Actual frame slices for the entire duration, because the
+launcher activity hasn't gotten to its first frame yet:
+
+![DbUiDemo expanded. Main thread carries one big openAndQueryOnUiThread slice; sched track alternates Running and Uninterruptible Sleep; Frame Timeline is empty for the duration.](../images/db-ui-thread/before-wide.png)
+
+The "Frame Timeline empty" signal is the user-facing one: this
+isn't just slow code, it's a visible freeze before the screen
+appears.
+
 ### Find it
 
 ```sql
@@ -88,6 +103,20 @@ larger because of the off-thread hop), but the UI thread is free
 to render the activity's first frame immediately.
 
 ![Fixed trace zoomed onto `openAndQueryOffMainThread`. The slice runs on a "Db" thread, not the UI thread. The UI thread shows Choreographer#doFrame slices firing at vsync cadence during the same window.](../images/db-ui-thread/after.png)
+
+Wide view: a new `Db` worker thread carries the open+query work;
+the main thread is short and free; the Frame Timeline starts
+producing Actual frames immediately:
+
+![Fixed DbUiDemo wide. Db worker thread runs the SQLite work; main thread is short; Frame Timeline shows green slices throughout the trace.](../images/db-ui-thread/after-wide.png)
+
+The fix is structurally identical for any synchronous I/O pattern
+on the UI thread —
+[main-thread I/O](main-thread-io.md) and this tutorial both come
+down to "post the work, post the result back". Room codifies
+this with `suspend` DAO methods; if you're not using Room, the
+`HandlerThread` + `runOnUiThread` snippet above is the bare
+minimum.
 
 ## Second pattern: synchronous Room query
 

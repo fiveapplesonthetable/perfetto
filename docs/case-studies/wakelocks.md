@@ -40,6 +40,23 @@ wl.acquire();
 // wl.release();   <-- missing on this path
 ```
 
+### Read the trace top-down
+
+The WakelocksDemo process expanded shows a brief Activity start
+on the main thread and then nothing — the app appears to do no
+work after `onCreate`. The interesting tracks are at the
+*system* level: `system_server` shows a `wakelock` power track
+where the named `WakelocksDemo:upload` source has an open
+"held" segment with no closing event:
+
+![WakelocksDemo wide view. Process is mostly idle; the system_server power tracks at the top show the WakelocksDemo:upload wakelock held with no release.](../images/wakelocks/before-wide.png)
+
+The leak doesn't show up in app-thread tracks because once the
+wakelock is acquired, the bug is *the absence of a release*.
+The signal moves to the system's power tracks, which is why this
+investigation requires `power/wakeup_source_*` ftrace events to
+be in the config.
+
 ### Find it
 
 Count activations vs deactivations for the leaking source:
@@ -87,6 +104,20 @@ has a matching `wakeup_source_deactivate` within the bounded work
 window.
 
 ![Fixed trace: the same wakelock source shows symmetric activate/deactivate pairs bounded by the work duration. After the upload finishes the device is free to suspend.](../images/wakelocks/after.png)
+
+The wide view confirms it. The `Upload` background thread runs
+the work; the wakelock activate/release pair brackets exactly
+that work. Once the work is done the system is free to
+`suspend_resume` and quiesce the device:
+
+![Fixed WakelocksDemo wide. Upload thread runs the work; wakelock activate and deactivate events bracket exactly that work; suspend_resume events follow.](../images/wakelocks/after-wide.png)
+
+The standard production scorecard is
+`activate_count - deactivate_count` per `wakeup_source` over a
+24-hour window — file as a CI metric, alert on growth. Most
+real wakelock leaks compound slowly across days, so a one-shot
+trace catches only the rate; the cumulative delta catches the
+leak itself.
 
 For 24-hour investigations, the scorecard is
 `activate_count - deactivate_count` per `wakeup_source` —
