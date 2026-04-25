@@ -43,11 +43,12 @@ map for each tutorial, see the artifacts branch:
   `LinearLayout` per row. 3.12 ms → 0.41 ms (7.6×).
 - [Database on UI thread](db-on-ui-thread.md) — `getWritableDatabase()`
   + heavy query in `onCreate`. 328 ms blocking → off-thread.
+- [Native heap leaks](native-heap.md) — JNI `malloc()` without
+  `free()`. 17 MB allocated, 17 MB net unreleased → 0 MB net.
+  Uses the `heapprofd` data source.
 
 ## Planned
 
-- Native heap — JNI bridge with leaked `malloc` on the error path.
-  `heapprofd` data source.
 - 24-hour battery — `JobService` never calling `jobFinished`,
   `LocationManager` request without `removeUpdates`. Long-trace
   battery config (extends the [Wakelocks](wakelocks.md) tutorial
