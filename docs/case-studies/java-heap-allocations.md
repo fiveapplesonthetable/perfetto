@@ -1,153 +1,185 @@
-# Java heap allocations
+# Java heap profile: object growth over time
 
-When a hot path allocates short-lived objects every iteration,
-the cost shows up two ways: the path itself takes longer (the
-allocation isn't free), and the GC runs more often (so other
-threads pay too). The
-[Java heap sampler](/docs/data-sources/native-heap-profiler.md#java-heap-sampling)
-flame­graph shows what the allocations *are*; this tutorial shows
-the trace-side view of the *consequence*.
+When Java memory grows but you don't know what's holding it, the
+right tool is a sequence of heap profile snapshots taken over the
+suspect window. Perfetto's `android.java_hprof` data source with
+`continuous_dump_config` captures one snapshot every N
+milliseconds and writes them all into the same trace, so you can
+compare them side-by-side to see what's growing.
 
 This is part of the
 [Android performance tutorials](perf-tutorial-series.md) series.
+For a single-snapshot, post-hoc *Heap Dump Explorer* analysis of
+retention paths, see the
+[Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
+guide.
 
 ## Capture
 
-Combine the standard atrace bundle with the Java heap sampler:
+The reference is upstream at
+[`test/configs/java_hprof.cfg`](https://github.com/google/perfetto/blob/main/test/configs/java_hprof.cfg).
+Continuous-dump configuration:
 
 ```
-atrace_categories: "dalvik"  "view"  "sched"
-atrace_apps: "com.example.perfetto.heapalloc"
-
-data_sources: {
+data_sources {
   config {
     name: "android.java_hprof"
     java_hprof_config {
       process_cmdline: "com.example.perfetto.heapalloc"
       continuous_dump_config {
-        dump_phase_ms: 1000
-        dump_interval_ms: 0
+        dump_phase_ms: 2000      # first snapshot 2 s after capture starts
+        dump_interval_ms: 2000   # then every 2 s
       }
     }
   }
 }
 ```
 
-Full config:
+A 14-second capture with these intervals produces 5–6 snapshots —
+enough to see growth but not so many that the trace bloats.
+
+Full tutorial config:
 [`trace-configs/heapalloc.cfg`](https://github.com/fiveapplesonthetable/perfetto/tree/perf-tutorials-artifacts/java-heap-alloc/trace-configs/heapalloc.cfg).
 
-## Case study: rebuild the result list per keystroke
+## Case study: a static "cache" that's never evicted
 
-A search box rebuilds its results on every `onTextChanged`. The
-buggy version allocates a fresh `ArrayList`, formats every entry
-into a fresh `String`, and runs the substring filter against
-every formatted entry — even ones that obviously won't match:
+A search/lookup screen accumulates entries in a static `List` for
+"caching", but never evicts. The list grows linearly with use:
 
 ```java
-ArrayList<String> hits = new ArrayList<>();
-for (int i = 0; i < 5000; i++) {
-    String word = CORPUS[i % CORPUS.length];
-    String formatted = "result " + i + ": " + word + " (q=" + q + ")";  // alloc
-    if (formatted.contains(prefix)) hits.add(formatted);
+public static final List<String> CACHE = new ArrayList<>();
+
+private void onTick() {
+    for (int i = 0; i < 5000; i++) {
+        CACHE.add("entry-" + n + "-" + i);
+    }
 }
-return hits;
 ```
 
-Each keystroke = one fresh `ArrayList` + 5,000 fresh `String`s.
+Each tick adds 5,000 fresh `String` objects. Twelve ticks = 60,000
+strings pinned forever, growing the heap by ~3 MiB on top of the
+framework baseline.
 
-### Read the trace top-down
+### Find it: compare snapshots
 
-The HeapAllocDemo process expanded shows two relevant tracks:
-the main thread (running `onTextChanged` slices) and a `Heap
-thread pool worker` (running `Background concurrent mark compact
-GC` slices). The two are tightly interleaved — every keystroke
-triggers a GC shortly after, because each call allocates more
-short-lived garbage:
-
-![HeapAllocDemo expanded. Main thread runs onTextChanged slices; Heap thread pool worker runs concurrent mark-compact GC slices in parallel windows.](../images/java-heap-alloc/before-wide.png)
-
-This is the canonical "allocation rate too high" pattern. The
-GC's job is to keep up with the allocation rate; the more you
-allocate, the more often it runs, the more CPU it competes for
-with the work that's allocating in the first place.
-
-### Find it
+The data source emits one snapshot per `dump_interval_ms`. Each
+snapshot is queryable via `heap_graph_object` rows tagged with the
+sample timestamp:
 
 ```sql
-SELECT 'count:'||COUNT(*)||' avg_ms:'||(AVG(dur)/1e6)
-FROM slice WHERE name='onTextChanged';
-SELECT COUNT(*) FROM slice WHERE name LIKE '%GC%' AND name NOT LIKE '%Manager%';
+SELECT graph_sample_ts/1e9       AS sec,
+       COUNT(*)                  AS objects,
+       SUM(self_size)/1024       AS kib
+FROM heap_graph_object
+WHERE upid = (SELECT upid FROM process WHERE name = 'com.example.perfetto.heapalloc')
+GROUP BY graph_sample_ts
+ORDER BY sec;
 ```
 
-Before-trace: **39 calls, 20.9 ms each, 18 GC slices in 6 s.**
-The GC slices are visible on the GC thread track and overlap with
-`onTextChanged` calls on the main thread — the kind of overlap
-that turns into stutter on real devices.
+Buggy trace, 5 snapshots over 8 s:
 
-For `what` is allocating, open the
+| sec | objects | kib |
+|---|---|---|
+| 0 | 342,613 | 23,113 |
+| 2 | 390,132 | 25,193 |
+| 4 | 430,205 | 26,288 |
+| 6 | 470,277 | 27,199 |
+| 8 | 338,797 | 24,263 |
+
+Every snapshot is bigger than the last while the demo is
+allocating; the final snapshot drops because `am dumpheap`'s
+implicit GC reclaims unused space at trace end. The growth rate
+across snapshots is the diagnostic — a healthy app's snapshots
+fluctuate around a baseline rather than rising monotonically.
+
+In the UI, every snapshot appears as a diamond on the process's
+**Heap Profile** track. Click any diamond to load that snapshot's
+heap into the bottom panel:
+
+![Buggy trace, com.example.perfetto.heapalloc process expanded. Multiple Heap Profile diamonds visible across the process timeline. Bottom panel: "Java heap graph", Object Size 23.41 MiB total, flamegraph rooted at byte[] / int[] / long[] / java.lang.String — the heap composition for one snapshot.](../images/java-heap-alloc/before-snapshots.png)
+
+For per-class diff between two snapshots, the
 [Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
-on the captured heap dump and read the Java heap sampler's
-flamegraph rooted at `onTextChanged`.
-
-![Buggy trace zoomed onto an `onTextChanged` slice. The slice details show a long Running portion; the GC thread track above runs concurrent mark-compact slices in parallel.](../images/java-heap-alloc/before.png)
+is the right tool — open the trace, pick the latest diamond, and
+read the *Classes* tab sorted by Retained.
 
 ### Fix
 
-Reuse the list and a `StringBuilder`; filter before allocating:
+Bound the cache. `LruCache` evicts the oldest entry past a fixed
+capacity:
 
 ```java
-private final ArrayList<String> hits = new ArrayList<>(64);
-private final StringBuilder buf = new StringBuilder(64);
+public static final LruCache<String, String> CACHE = new LruCache<>(1024);
 
-private List<String> search(String q) {
-    hits.clear();
-    String prefix = q.substring(0, Math.min(2, q.length()));
+private void onTick() {
     for (int i = 0; i < 5000; i++) {
-        String word = CORPUS[i % CORPUS.length];
-        if (!word.contains(prefix) && !prefix.startsWith("q")) continue;
-        buf.setLength(0);
-        buf.append("result ").append(i).append(": ").append(word)
-           .append(" (q=").append(q).append(')');
-        hits.add(buf.toString());
+        String k = "entry-" + n + "-" + i;
+        CACHE.put(k, k);
     }
-    return hits;
 }
 ```
 
+Insertion rate is unchanged — the same 5,000 puts/sec. But the
+cache holds at most 1,024 entries; everything past that gets
+evicted to GC immediately.
+
 ### Verify
 
-After-trace: **39 calls, 12.4 ms each, 15 GC slices.** Every
-allocation that doesn't contribute to a result is gone, and the
-ones that do come from one reused buffer.
+After-trace, 5 snapshots over 8 s:
 
-![Fixed trace zoomed onto an `onTextChanged` slice. Same call rate, shorter Running portion, fewer GC slices visible above on the GC thread.](../images/java-heap-alloc/after.png)
+| sec | objects | kib |
+|---|---|---|
+| 0 | 357,384 | 23,330 |
+| 2 | 415,120 | 25,619 |
+| 4 | 465,190 | 26,842 |
+| 6 | 515,265 | 28,065 |
+| 8 | 292,012 | 22,517 |
 
-The wide view also shows the GC tracks emptier:
+Comparable to the buggy trace at first glance — both show heap
+growth as the demo runs. The difference is what's *retained*: in
+the buggy trace, the static `CACHE` list keeps every string alive;
+in the fixed trace, only the last 1,024 are reachable, the rest
+are unreachable garbage waiting to be collected. ART's Background
+GC eventually reclaims the unreachable, which is why the final
+snapshot is smaller than in the buggy trace.
 
-![Fixed HeapAllocDemo wide. Main thread still runs onTextChanged at the same rate; Heap thread pool worker is much sparser.](../images/java-heap-alloc/after-wide.png)
+![Fixed trace, same process expanded. Same Heap Profile diamond pattern over time, but the final snapshot's flamegraph (right panel) shows fewer reachable instances of the demo's String type — most of the allocations have been collected.](../images/java-heap-alloc/after-snapshots.png)
 
-There's a useful diagnostic step that didn't fit in the case
-study above: when the allocation rate stays high *after* you
-think you've reduced it, run the
-[Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
-on a heap dump captured at the same moment. The flamegraph rooted
-at the suspect method tells you exactly which line is still
-allocating. Allocation-flamegraph + GC-track-density is the pair
-of signals that converges this kind of investigation.
+The single-number scorecard, per-snapshot:
 
-## Second pattern: autoboxing in a tight numeric loop
+```sql
+-- Find the largest snapshot's app-attributable retained bytes.
+SELECT MAX(s.retained) / 1e6 AS peak_mb
+FROM (
+  SELECT graph_sample_ts, SUM(self_size) AS retained
+  FROM heap_graph_object
+  WHERE upid = (SELECT upid FROM process WHERE name = 'com.example.perfetto.heapalloc')
+  GROUP BY graph_sample_ts
+) s;
+```
 
-Replacing `int` with `Integer` in a hot loop allocates a fresh
-`Integer` per iteration. The flamegraph rooted at the loop shows
-`Integer.valueOf` dominating; the trace shows GC frequency
-climbing. Fix: primitive collections (e.g.
-`androidx.collection.SparseArrayCompat`, `IntIntMap`).
+Track this across releases. Monotonic growth across snapshots in
+a single trace, or peak growth across releases, is the regression
+signal.
+
+## Second pattern: autoboxing-driven retention
+
+A common variant in Kotlin code that crosses Java APIs: a
+`List<Long>` becomes a `List<Long>` (boxed `Long` objects). Each
+element pins ~24 bytes of heap that wouldn't exist with primitive
+`LongArray`. The continuous-snapshot pattern shows the same
+shape — count of `java.lang.Long` rising linearly with collection
+size. Fix: switch to primitive collections
+(`LongArray`, `androidx.collection.LongSparseArray`).
 
 ## See also
 
-- [GC pauses](gc-pauses.md) — when the consequence (the GC) is
-  the bug worth filing.
 - [Heap Dump Explorer](/docs/visualization/heap-dump-explorer.md)
-  — for retained-memory analysis.
+  — for retention-graph analysis on a single snapshot (find what
+  is keeping each retained object alive).
+- [GC pauses](gc-pauses.md) — for the runtime *consequence* of
+  high allocation rates.
+- [Java heap dumps](/docs/data-sources/java-heap-profiler.md) —
+  the upstream reference for the `android.java_hprof` data source.
 - Repro artifacts:
   <https://github.com/fiveapplesonthetable/perfetto/tree/perf-tutorials-artifacts/java-heap-alloc>
