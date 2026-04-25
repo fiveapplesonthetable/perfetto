@@ -60,12 +60,16 @@ SELECT 'count:'||COUNT(*)||' avg_ms:'||(AVG(dur)/1e6)
 FROM slice WHERE name LIKE 'toggle#%';
 ```
 
-Before-trace: **39 toggles, 1.58 ms each**. In the UI, find the
-main thread, look at any `toggle#N` slice — expand it and you see
-a `f2fs_sync_file` slice underneath. The main thread is in `D`
-state for the duration.
+Before-trace: **39 toggles, 1.58 ms each**. In the UI, expand the
+demo's process and find the main thread. Each `toggle#N` slice on
+the main thread is the synchronous prefs commit. On a real device
+with a slow flash backing, the slice would also contain a long
+Uninterruptible Sleep stretch (the main thread blocked in
+`f2fs_sync_file`); on cuttlefish's fast virtual storage the cost
+manifests as CPU time inside the slice (the framework's commit
+path) instead. Either way, the user sees a frame skip.
 
-![Buggy trace zoomed onto `toggle#0`. The slice details show the main thread is mostly Uninterruptible Sleep — it's blocked on the f2fs flush triggered by SharedPreferences.commit().](../images/main-thread-io/before.png)
+![Buggy trace, com.example.perfetto.mainio process expanded. The main thread track shows a `toggle#20` slice highlighted; bottom-panel slice details report Duration 1ms 387us 62ns, 100% Running. Same shape repeats across all 39 toggles in this trace.](../images/main-thread-io/before.png)
 
 ### Fix
 
@@ -87,7 +91,7 @@ main thread no longer enters `D` state inside the toggle slice;
 the actual disk write happens later on the background thread that
 SharedPreferences manages.
 
-![Fixed trace zoomed onto `toggle#0`. Same UI thread bind, no Uninterruptible Sleep — the disk write is deferred to SharedPreferences' background writer.](../images/main-thread-io/after.png)
+![Fixed trace, same process row, same `toggle#20` slice highlighted. Bottom-panel slice details report Duration 103us 759ns — 13× faster than the buggy version's 1.4 ms. The disk write is deferred to SharedPreferences' background writer.](../images/main-thread-io/after.png)
 
 The wide view shows the same 50 toggles on the main thread, but
 the `f2fs_sync_file` events are now batched onto a different
