@@ -5,15 +5,20 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Trace;
-import android.util.LruCache;
 import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public class HeapAllocActivity extends Activity {
 
-    /** Bounded LRU. Same insertion rate; oldest entries are evicted past 1024. */
-    public static final LruCache<String, String> CACHE = new LruCache<>(1024);
+    /** 1024 buffers allocated once at class load; reused on every tick. */
+    private static final byte[][] REUSED;
+    static {
+        REUSED = new byte[1024][];
+        for (int i = 0; i < REUSED.length; i++) REUSED[i] = new byte[4096];
+    }
+
+    private TextView t;
 
     @Override
     protected void onCreate(Bundle s) {
@@ -21,7 +26,7 @@ public class HeapAllocActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
-        TextView t = new TextView(this);
+        t = new TextView(this);
         t.setText("HeapAllocDemo (fixed)");
         root.addView(t);
         setContentView(root);
@@ -30,13 +35,15 @@ public class HeapAllocActivity extends Activity {
         Runnable tick = new Runnable() {
             int n = 0;
             @Override public void run() {
-                Trace.beginSection("appendBatch");
+                Trace.beginSection("onTick");
                 try {
-                    for (int i = 0; i < 5000; i++) {
-                        String k = "entry-" + n + "-" + i;
-                        CACHE.put(k, k);
+                    int total = 0;
+                    for (int i = 0; i < 1024; i++) {
+                        byte[] b = REUSED[i];                      // reuse, not alloc
+                        b[0] = (byte) i;
+                        total += b.length;
                     }
-                    t.setText("CACHE size: " + CACHE.size());
+                    t.setText("tick " + n + " reused " + (total / 1024) + " KiB");
                 } finally { Trace.endSection(); }
                 if (++n < 12) h.postDelayed(this, 1000);
             }

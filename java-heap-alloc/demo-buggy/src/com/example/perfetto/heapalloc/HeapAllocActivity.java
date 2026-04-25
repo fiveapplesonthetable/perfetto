@@ -9,13 +9,9 @@ import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class HeapAllocActivity extends Activity {
 
-    /** Static "cache" that's never evicted. Every tick appends; nothing ever leaves. */
-    public static final List<String> CACHE = new ArrayList<>();
+    private TextView t;
 
     @Override
     protected void onCreate(Bundle s) {
@@ -23,24 +19,28 @@ public class HeapAllocActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
-        TextView t = new TextView(this);
+        t = new TextView(this);
         t.setText("HeapAllocDemo (buggy)");
         root.addView(t);
         setContentView(root);
 
-        // Once a second, append 5,000 fresh String objects (~250 KiB) to the
-        // static cache. Over a 12 s trace this accumulates ~3 MiB of String
-        // objects — visible as growing snapshots in the heap profile.
+        // Once a second, allocate 1024 fresh 4 KiB byte[] (~4 MiB) and
+        // discard. 12 ticks = ~50 MiB of short-lived garbage attributed to
+        // onTick. Small individual allocations stay in ART's TLAB path so
+        // heapprofd's sampling catches them.
         final Handler h = new Handler(Looper.getMainLooper());
         Runnable tick = new Runnable() {
             int n = 0;
             @Override public void run() {
-                Trace.beginSection("appendBatch");
+                Trace.beginSection("onTick");
                 try {
-                    for (int i = 0; i < 5000; i++) {
-                        CACHE.add("entry-" + n + "-" + i);
+                    int total = 0;
+                    for (int i = 0; i < 1024; i++) {
+                        byte[] b = new byte[4096];                // 4 KiB
+                        b[0] = (byte) i;
+                        total += b.length;
                     }
-                    t.setText("CACHE size: " + CACHE.size());
+                    t.setText("tick " + n + " allocated " + (total / 1024) + " KiB");
                 } finally { Trace.endSection(); }
                 if (++n < 12) h.postDelayed(this, 1000);
             }
