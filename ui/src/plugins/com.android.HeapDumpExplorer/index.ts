@@ -24,6 +24,7 @@ import {
   resetFlamegraphSelection,
   resetInstanceTabs,
   resetCachedOverview,
+  disposeBaseline,
 } from './heap_dump_page';
 import {resetBitmapDumpDataCache} from './queries';
 
@@ -52,6 +53,10 @@ export default class implements PerfettoPlugin {
     resetFlamegraphSelection();
     resetInstanceTabs();
     resetCachedOverview();
+    // Drop any baseline loaded against the previous trace; its diff would be
+    // meaningless against this new primary, and the worker would otherwise
+    // leak.
+    disposeBaseline();
 
     ctx.plugins
       .getPlugin(HeapProfilePlugin)

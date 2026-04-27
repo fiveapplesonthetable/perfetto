@@ -385,3 +385,27 @@
 .ah-mt-4 {
   margin-top: 1rem;
 }
+
+// ----- Diff mode -----------------------------------------------------------
+// All diff visuals (delta cell colour, status text, status filter chips,
+// baseline status header) are built from Perfetto widgets and tokens —
+// Button, Chip, Callout, SegmentedButtons, --pf-color-success/danger/warning.
+// No bespoke header strip, no bespoke pill chrome.
+//
+// Slim layout for the per-instance status-row inside the baseline-status
+// Callout: filename label, mode toggle, close button laid out as flex.
+
+.ah-baseline-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.ah-baseline-status__filename {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

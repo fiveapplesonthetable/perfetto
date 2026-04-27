@@ -40,6 +40,18 @@ import FlamegraphObjectsView, {
 } from './views/flamegraph_objects_view';
 import {SQL_PREAMBLE} from './components';
 import {NUM} from '../../trace_processor/query_result';
+import {
+  dispose as disposeBaseline,
+  getMode,
+  getSession,
+  isDiffActive,
+} from './baseline/state';
+import {HeapDumpDiffHeader} from './header';
+import ClassesDiffView from './views/diff/classes_diff_view';
+import StringsDiffView from './views/diff/strings_diff_view';
+import ArraysDiffView from './views/diff/arrays_diff_view';
+import BitmapsDiffView from './views/diff/bitmaps_diff_view';
+import DominatorsDiffView from './views/diff/dominators_diff_view';
 
 // Each "Open in Heapdump Explorer" creates a closable flamegraph tab.
 let nextFgId = 0;
@@ -79,14 +91,22 @@ export function resetFlamegraphSelection(): void {
   activeFgId = -1;
 }
 
-// Module-level overview cache. Survives component remounts (e.g. theme toggle).
-let cachedOverview: OverviewData | null = null;
-let overviewLoading = false;
+// Per-engine overview cache. Survives component remounts (e.g. theme toggle).
+// Keyed by Engine so the baseline engine gets its own cached overview when
+// the user flips into "Baseline only" mode without re-querying.
+const overviewByEngine: Map<Engine, OverviewData> = new Map();
+const overviewLoadingFor: Set<Engine> = new Set();
 
-/** Reset cached overview on trace change. */
+/** Reset all cached overviews on primary trace change. */
 export function resetCachedOverview(): void {
-  cachedOverview = null;
-  overviewLoading = false;
+  overviewByEngine.clear();
+  overviewLoadingFor.clear();
+}
+
+/** Drop cached overview for a specific engine (used on baseline disposal). */
+export function dropOverviewFor(engine: Engine): void {
+  overviewByEngine.delete(engine);
+  overviewLoadingFor.delete(engine);
 }
 
 // Closable object tabs — clicking an object anywhere opens a new tab.
@@ -227,23 +247,41 @@ function buildTabs(
   state: NavState,
   engine: Engine,
   overview: OverviewData,
+  baselineOverview: OverviewData | undefined,
+  baselineLoading: boolean,
 ): TabsTab[] {
   const trace = HeapDumpPage.trace;
+  const session = getSession();
+  const diffActive = isDiffActive();
+  const baselineEngine = session?.engine;
+  const raf = trace?.raf;
   const tabs: TabsTab[] = [
     {
       key: 'overview',
       title: 'Overview',
-      content: m(OverviewView, {overview, navigate: navigateWithTabs}),
+      content: m(OverviewView, {
+        overview,
+        baselineOverview: diffActive ? baselineOverview : undefined,
+        baselineLoading: diffActive && baselineLoading,
+        navigate: navigateWithTabs,
+        raf: raf!,
+      }),
     },
     {
       key: 'classes',
       title: 'Classes',
-      content: m(ClassesView, {
-        engine,
-        navigate: navigateWithTabs,
-        initialRootClass:
-          state.view === 'classes' ? state.params.rootClass : undefined,
-      }),
+      content: diffActive && baselineEngine
+        ? m(ClassesDiffView, {
+            currentEngine: engine,
+            baselineEngine,
+            navigate: navigateWithTabs,
+          })
+        : m(ClassesView, {
+            engine,
+            navigate: navigateWithTabs,
+            initialRootClass:
+              state.view === 'classes' ? state.params.rootClass : undefined,
+          }),
     },
     {
       key: 'objects',
@@ -257,39 +295,63 @@ function buildTabs(
     {
       key: 'dominators',
       title: 'Dominators',
-      content: m(DominatorsView, {engine, navigate: navigateWithTabs}),
+      content: diffActive && baselineEngine
+        ? m(DominatorsDiffView, {
+            currentEngine: engine,
+            baselineEngine,
+            navigate: navigateWithTabs,
+          })
+        : m(DominatorsView, {engine, navigate: navigateWithTabs}),
     },
     {
       key: 'bitmaps',
       title: 'Bitmaps',
-      content: m(BitmapGalleryView, {
-        engine,
-        navigate: navigateWithTabs,
-        hasFieldValues: overview.hasFieldValues,
-        filterKey:
-          state.view === 'bitmaps' ? state.params.filterKey : undefined,
-      }),
+      content: diffActive && baselineEngine
+        ? m(BitmapsDiffView, {
+            currentEngine: engine,
+            baselineEngine,
+            navigate: navigateWithTabs,
+          })
+        : m(BitmapGalleryView, {
+            engine,
+            navigate: navigateWithTabs,
+            hasFieldValues: overview.hasFieldValues,
+            filterKey:
+              state.view === 'bitmaps' ? state.params.filterKey : undefined,
+          }),
     },
     {
       key: 'strings',
       title: 'Strings',
-      content: m(StringsView, {
-        engine,
-        navigate: navigateWithTabs,
-        initialQuery: state.view === 'strings' ? state.params.q : undefined,
-        hasFieldValues: overview.hasFieldValues,
-      }),
+      content: diffActive && baselineEngine
+        ? m(StringsDiffView, {
+            currentEngine: engine,
+            baselineEngine,
+            navigate: navigateWithTabs,
+          })
+        : m(StringsView, {
+            engine,
+            navigate: navigateWithTabs,
+            initialQuery: state.view === 'strings' ? state.params.q : undefined,
+            hasFieldValues: overview.hasFieldValues,
+          }),
     },
     {
       key: 'arrays',
       title: 'Arrays',
-      content: m(ArraysView, {
-        engine,
-        navigate: navigateWithTabs,
-        initialArrayHash:
-          state.view === 'arrays' ? state.params.arrayHash : undefined,
-        hasFieldValues: overview.hasFieldValues,
-      }),
+      content: diffActive && baselineEngine
+        ? m(ArraysDiffView, {
+            currentEngine: engine,
+            baselineEngine,
+            navigate: navigateWithTabs,
+          })
+        : m(ArraysView, {
+            engine,
+            navigate: navigateWithTabs,
+            initialArrayHash:
+              state.view === 'arrays' ? state.params.arrayHash : undefined,
+            hasFieldValues: overview.hasFieldValues,
+          }),
     },
   ];
 
@@ -347,24 +409,43 @@ export class HeapDumpPage implements m.ClassComponent<HeapDumpPageAttrs> {
       window.location.hash = href.slice(1);
     });
     syncFromSubpage(vnode.attrs.subpage);
-    this.loadOverview();
+    this.kickOverviewLoadFor(this.activeOverviewEngine());
   }
 
   onremove() {
     setNavigateCallback(undefined);
   }
 
-  private async loadOverview() {
-    if (!HeapDumpPage.engine || overviewLoading || cachedOverview) return;
-    overviewLoading = true;
-    try {
-      cachedOverview = await queries.getOverview(HeapDumpPage.engine);
-    } catch (err) {
-      console.error('Failed to load overview:', err);
-    } finally {
-      overviewLoading = false;
-      m.redraw();
+  /**
+   * Which engine the Overview tab and other current/baseline-only modes
+   * should query. In Diff mode this is still the current engine — the
+   * diff views handle the dual-engine fan-out themselves.
+   */
+  private activeOverviewEngine(): Engine | null {
+    if (!HeapDumpPage.engine) return null;
+    const session = getSession();
+    if (session !== null && getMode() === 'baseline') {
+      return session.engine;
     }
+    return HeapDumpPage.engine;
+  }
+
+  private kickOverviewLoadFor(engine: Engine | null): void {
+    if (!engine) return;
+    if (overviewByEngine.has(engine) || overviewLoadingFor.has(engine)) return;
+    overviewLoadingFor.add(engine);
+    queries
+      .getOverview(engine)
+      .then((data) => {
+        overviewByEngine.set(engine, data);
+      })
+      .catch((err) => {
+        console.error('Failed to load overview:', err);
+      })
+      .finally(() => {
+        overviewLoadingFor.delete(engine);
+        m.redraw();
+      });
   }
 
   view(vnode: m.Vnode<HeapDumpPageAttrs>) {
@@ -383,22 +464,64 @@ export class HeapDumpPage implements m.ClassComponent<HeapDumpPageAttrs> {
       );
     }
 
-    if (!cachedOverview) {
+    const overviewEngine = this.activeOverviewEngine();
+    if (!overviewEngine) {
       return m(
         'div',
         {class: 'ah-page'},
         m('div', {class: 'ah-loading'}, m(Spinner, {easing: true})),
       );
     }
+    // If we just flipped to a baseline whose overview hasn't been computed
+    // yet, kick it off now (cheap if already loading/loaded).
+    this.kickOverviewLoadFor(overviewEngine);
+    const overview = overviewByEngine.get(overviewEngine);
+
+    const trace = HeapDumpPage.trace;
+    const header = trace ? m(HeapDumpDiffHeader) : null;
+
+    // In diff mode, eagerly load the baseline engine's overview too so the
+    // unified OverviewView can render side-by-side cards.
+    const session = getSession();
+    if (session !== null) {
+      this.kickOverviewLoadFor(session.engine);
+    }
+    const baselineOverview =
+      session !== null ? overviewByEngine.get(session.engine) : undefined;
+    const baselineLoading =
+      session !== null &&
+      baselineOverview === undefined &&
+      overviewLoadingFor.has(session.engine);
+
+    if (!overview) {
+      return m(
+        'div',
+        {class: 'ah-page'},
+        header,
+        m('div', {class: 'ah-loading'}, m(Spinner, {easing: true})),
+      );
+    }
+
+    // The engine the non-diff tabs should use. In Diff mode, current is the
+    // primary trace's engine. In Baseline-only mode, all tabs read from the
+    // baseline engine instead.
+    const tabEngine = overviewEngine;
 
     return m(
       'div',
       {class: 'ah-page'},
+      header,
       m(
         'main',
         {class: 'ah-main'},
         m(Tabs, {
-          tabs: buildTabs(nav, HeapDumpPage.engine, cachedOverview),
+          tabs: buildTabs(
+            nav,
+            tabEngine,
+            overview,
+            baselineOverview,
+            baselineLoading,
+          ),
           activeTabKey: getActiveTabKey(),
           onTabChange: handleTabChange,
           onTabClose: handleTabClose,
@@ -407,3 +530,6 @@ export class HeapDumpPage implements m.ClassComponent<HeapDumpPageAttrs> {
     );
   }
 }
+
+/** Re-exported convenience for index.ts so it can dispose on trace change. */
+export {disposeBaseline};
