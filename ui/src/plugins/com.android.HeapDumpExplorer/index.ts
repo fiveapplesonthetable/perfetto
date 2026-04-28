@@ -24,6 +24,7 @@ import {
   resetFlamegraphSelection,
   resetInstanceTabs,
   resetCachedOverview,
+  disposeBaseline,
 } from './heap_dump_page';
 import {resetBitmapDumpDataCache, loadDumps, resetDumps} from './queries';
 
@@ -52,6 +53,11 @@ export default class implements PerfettoPlugin {
     resetFlamegraphSelection();
     resetInstanceTabs();
     resetCachedOverview();
+    // A new primary trace invalidates any pooled baseline traces — they
+    // belong to a different (process, time-window) and the diff would be
+    // nonsensical. Dispose the pool engines before the new trace's data
+    // takes over so we don't leak workers.
+    disposeBaseline();
 
     resetDumps();
     await loadDumps(ctx.engine);

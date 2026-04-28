@@ -45,7 +45,8 @@ export interface HeapDump {
   readonly upid: number;
   readonly ts: bigint;
   readonly processName: string | null;
-  readonly pid: number;
+  /** Null when the trace has no process metadata (typical for raw hprof). */
+  readonly pid: number | null;
 }
 
 let dumps: ReadonlyArray<HeapDump> = [];
@@ -103,7 +104,7 @@ export async function loadDumps(engine: Engine): Promise<void> {
       upid: it.upid,
       ts: it.ts,
       processName: it.pname,
-      pid: it.pid ?? 0,
+      pid: it.pid,
     });
   }
   setDumps(result);
@@ -268,8 +269,12 @@ async function batchBitmapBufferHashes(
   return result;
 }
 
-export async function getOverview(engine: Engine): Promise<OverviewData> {
-  const dumpFilter = dumpFilterSql('o');
+// `dumpFilter` must match `engine`: passing the primary's filter to the
+// baseline engine yields zero rows since (upid, ts) don't match.
+export async function getOverview(
+  engine: Engine,
+  dumpFilter: string = dumpFilterSql('o'),
+): Promise<OverviewData> {
   const countRes = await engine.query(
     `SELECT count(*) as cnt FROM heap_graph_object o
      WHERE o.reachable != 0 AND ${dumpFilter}`,
