@@ -12,389 +12,1049 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Unified Overview tab. Renders five cards (General Information, Bytes
+// Retained by Heap, Duplicate Bitmaps, Duplicate Strings, Duplicate
+// Primitive Arrays). Each card is a DataGrid.
+//
+// When `baselineOverview` is provided, every section's schema gains
+// Baseline / Current / Δ columns; rows are merged JS-side via mergeRows.
+// When it is absent (single-engine mode), the original layout is rendered.
+//
+// The "Load baseline trace" button at the top is the entry point for diff
+// mode (the slim header strip above the tabs only renders once a baseline
+// is loaded — keeps screen real-estate quiet by default).
+
 import m from 'mithril';
 import type {SqlValue, Row} from '../../../trace_processor/query_result';
 import {DataGrid} from '../../../components/widgets/datagrid/datagrid';
-import type {SchemaRegistry} from '../../../components/widgets/datagrid/datagrid_schema';
-import type {OverviewData} from '../types';
+import type {
+  CellRenderer,
+  CellRenderResult,
+  ColumnDef,
+  SchemaRegistry,
+} from '../../../components/widgets/datagrid/datagrid_schema';
+import {Callout} from '../../../widgets/callout';
+import {Intent} from '../../../widgets/common';
+import type {Raf} from '../../../public/raf';
+import type {OverviewData, HeapInfo} from '../types';
 import {fmtSize} from '../format';
 import type {NavState} from '../nav_state';
-import {type NavFn, sizeRenderer} from '../components';
+import {type NavFn, sizeRenderer, countRenderer} from '../components';
+import {getLoadState} from '../baseline/load_action';
+import {openBaselineFilePicker, shouldShowBaselineHeader} from '../header';
+import {Button, ButtonVariant} from '../../../widgets/button';
+import {
+  baselineCol,
+  currentCol,
+  dedupeByKey,
+  deltaCol,
+  mergeRows,
+  KEY_COL,
+  STATUS_COL,
+} from '../diff/diff_rows';
+import {
+  deltaCountRenderer,
+  deltaSizeRenderer,
+  sideCountRenderer,
+  sideSizeRenderer,
+  statusRenderer,
+} from '../diff/diff_schemas';
 
-const HEAP_SCHEMA: SchemaRegistry = {
-  query: {
-    heap: {
-      title: 'Heap',
-      columnType: 'text',
-    },
-    java_size: {
-      title: 'Java Size',
-      columnType: 'quantitative',
-      cellRenderer: sizeRenderer,
-    },
-    native_size: {
-      title: 'Native Size',
-      columnType: 'quantitative',
-      cellRenderer: sizeRenderer,
-    },
-    total_size: {
-      title: 'Total Size',
-      columnType: 'quantitative',
-      cellRenderer: sizeRenderer,
-    },
-  },
-};
+interface OverviewViewAttrs {
+  readonly overview: OverviewData;
+  /**
+   * True when a baseline is selected (mode is diff). The heading flips even
+   * before the baseline overview query resolves so the user sees that the
+   * page is in diff mode immediately.
+   */
+  readonly diffActive: boolean;
+  /** When present → render diff columns alongside current values. */
+  readonly baselineOverview?: OverviewData;
+  /**
+   * True when a baseline is loaded but its overview query is still running
+   * (so diff columns are coming, not absent).
+   */
+  readonly baselineLoading?: boolean;
+  readonly navigate: NavFn;
+  readonly raf: Raf;
+}
 
-const INFO_SCHEMA: SchemaRegistry = {
-  query: {
-    property: {
-      title: 'Property',
-      columnType: 'text',
-    },
-    value: {
-      title: 'Value',
-      columnType: 'text',
-    },
-  },
-};
-
-function makeDuplicateBitmapSchema(navigate: NavFn): SchemaRegistry {
+function OverviewView(): m.Component<OverviewViewAttrs> {
   return {
-    query: {
-      dimensions: {
-        title: 'Dimensions',
-        columnType: 'text',
-      },
-      copies: {
-        title: 'Copies',
-        columnType: 'quantitative',
-        cellRenderer: (value: SqlValue, row) =>
-          m(
-            'button',
-            {
-              class: 'ah-link',
-              onclick: () =>
-                navigate('bitmaps', {
-                  filterKey: String(row.groupKey ?? ''),
-                }),
-            },
-            String(value),
-          ),
-      },
-      total_bytes: {
-        title: 'Total',
-        columnType: 'quantitative',
-        cellRenderer: sizeRenderer,
-      },
-      wasted_bytes: {
-        title: 'Wasted',
-        columnType: 'quantitative',
-        cellRenderer: sizeRenderer,
-      },
+    view(vnode) {
+      const {
+        overview,
+        diffActive,
+        baselineOverview,
+        baselineLoading,
+        navigate,
+      } = vnode.attrs;
+      const isDiff = baselineOverview !== undefined;
+      const heading = diffActive ? 'Overview diff' : 'Overview';
+      // Mode tag baked into every card's vnode key. DataGrid captures its
+      // `initialColumns` only on `oninit`, so we must force a remount when
+      // we flip between the single-engine and diff column sets.
+      const mode = isDiff ? 'diff' : 'single';
+
+      // Mithril requires sibling vnodes in a fragment to either all have
+      // keys or none. Wrap each top-level child in a keyed div so we can
+      // freely use keys on individual cards (force-remount on mode flip)
+      // without triggering "all-or-none keys" runtime errors.
+      const child = (key: string, content: m.Children): m.Vnode =>
+        m('div', {key}, content);
+
+      return m('div', {class: 'ah-view-scroll'}, [
+        child('heading', m('h2', {class: 'ah-view-heading'}, heading)),
+        child('load', renderLoadBaselineSection()),
+        child(
+          'loading',
+          baselineLoading === true && !isDiff
+            ? m(
+                Callout,
+                {
+                  icon: 'hourglass_empty',
+                  intent: Intent.None,
+                  className: 'ah-mb-4',
+                  role: 'status',
+                },
+                'Computing baseline overview… diff columns will appear once it finishes.',
+              )
+            : null,
+        ),
+        child(`info-${mode}`, renderInfoCard(overview, baselineOverview)),
+        child(`heaps-${mode}`, renderHeapsCard(overview, baselineOverview)),
+        child(
+          `bitmaps-${mode}`,
+          renderDuplicateBitmapsCard(overview, baselineOverview, navigate),
+        ),
+        child(
+          `strings-${mode}`,
+          renderDuplicateStringsCard(overview, baselineOverview, navigate),
+        ),
+        child(
+          `arrays-${mode}`,
+          renderDuplicateArraysCard(overview, baselineOverview, navigate),
+        ),
+      ]);
     },
   };
 }
 
-function makeDuplicateArraySchema(navigate: NavFn): SchemaRegistry {
-  return {
-    query: {
-      className: {
-        title: 'Array Type',
-        columnType: 'text',
-        cellRenderer: (value: SqlValue) =>
-          m(
-            'button',
-            {
-              class: 'ah-link',
-              onclick: () => navigate('objects', {cls: String(value ?? '')}),
-            },
-            String(value ?? ''),
-          ),
-      },
-      arrayHash: {
-        title: 'Hash',
-        columnType: 'text',
-      },
-      copies: {
-        title: 'Copies',
-        columnType: 'quantitative',
-        cellRenderer: (value: SqlValue, row) =>
-          m(
-            'button',
-            {
-              class: 'ah-link',
-              onclick: () =>
-                navigate('arrays', {
-                  arrayHash: String(row.arrayHash ?? ''),
-                }),
-            },
-            String(value),
-          ),
-      },
-      total_bytes: {
-        title: 'Total',
-        columnType: 'quantitative',
-        cellRenderer: sizeRenderer,
-      },
-      wasted_bytes: {
-        title: 'Wasted',
-        columnType: 'quantitative',
-        cellRenderer: sizeRenderer,
-      },
-    },
-  };
+// ----- Top-of-tab "Load baseline" affordance -------------------------------
+//
+// Only rendered in single-engine mode. When a baseline IS loaded, the slim
+// header above the tabs holds the controls — no need to repeat them here.
+
+function renderLoadBaselineSection(): m.Children {
+  // The Overview-tab CTA is the discovery entry point for diff mode in the
+  // common single-trace, no-diff workflow. Once the top bar is showing
+  // baseline state (a load is in flight, an error needs reading, or a
+  // pool / active baseline exists) the row's selector takes over and the
+  // CTA collapses to keep the page free of duplicated affordances.
+  if (shouldShowBaselineHeader()) return null;
+  const {error} = getLoadState();
+  return [
+    m(
+      Callout,
+      {icon: 'difference', intent: Intent.None, className: 'ah-mb-4'},
+      m(
+        'div',
+        {class: 'ah-heading-row'},
+        m(Button, {
+          label: 'Diff against another trace…',
+          icon: 'upload_file',
+          intent: Intent.Primary,
+          variant: ButtonVariant.Filled,
+          onclick: () => openBaselineFilePicker(),
+        }),
+        m(
+          'span',
+          {class: 'ah-muted'},
+          'Pick a .pftrace or .hprof; its dumps will appear in the ' +
+            'baseline selector at the top.',
+        ),
+      ),
+    ),
+    error &&
+      m(
+        Callout,
+        {
+          icon: 'error',
+          intent: Intent.Danger,
+          role: 'alert',
+          className: 'ah-mb-4',
+        },
+        error,
+      ),
+  ];
 }
 
-function makeDuplicateStringSchema(navigate: NavFn): SchemaRegistry {
-  return {
-    query: {
-      value: {
-        title: 'Value',
-        columnType: 'text',
-        cellRenderer: (value: SqlValue) =>
-          m(
-            'button',
-            {
-              class: 'ah-link ah-mono ah-break-all ah-str-color',
-              onclick: () =>
-                navigate('strings', {
-                  q: String(value ?? ''),
-                }),
-            },
-            '"' +
-              (String(value ?? '').length > 200
-                ? String(value).slice(0, 200) + '\u2026'
-                : String(value ?? '')) +
-              '"',
-          ),
-      },
-      copies: {
-        title: 'Copies',
-        columnType: 'quantitative',
-        cellRenderer: (value: SqlValue, row) =>
-          m(
-            'button',
-            {
-              class: 'ah-link',
-              onclick: () => navigate('strings', {q: String(row.value ?? '')}),
-            },
-            String(value),
-          ),
-      },
-      total_bytes: {
-        title: 'Total',
-        columnType: 'quantitative',
-        cellRenderer: sizeRenderer,
-      },
-      wasted_bytes: {
-        title: 'Wasted',
-        columnType: 'quantitative',
-        cellRenderer: sizeRenderer,
-      },
-    },
-  };
-}
+// ----- General Information --------------------------------------------------
 
-function renderDuplicateSection(
-  title: string,
-  groupCount: number,
-  totalWasted: number,
-  targetView: string,
-  linkLabel: string,
-  navigate: NavFn,
-  schema: SchemaRegistry,
-  data: Row[],
-  columns: Array<{id: string; field: string}>,
+function renderInfoCard(
+  overview: OverviewData,
+  baselineOverview: OverviewData | undefined,
 ): m.Children {
-  return m('div', {class: 'ah-card ah-mt-4'}, [
-    m('h3', {class: 'ah-sub-heading'}, title),
+  if (baselineOverview === undefined) {
+    const rows: Row[] = [
+      {
+        property: 'Reachable instances',
+        value: overview.instanceCount.toLocaleString(),
+      },
+      {
+        property: 'Heaps',
+        value: overview.heaps.map((h) => h.name).join(', '),
+      },
+    ];
+    const schema: SchemaRegistry = {
+      query: {
+        property: {title: 'Property', columnType: 'text'},
+        value: {title: 'Value', columnType: 'text'},
+      },
+    };
+    return m('div', {class: 'ah-card ah-mb-4'}, [
+      m('h3', {class: 'ah-sub-heading'}, 'General Information'),
+      m(DataGrid, {
+        schema,
+        rootSchema: 'query',
+        data: rows,
+        initialColumns: [
+          {id: 'property', field: 'property'},
+          {id: 'value', field: 'value'},
+        ],
+      }),
+    ]);
+  }
+
+  const rows: Row[] = [
+    {
+      property: 'Reachable instances',
+      baseline: baselineOverview.instanceCount,
+      current: overview.instanceCount,
+      delta: overview.instanceCount - baselineOverview.instanceCount,
+    },
+    {
+      property: 'Heaps',
+      baseline: baselineOverview.heaps.map((h) => h.name).join(', '),
+      current: overview.heaps.map((h) => h.name).join(', '),
+      delta: heapDeltaSummary(overview.heaps, baselineOverview.heaps),
+    },
+  ];
+  const schema: SchemaRegistry = {
+    query: {
+      property: {title: 'Property', columnType: 'text'},
+      baseline: {
+        title: 'Baseline',
+        columnType: 'text',
+        cellRenderer: maybeNumericRenderer,
+      },
+      current: {
+        title: 'Current',
+        columnType: 'text',
+        cellRenderer: maybeNumericRenderer,
+      },
+      delta: {
+        title: 'Δ',
+        columnType: 'text',
+        cellRenderer: maybeDeltaCountRenderer,
+      },
+    },
+  };
+  return m('div', {class: 'ah-card ah-mb-4'}, [
+    m('h3', {class: 'ah-sub-heading'}, 'General Information'),
+    m(DataGrid, {
+      schema,
+      rootSchema: 'query',
+      data: rows,
+      initialColumns: [
+        {id: 'property', field: 'property'},
+        {id: 'baseline', field: 'baseline'},
+        {id: 'current', field: 'current'},
+        {id: 'delta', field: 'delta'},
+      ],
+    }),
+  ]);
+}
+
+const maybeNumericRenderer: CellRenderer = (value: SqlValue) => {
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return countRenderer(value);
+  }
+  return {
+    content: m('span', String(value ?? '')),
+    align: 'left',
+  } satisfies CellRenderResult;
+};
+
+const maybeDeltaCountRenderer: CellRenderer = (value: SqlValue, row: Row) => {
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return deltaCountRenderer(value, row);
+  }
+  return {
+    content: m('span', {class: 'ah-muted'}, String(value ?? '')),
+    align: 'left',
+  } satisfies CellRenderResult;
+};
+
+function heapDeltaSummary(current: HeapInfo[], baseline: HeapInfo[]): string {
+  const cSet = new Set(current.map((h) => h.name));
+  const bSet = new Set(baseline.map((h) => h.name));
+  const added = [...cSet].filter((h) => !bSet.has(h));
+  const removed = [...bSet].filter((h) => !cSet.has(h));
+  if (added.length === 0 && removed.length === 0) return 'same';
+  const parts: string[] = [];
+  if (added.length) parts.push(`+${added.join(', ')}`);
+  if (removed.length) parts.push(`−${removed.join(', ')}`);
+  return parts.join('; ');
+}
+
+// ----- Bytes retained by heap ----------------------------------------------
+
+function renderHeapsCard(
+  overview: OverviewData,
+  baselineOverview: OverviewData | undefined,
+): m.Children {
+  // Only show heaps with non-zero retention on at least one side.
+  const filterNonZero = (heaps: HeapInfo[]) =>
+    heaps.filter((h) => h.java + h.native_ > 0);
+  const cHeaps = filterNonZero(overview.heaps);
+
+  if (baselineOverview === undefined) {
+    const rows: Row[] = withTotalRow(
+      cHeaps.map((h) => ({
+        heap: h.name,
+        java_size: h.java,
+        native_size: h.native_,
+        total_size: h.java + h.native_,
+      })),
+      'heap',
+    );
+    return m('div', {class: 'ah-card ah-mb-4'}, [
+      m('h3', {class: 'ah-sub-heading'}, 'Bytes Retained by Heap'),
+      m(DataGrid, {
+        schema: {
+          query: {
+            heap: {title: 'Heap', columnType: 'text'},
+            java_size: {
+              title: 'Java',
+              columnType: 'quantitative',
+              cellRenderer: sizeRenderer,
+            },
+            native_size: {
+              title: 'Native',
+              columnType: 'quantitative',
+              cellRenderer: sizeRenderer,
+            },
+            total_size: {
+              title: 'Total',
+              columnType: 'quantitative',
+              cellRenderer: sizeRenderer,
+            },
+          },
+        },
+        rootSchema: 'query',
+        data: rows,
+        initialColumns: [
+          {id: 'heap', field: 'heap'},
+          {id: 'java_size', field: 'java_size'},
+          {id: 'native_size', field: 'native_size'},
+          {id: 'total_size', field: 'total_size'},
+        ],
+      }),
+    ]);
+  }
+
+  const bHeaps = filterNonZero(baselineOverview.heaps);
+  const merged = mergeRows({
+    baseline: bHeaps.map((h) => ({
+      heap: h.name,
+      java_size: h.java,
+      native_size: h.native_,
+      total_size: h.java + h.native_,
+    })),
+    current: cHeaps.map((h) => ({
+      heap: h.name,
+      java_size: h.java,
+      native_size: h.native_,
+      total_size: h.java + h.native_,
+    })),
+    keyOf: (r) => String(r.heap ?? ''),
+    numericFields: ['java_size', 'native_size', 'total_size'],
+    primaryDeltaField: 'total_size',
+  });
+  // Rename the merged-row 'key' column to 'heap' for the schema.
+  const dataRows: Row[] = merged.map((r) => ({...r, heap: r[KEY_COL]}));
+  const schema = buildHeapsDiffSchema();
+  return m('div', {class: 'ah-card ah-mb-4'}, [
+    m('h3', {class: 'ah-sub-heading'}, 'Bytes Retained by Heap'),
+    m(DataGrid, {
+      schema,
+      rootSchema: 'query',
+      data: dataRows,
+      initialColumns: [
+        {id: 'heap', field: 'heap'},
+        {id: STATUS_COL, field: STATUS_COL},
+        {
+          id: deltaCol('total_size'),
+          field: deltaCol('total_size'),
+          sort: 'DESC',
+        },
+        {id: baselineCol('total_size'), field: baselineCol('total_size')},
+        {id: currentCol('total_size'), field: currentCol('total_size')},
+        {id: deltaCol('java_size'), field: deltaCol('java_size')},
+        {id: baselineCol('java_size'), field: baselineCol('java_size')},
+        {id: currentCol('java_size'), field: currentCol('java_size')},
+        {id: deltaCol('native_size'), field: deltaCol('native_size')},
+        {id: baselineCol('native_size'), field: baselineCol('native_size')},
+        {id: currentCol('native_size'), field: currentCol('native_size')},
+      ],
+    }),
+  ]);
+}
+
+function buildHeapsDiffSchema(): SchemaRegistry {
+  const cols: Record<string, ColumnDef> = {
+    heap: {title: 'Heap', columnType: 'text'},
+    [STATUS_COL]: {
+      title: 'Status',
+      columnType: 'text',
+      cellRenderer: statusRenderer,
+    },
+  };
+  const fields: Array<{field: string; title: string}> = [
+    {field: 'total_size', title: 'Total'},
+    {field: 'java_size', title: 'Java'},
+    {field: 'native_size', title: 'Native'},
+  ];
+  for (const f of fields) {
+    cols[deltaCol(f.field)] = {
+      title: 'Δ ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: deltaSizeRenderer,
+    };
+    cols[baselineCol(f.field)] = {
+      title: 'Baseline ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: sideSizeRenderer,
+    };
+    cols[currentCol(f.field)] = {
+      title: 'Current ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: sideSizeRenderer,
+    };
+  }
+  return {query: cols};
+}
+
+function withTotalRow<T extends Row>(rows: T[], keyField: keyof T): Row[] {
+  if (rows.length === 0) return rows;
+  const total: Row = {[keyField as string]: 'Total'};
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (k === keyField) continue;
+      const v = r[k];
+      if (typeof v === 'number') {
+        total[k] = ((total[k] as number | undefined) ?? 0) + v;
+      }
+    }
+  }
+  return [total, ...rows];
+}
+
+// ----- Duplicate sections ---------------------------------------------------
+
+function renderDuplicateBitmapsCard(
+  overview: OverviewData,
+  baselineOverview: OverviewData | undefined,
+  navigate: NavFn,
+): m.Children {
+  const cur = overview.duplicateBitmaps ?? [];
+  const base = baselineOverview?.duplicateBitmaps ?? [];
+  if (cur.length === 0 && base.length === 0 && !overview.hasFieldValues) {
+    return null;
+  }
+  if (cur.length === 0 && base.length === 0) {
+    return m(
+      'div',
+      {class: 'ah-card ah-mb-4'},
+      m('p', {class: 'ah-muted'}, 'No duplicate bitmaps found.'),
+    );
+  }
+  const isDiff = baselineOverview !== undefined;
+  const summary = makeSummary('group', cur, base, (g) => g.wastedBytes, isDiff);
+
+  if (!isDiff) {
+    return renderDuplicateSectionSingle({
+      title: 'Duplicate Bitmaps',
+      summary,
+      targetView: 'bitmaps',
+      linkLabel: 'View Bitmaps',
+      navigate,
+      data: cur.map((g) => ({
+        dimensions: `${g.width} × ${g.height}`,
+        groupKey: g.groupKey,
+        copies: g.count,
+        total_bytes: g.totalBytes,
+        wasted_bytes: g.wastedBytes,
+      })),
+      schema: {
+        query: {
+          dimensions: {title: 'Dimensions', columnType: 'text'},
+          groupKey: {title: 'Hash', columnType: 'text'},
+          copies: {
+            title: 'Copies',
+            columnType: 'quantitative',
+            cellRenderer: makeNavCountRenderer((row) =>
+              navigate('bitmaps', {filterKey: String(row.groupKey ?? '')}),
+            ),
+          },
+          total_bytes: {
+            title: 'Total',
+            columnType: 'quantitative',
+            cellRenderer: sizeRenderer,
+          },
+          wasted_bytes: {
+            title: 'Wasted',
+            columnType: 'quantitative',
+            cellRenderer: sizeRenderer,
+          },
+        },
+      },
+      initialColumns: [
+        {id: 'dimensions', field: 'dimensions'},
+        {id: 'groupKey', field: 'groupKey'},
+        {id: 'copies', field: 'copies'},
+        {id: 'total_bytes', field: 'total_bytes'},
+        {id: 'wasted_bytes', field: 'wasted_bytes'},
+      ],
+    });
+  }
+
+  // Diff variant. Outer-join on groupKey.
+  const bitmapNumericFields = ['copies', 'total_bytes', 'wasted_bytes'];
+  const baseRows = dedupeByKey(
+    base.map((g) => ({
+      key: g.groupKey,
+      dimensions: `${g.width} × ${g.height}`,
+      copies: g.count,
+      total_bytes: g.totalBytes,
+      wasted_bytes: g.wastedBytes,
+    })),
+    (r) => String(r.key),
+    bitmapNumericFields,
+  );
+  const curRows = dedupeByKey(
+    cur.map((g) => ({
+      key: g.groupKey,
+      dimensions: `${g.width} × ${g.height}`,
+      copies: g.count,
+      total_bytes: g.totalBytes,
+      wasted_bytes: g.wastedBytes,
+    })),
+    (r) => String(r.key),
+    bitmapNumericFields,
+  );
+  const merged = mergeRows({
+    baseline: baseRows,
+    current: curRows,
+    keyOf: (r) => String(r.key),
+    numericFields: bitmapNumericFields,
+    passThroughFields: ['dimensions'],
+    primaryDeltaField: 'wasted_bytes',
+  });
+  return renderDuplicateSectionDiff({
+    title: 'Duplicate Bitmaps',
+    summary,
+    targetView: 'bitmaps',
+    linkLabel: 'View Bitmaps diff',
+    navigate,
+    data: merged.map((r) => ({...r, groupKey: r[KEY_COL]})),
+    keyTitle: 'Hash',
+    keyField: 'groupKey',
+    extraTextFields: [{field: 'dimensions', title: 'Dimensions'}],
+    sizeFields: [
+      {field: 'wasted_bytes', title: 'Wasted'},
+      {field: 'total_bytes', title: 'Total'},
+    ],
+    countFields: [{field: 'copies', title: 'Copies'}],
+    primarySortField: 'wasted_bytes',
+  });
+}
+
+function renderDuplicateStringsCard(
+  overview: OverviewData,
+  baselineOverview: OverviewData | undefined,
+  navigate: NavFn,
+): m.Children {
+  const cur = overview.duplicateStrings ?? [];
+  const base = baselineOverview?.duplicateStrings ?? [];
+  if (cur.length === 0 && base.length === 0 && !overview.hasFieldValues) {
+    return null;
+  }
+  if (cur.length === 0 && base.length === 0) {
+    return m(
+      'div',
+      {class: 'ah-card ah-mb-4'},
+      m('p', {class: 'ah-muted'}, 'No duplicate strings found.'),
+    );
+  }
+  const isDiff = baselineOverview !== undefined;
+  const summary = makeSummary('group', cur, base, (g) => g.wastedBytes, isDiff);
+
+  if (!isDiff) {
+    return renderDuplicateSectionSingle({
+      title: 'Duplicate Strings',
+      summary,
+      targetView: 'strings',
+      linkLabel: 'View Strings',
+      navigate,
+      data: cur.map((g) => ({
+        value: g.value,
+        copies: g.count,
+        total_bytes: g.totalBytes,
+        wasted_bytes: g.wastedBytes,
+      })),
+      schema: {
+        query: {
+          value: {
+            title: 'Value',
+            columnType: 'text',
+            cellRenderer: makeStringRenderer((row) =>
+              navigate('strings', {q: String(row.value ?? '')}),
+            ),
+          },
+          copies: {
+            title: 'Copies',
+            columnType: 'quantitative',
+            cellRenderer: makeNavCountRenderer((row) =>
+              navigate('strings', {q: String(row.value ?? '')}),
+            ),
+          },
+          total_bytes: {
+            title: 'Total',
+            columnType: 'quantitative',
+            cellRenderer: sizeRenderer,
+          },
+          wasted_bytes: {
+            title: 'Wasted',
+            columnType: 'quantitative',
+            cellRenderer: sizeRenderer,
+          },
+        },
+      },
+      initialColumns: [
+        {id: 'value', field: 'value'},
+        {id: 'copies', field: 'copies'},
+        {id: 'total_bytes', field: 'total_bytes'},
+        {id: 'wasted_bytes', field: 'wasted_bytes'},
+      ],
+    });
+  }
+
+  const stringNumericFields = ['copies', 'total_bytes', 'wasted_bytes'];
+  const baseRows = dedupeByKey(
+    base.map((g) => ({
+      key: g.value,
+      copies: g.count,
+      total_bytes: g.totalBytes,
+      wasted_bytes: g.wastedBytes,
+    })),
+    (r) => String(r.key),
+    stringNumericFields,
+  );
+  const curRows = dedupeByKey(
+    cur.map((g) => ({
+      key: g.value,
+      copies: g.count,
+      total_bytes: g.totalBytes,
+      wasted_bytes: g.wastedBytes,
+    })),
+    (r) => String(r.key),
+    stringNumericFields,
+  );
+  const merged = mergeRows({
+    baseline: baseRows,
+    current: curRows,
+    keyOf: (r) => String(r.key),
+    numericFields: stringNumericFields,
+    primaryDeltaField: 'wasted_bytes',
+  });
+  return renderDuplicateSectionDiff({
+    title: 'Duplicate Strings',
+    summary,
+    targetView: 'strings',
+    linkLabel: 'View Strings diff',
+    navigate,
+    data: merged.map((r) => ({...r, value: r[KEY_COL]})),
+    keyTitle: 'Value',
+    keyField: 'value',
+    keyRenderer: makeStringRenderer((row) =>
+      navigate('strings', {q: String(row.value ?? '')}),
+    ),
+    extraTextFields: [],
+    sizeFields: [
+      {field: 'wasted_bytes', title: 'Wasted'},
+      {field: 'total_bytes', title: 'Total'},
+    ],
+    countFields: [{field: 'copies', title: 'Copies'}],
+    primarySortField: 'wasted_bytes',
+  });
+}
+
+function renderDuplicateArraysCard(
+  overview: OverviewData,
+  baselineOverview: OverviewData | undefined,
+  navigate: NavFn,
+): m.Children {
+  const cur = overview.duplicateArrays ?? [];
+  const base = baselineOverview?.duplicateArrays ?? [];
+  if (cur.length === 0 && base.length === 0) return null;
+  const isDiff = baselineOverview !== undefined;
+  const summary = makeSummary('group', cur, base, (g) => g.wastedBytes, isDiff);
+
+  if (!isDiff) {
+    return renderDuplicateSectionSingle({
+      title: 'Duplicate Primitive Arrays',
+      summary,
+      targetView: 'arrays',
+      linkLabel: 'View Arrays',
+      navigate,
+      data: cur.map((g) => ({
+        className: g.className,
+        arrayHash: g.arrayHash,
+        copies: g.count,
+        total_bytes: g.totalBytes,
+        wasted_bytes: g.wastedBytes,
+      })),
+      schema: {
+        query: {
+          className: {
+            title: 'Array Type',
+            columnType: 'text',
+            cellRenderer: (value: SqlValue) =>
+              ({
+                content: m(
+                  'button',
+                  {
+                    class: 'ah-link',
+                    onclick: () =>
+                      navigate('objects', {cls: String(value ?? '')}),
+                  },
+                  String(value ?? ''),
+                ),
+                align: 'left',
+              }) as CellRenderResult,
+          },
+          arrayHash: {title: 'Hash', columnType: 'text'},
+          copies: {
+            title: 'Copies',
+            columnType: 'quantitative',
+            cellRenderer: makeNavCountRenderer((row) =>
+              navigate('arrays', {arrayHash: String(row.arrayHash ?? '')}),
+            ),
+          },
+          total_bytes: {
+            title: 'Total',
+            columnType: 'quantitative',
+            cellRenderer: sizeRenderer,
+          },
+          wasted_bytes: {
+            title: 'Wasted',
+            columnType: 'quantitative',
+            cellRenderer: sizeRenderer,
+          },
+        },
+      },
+      initialColumns: [
+        {id: 'className', field: 'className'},
+        {id: 'arrayHash', field: 'arrayHash'},
+        {id: 'copies', field: 'copies'},
+        {id: 'total_bytes', field: 'total_bytes'},
+        {id: 'wasted_bytes', field: 'wasted_bytes'},
+      ],
+    });
+  }
+
+  const arrayNumericFields = ['copies', 'total_bytes', 'wasted_bytes'];
+  const baseRows = dedupeByKey(
+    base.map((g) => ({
+      key: g.arrayHash,
+      className: g.className,
+      copies: g.count,
+      total_bytes: g.totalBytes,
+      wasted_bytes: g.wastedBytes,
+    })),
+    (r) => String(r.key),
+    arrayNumericFields,
+  );
+  const curRows = dedupeByKey(
+    cur.map((g) => ({
+      key: g.arrayHash,
+      className: g.className,
+      copies: g.count,
+      total_bytes: g.totalBytes,
+      wasted_bytes: g.wastedBytes,
+    })),
+    (r) => String(r.key),
+    arrayNumericFields,
+  );
+  const merged = mergeRows({
+    baseline: baseRows,
+    current: curRows,
+    keyOf: (r) => String(r.key),
+    numericFields: arrayNumericFields,
+    passThroughFields: ['className'],
+    primaryDeltaField: 'wasted_bytes',
+  });
+  return renderDuplicateSectionDiff({
+    title: 'Duplicate Primitive Arrays',
+    summary,
+    targetView: 'arrays',
+    linkLabel: 'View Arrays diff',
+    navigate,
+    data: merged.map((r) => ({...r, arrayHash: r[KEY_COL]})),
+    keyTitle: 'Hash',
+    keyField: 'arrayHash',
+    extraTextFields: [{field: 'className', title: 'Array Type'}],
+    sizeFields: [
+      {field: 'wasted_bytes', title: 'Wasted'},
+      {field: 'total_bytes', title: 'Total'},
+    ],
+    countFields: [{field: 'copies', title: 'Copies'}],
+    primarySortField: 'wasted_bytes',
+  });
+}
+
+// ----- Shared helpers for duplicate sections -------------------------------
+
+interface SingleSectionOpts {
+  readonly title: string;
+  readonly summary: m.Children;
+  readonly targetView: string;
+  readonly linkLabel: string;
+  readonly navigate: NavFn;
+  readonly data: Row[];
+  readonly schema: SchemaRegistry;
+  readonly initialColumns: Array<{id: string; field: string}>;
+}
+
+function renderDuplicateSectionSingle(opts: SingleSectionOpts): m.Children {
+  return m('div', {class: 'ah-card ah-mb-4'}, [
+    m('h3', {class: 'ah-sub-heading'}, opts.title),
     m('p', {class: 'ah-desc'}, [
-      groupCount +
-        ' group' +
-        (groupCount > 1 ? 's' : '') +
-        ' detected, wasting ',
-      m('span', {class: 'ah-mono ah-semibold'}, fmtSize(totalWasted)),
-      '. ',
+      opts.summary,
+      ' ',
       m(
         'button',
         {
           class: 'ah-link--alt',
-          onclick: () => navigate(targetView as NavState['view']),
+          onclick: () => opts.navigate(opts.targetView as NavState['view']),
         },
-        linkLabel,
+        opts.linkLabel,
       ),
     ]),
-    m('div', {class: 'ah-dup-grid-container'}, [
-      m(DataGrid, {
-        schema,
-        rootSchema: 'query',
-        data,
-        initialColumns: columns,
-        fillHeight: true,
-      }),
-    ]),
+    m(DataGrid, {
+      schema: opts.schema,
+      rootSchema: 'query',
+      data: opts.data,
+      initialColumns: opts.initialColumns,
+    }),
   ]);
 }
 
-interface OverviewViewAttrs {
-  readonly overview: OverviewData;
+interface DiffSectionOpts {
+  readonly title: string;
+  readonly summary: m.Children;
+  readonly targetView: string;
+  readonly linkLabel: string;
   readonly navigate: NavFn;
+  readonly data: Row[];
+  readonly keyTitle: string;
+  readonly keyField: string;
+  readonly keyRenderer?: CellRenderer;
+  readonly extraTextFields: ReadonlyArray<{field: string; title: string}>;
+  readonly sizeFields: ReadonlyArray<{field: string; title: string}>;
+  readonly countFields: ReadonlyArray<{field: string; title: string}>;
+  /** Numeric field used for default sort by `|Δ|` desc. */
+  readonly primarySortField: string;
 }
-function OverviewView(): m.Component<OverviewViewAttrs> {
-  return {
-    view(vnode) {
-      const {overview, navigate} = vnode.attrs;
-      const heapIndices: number[] = [];
-      for (let i = 0; i < overview.heaps.length; i++) {
-        const h = overview.heaps[i];
-        if (h.java + h.native_ > 0) {
-          heapIndices.push(i);
-        }
-      }
-      const heaps = heapIndices.map((i) => overview.heaps[i]);
-      const totalJava = heaps.reduce((a, h) => a + h.java, 0);
-      const totalNative = heaps.reduce((a, h) => a + h.native_, 0);
 
-      const heapRows: Row[] = [
-        {
-          heap: 'Total',
-          java_size: totalJava,
-          native_size: totalNative,
-          total_size: totalJava + totalNative,
-        },
-        ...heaps.map((h) => ({
-          heap: h.name,
-          java_size: h.java,
-          native_size: h.native_,
-          total_size: h.java + h.native_,
-        })),
-      ];
-
-      const infoRows: Row[] = [
-        {
-          property: 'Instances',
-          value: overview.instanceCount.toLocaleString(),
-        },
-        {property: 'Heaps', value: heaps.map((h) => h.name).join(', ')},
-      ];
-
-      return m('div', {class: 'ah-view-scroll'}, [
-        m('h2', {class: 'ah-view-heading'}, 'Overview'),
-
-        m('div', {class: 'ah-card ah-mb-4'}, [
-          m('h3', {class: 'ah-sub-heading'}, 'General Information'),
-          m(DataGrid, {
-            schema: INFO_SCHEMA,
-            rootSchema: 'query',
-            data: infoRows,
-            initialColumns: [
-              {id: 'property', field: 'property'},
-              {id: 'value', field: 'value'},
-            ],
-          }),
-        ]),
-        m('div', {class: 'ah-card'}, [
-          m('h3', {class: 'ah-sub-heading'}, 'Bytes Retained by Heap'),
-          m(DataGrid, {
-            schema: HEAP_SCHEMA,
-            rootSchema: 'query',
-            data: heapRows,
-            initialColumns: [
-              {id: 'heap', field: 'heap'},
-              {id: 'java_size', field: 'java_size'},
-              {id: 'native_size', field: 'native_size'},
-              {id: 'total_size', field: 'total_size'},
-            ],
-          }),
-        ]),
-        overview.duplicateBitmaps && overview.duplicateBitmaps.length > 0
-          ? renderDuplicateSection(
-              'Duplicate Bitmaps',
-              overview.duplicateBitmaps.length,
-              overview.duplicateBitmaps.reduce((a, g) => a + g.wastedBytes, 0),
-              'bitmaps',
-              'View Bitmaps',
-              navigate,
-              makeDuplicateBitmapSchema(navigate),
-              overview.duplicateBitmaps.map((g) => ({
-                dimensions: `${g.width} \u00d7 ${g.height}`,
-                groupKey: g.groupKey,
-                copies: g.count,
-                total_bytes: g.totalBytes,
-                wasted_bytes: g.wastedBytes,
-              })),
-              [
-                {id: 'dimensions', field: 'dimensions'},
-                {id: 'groupKey', field: 'groupKey'},
-                {id: 'copies', field: 'copies'},
-                {id: 'total_bytes', field: 'total_bytes'},
-                {id: 'wasted_bytes', field: 'wasted_bytes'},
-              ],
-            )
-          : overview.hasFieldValues
-            ? m(
-                'div',
-                {class: 'ah-card ah-mt-4 ah-mb-4'},
-                m('p', {class: 'ah-muted'}, 'No duplicate bitmaps found.'),
-              )
-            : null,
-        overview.duplicateStrings && overview.duplicateStrings.length > 0
-          ? renderDuplicateSection(
-              'Duplicate Strings',
-              overview.duplicateStrings.length,
-              overview.duplicateStrings.reduce((a, g) => a + g.wastedBytes, 0),
-              'strings',
-              'View Strings',
-              navigate,
-              makeDuplicateStringSchema(navigate),
-              overview.duplicateStrings.map((g) => ({
-                value: g.value,
-                copies: g.count,
-                total_bytes: g.totalBytes,
-                wasted_bytes: g.wastedBytes,
-              })),
-              [
-                {id: 'value', field: 'value'},
-                {id: 'copies', field: 'copies'},
-                {id: 'total_bytes', field: 'total_bytes'},
-                {id: 'wasted_bytes', field: 'wasted_bytes'},
-              ],
-            )
-          : overview.hasFieldValues
-            ? m(
-                'div',
-                {class: 'ah-card ah-mb-4'},
-                m('p', {class: 'ah-muted'}, 'No duplicate strings found.'),
-              )
-            : null,
-        overview.duplicateArrays && overview.duplicateArrays.length > 0
-          ? renderDuplicateSection(
-              'Duplicate Primitive Arrays',
-              overview.duplicateArrays.length,
-              overview.duplicateArrays.reduce((a, g) => a + g.wastedBytes, 0),
-              'arrays',
-              'View Arrays',
-              navigate,
-              makeDuplicateArraySchema(navigate),
-              overview.duplicateArrays.map((g) => ({
-                className: g.className,
-                arrayHash: g.arrayHash,
-                copies: g.count,
-                total_bytes: g.totalBytes,
-                wasted_bytes: g.wastedBytes,
-              })),
-              [
-                {id: 'className', field: 'className'},
-                {id: 'arrayHash', field: 'arrayHash'},
-                {id: 'copies', field: 'copies'},
-                {id: 'total_bytes', field: 'total_bytes'},
-                {id: 'wasted_bytes', field: 'wasted_bytes'},
-              ],
-            )
-          : null,
-      ]);
+function renderDuplicateSectionDiff(opts: DiffSectionOpts): m.Children {
+  const cols: Record<string, ColumnDef> = {
+    [opts.keyField]: {
+      title: opts.keyTitle,
+      columnType: 'text',
+      cellRenderer: opts.keyRenderer,
+    },
+    [STATUS_COL]: {
+      title: 'Status',
+      columnType: 'text',
+      cellRenderer: statusRenderer,
     },
   };
+  for (const tf of opts.extraTextFields) {
+    cols[tf.field] = {title: tf.title, columnType: 'text'};
+  }
+  for (const f of opts.sizeFields) {
+    cols[deltaCol(f.field)] = {
+      title: 'Δ ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: deltaSizeRenderer,
+    };
+    cols[baselineCol(f.field)] = {
+      title: 'Baseline ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: sideSizeRenderer,
+    };
+    cols[currentCol(f.field)] = {
+      title: 'Current ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: sideSizeRenderer,
+    };
+  }
+  for (const f of opts.countFields) {
+    cols[deltaCol(f.field)] = {
+      title: 'Δ ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: deltaCountRenderer,
+    };
+    cols[baselineCol(f.field)] = {
+      title: 'Baseline ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: sideCountRenderer,
+    };
+    cols[currentCol(f.field)] = {
+      title: 'Current ' + f.title,
+      columnType: 'quantitative',
+      cellRenderer: sideCountRenderer,
+    };
+  }
+  const initialColumns: Array<{
+    id: string;
+    field: string;
+    sort?: 'ASC' | 'DESC';
+  }> = [
+    {id: opts.keyField, field: opts.keyField},
+    {id: STATUS_COL, field: STATUS_COL},
+  ];
+  for (const tf of opts.extraTextFields) {
+    initialColumns.push({id: tf.field, field: tf.field});
+  }
+  for (const f of [...opts.sizeFields, ...opts.countFields]) {
+    if (f.field === opts.primarySortField) {
+      initialColumns.push({
+        id: deltaCol(f.field),
+        field: deltaCol(f.field),
+        sort: 'DESC',
+      });
+    } else {
+      initialColumns.push({id: deltaCol(f.field), field: deltaCol(f.field)});
+    }
+    initialColumns.push({
+      id: baselineCol(f.field),
+      field: baselineCol(f.field),
+    });
+    initialColumns.push({id: currentCol(f.field), field: currentCol(f.field)});
+  }
+  return m('div', {class: 'ah-card ah-mb-4'}, [
+    m('h3', {class: 'ah-sub-heading'}, opts.title),
+    m('p', {class: 'ah-desc'}, [
+      opts.summary,
+      ' ',
+      m(
+        'button',
+        {
+          class: 'ah-link--alt',
+          onclick: () => opts.navigate(opts.targetView as NavState['view']),
+        },
+        opts.linkLabel,
+      ),
+    ]),
+    m(DataGrid, {
+      schema: {query: cols},
+      rootSchema: 'query',
+      data: opts.data,
+      initialColumns,
+    }),
+  ]);
+}
+
+function makeNavCountRenderer(onclick: (row: Row) => void): CellRenderer {
+  return (value: SqlValue, row: Row): CellRenderResult => ({
+    content: m(
+      'button',
+      {class: 'ah-link', onclick: () => onclick(row)},
+      String(value ?? '0'),
+    ),
+    align: 'right',
+  });
+}
+
+function makeStringRenderer(onclick: (row: Row) => void): CellRenderer {
+  return (value: SqlValue, row: Row): CellRenderResult => {
+    const s = String(value ?? '');
+    const display = s.length > 200 ? s.slice(0, 200) + '…' : s;
+    return {
+      content: m(
+        'button',
+        {
+          class: 'ah-link ah-mono ah-break-all ah-str-color',
+          onclick: () => onclick(row),
+        },
+        '"' + display + '"',
+      ),
+      align: 'left',
+    };
+  };
+}
+
+interface DuplicateGroupLike {
+  readonly wastedBytes: number;
+}
+
+function makeSummary<T extends DuplicateGroupLike>(
+  unit: string,
+  cur: ReadonlyArray<T>,
+  base: ReadonlyArray<T>,
+  wastedBytes: (g: T) => number,
+  isDiff: boolean,
+): m.Children {
+  const cWasted = cur.reduce((a, g) => a + wastedBytes(g), 0);
+  if (!isDiff) {
+    return [
+      cur.length +
+        ' ' +
+        unit +
+        (cur.length !== 1 ? 's' : '') +
+        ' detected, wasting ',
+      m('span', {class: 'ah-mono ah-semibold'}, fmtSize(cWasted)),
+      '.',
+    ];
+  }
+  const bWasted = base.reduce((a, g) => a + wastedBytes(g), 0);
+  const dWasted = cWasted - bWasted;
+  const dGroups = cur.length - base.length;
+  return [
+    `${cur.length} ${unit}${cur.length !== 1 ? 's' : ''} `,
+    m('span', {class: 'ah-mono'}, `(${dGroups >= 0 ? '+' : ''}${dGroups})`),
+    ', wasting ',
+    m('span', {class: 'ah-mono ah-semibold'}, fmtSize(cWasted)),
+    ' ',
+    m(
+      'span',
+      {
+        class: 'ah-mono',
+        style:
+          dWasted > 0
+            ? {color: 'var(--pf-color-danger)'}
+            : dWasted < 0
+              ? {color: 'var(--pf-color-success)'}
+              : {color: 'var(--pf-color-text-muted)'},
+      },
+      `(${dWasted >= 0 ? '+' : '−'}${fmtSize(Math.abs(dWasted))})`,
+    ),
+    '.',
+  ];
 }
 
 export default OverviewView;

@@ -92,12 +92,14 @@
   flex: 1;
 }
 
-// Header strip rendered above .ah-main when a trace contains > 1 heap dump.
-// Lives at the same top-level location reserved for cross-cutting controls
-// (the eventual baseline / diff status header will render alongside this).
-.ah-dump-selector {
+// Combined top bar that hosts the primary dump selector + baseline pool
+// controls. Only rendered when at least one of those has something to show
+// — single-trace, no-diff workflows never see this row, keeping the page
+// chrome free for the Overview tab's "Diff against another trace" CTA.
+.ah-top-bar {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
@@ -106,8 +108,25 @@
   font-size: 0.875rem;
 }
 
-.ah-dump-selector__label {
+// Collapsed state: the component still renders so the hidden file input
+// stays mounted (so the Overview-tab CTA can fire the picker) but it
+// claims no visual space.
+.ah-top-bar--hidden {
+  display: none;
+}
+
+.ah-top-bar__label {
   color: var(--pf-color-text-hint);
+}
+
+.ah-top-bar__separator {
+  color: var(--pf-color-border);
+  margin: 0 0.25rem;
+}
+
+.ah-top-bar__section-title {
+  font-weight: 600;
+  color: var(--pf-color-text-muted);
 }
 
 .ah-error-text {
@@ -402,4 +421,28 @@
 }
 .ah-mt-4 {
   margin-top: 1rem;
+}
+
+// ----- Diff mode -----------------------------------------------------------
+// All diff visuals (delta cell colour, status text, status filter chips,
+// baseline status header) are built from Perfetto widgets and tokens —
+// Button, Chip, Callout, SegmentedButtons, --pf-color-success/danger/warning.
+// No bespoke header strip, no bespoke pill chrome.
+//
+// Slim layout for the per-instance status-row inside the baseline-status
+// Callout: filename label, mode toggle, close button laid out as flex.
+
+.ah-baseline-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.ah-baseline-status__filename {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

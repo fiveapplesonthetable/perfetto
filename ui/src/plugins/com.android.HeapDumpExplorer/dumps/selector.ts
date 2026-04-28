@@ -25,21 +25,26 @@ interface DumpSelectorAttrs {
 }
 
 /**
- * Header strip selector that disambiguates which heap dump every aggregating
- * query in the page filters on. Renders nothing when the trace contains a
- * single dump — multi-dump traces are rare, and showing the selector in the
- * common case would just be visual noise.
+ * True when the primary trace contains more than one heap dump and the
+ * selector should be visible. The top bar uses this to decide whether to
+ * render a row at all.
+ */
+export function shouldShowDumpSelector(): boolean {
+  return getDumps().length > 1 && getActive() !== null;
+}
+
+/**
+ * Inline content (no row wrapper) for the primary dump selector. Returns
+ * null when the trace has at most one dump — the row container itself is
+ * suppressed by the parent in that case so we never waste vertical space.
  */
 export class DumpSelector implements m.ClassComponent<DumpSelectorAttrs> {
   view({attrs}: m.Vnode<DumpSelectorAttrs>): m.Children {
+    if (!shouldShowDumpSelector()) return null;
     const dumps = getDumps();
-    const active = getActive();
-    if (dumps.length <= 1 || active === null) return null;
-
-    return m(
-      'div',
-      {class: 'ah-dump-selector'},
-      m('span', {class: 'ah-dump-selector__label'}, 'Heap dump:'),
+    const active = getActive()!;
+    return [
+      m('span', {class: 'ah-top-bar__label'}, 'Heap dump:'),
       m(
         PopupMenu,
         {
@@ -59,7 +64,7 @@ export class DumpSelector implements m.ClassComponent<DumpSelectorAttrs> {
           }),
         ),
       ),
-    );
+    ];
   }
 }
 
