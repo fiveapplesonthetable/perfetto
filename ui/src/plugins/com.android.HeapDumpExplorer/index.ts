@@ -26,6 +26,8 @@ import {
   resetCachedOverview,
 } from './heap_dump_page';
 import {resetBitmapDumpDataCache} from './queries';
+import {loadDumps} from './dumps/loader';
+import {reset as resetDumps} from './dumps/state';
 
 export default class implements PerfettoPlugin {
   static readonly id = 'com.android.HeapDumpExplorer';
@@ -52,6 +54,12 @@ export default class implements PerfettoPlugin {
     resetFlamegraphSelection();
     resetInstanceTabs();
     resetCachedOverview();
+
+    // Enumerate the dumps in the trace and seed the active selection. Must
+    // run before any view fires its first query — the SQL filter helper
+    // depends on `state.active` being populated.
+    resetDumps();
+    await loadDumps(ctx.engine);
 
     ctx.plugins
       .getPlugin(HeapProfilePlugin)

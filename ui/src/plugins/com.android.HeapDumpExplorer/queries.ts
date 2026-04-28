@@ -38,6 +38,7 @@ import type {
 } from './types';
 import {fmtHex} from './format';
 import {shortClassName, SQL_PREAMBLE} from './components';
+import {dumpFilterSql} from './dumps/state';
 
 async function requireDominatorTree(engine: Engine): Promise<void> {
   await engine.query(SQL_PREAMBLE);
@@ -191,18 +192,20 @@ async function batchBitmapBufferHashes(
 }
 
 export async function getOverview(engine: Engine): Promise<OverviewData> {
+  const dumpFilter = dumpFilterSql('o');
   const countRes = await engine.query(
-    `SELECT count(*) as cnt FROM heap_graph_object WHERE reachable != 0`,
+    `SELECT count(*) as cnt FROM heap_graph_object o
+     WHERE o.reachable != 0 AND ${dumpFilter}`,
   );
   const instanceCount = countRes.iter({cnt: NUM}).cnt;
 
   const heapRes = await engine.query(`
     SELECT
-      ifnull(heap_type, 'default') AS heap,
-      SUM(self_size) AS java,
-      SUM(native_size) AS native_
-    FROM heap_graph_object
-    WHERE reachable != 0
+      ifnull(o.heap_type, 'default') AS heap,
+      SUM(o.self_size) AS java,
+      SUM(o.native_size) AS native_
+    FROM heap_graph_object o
+    WHERE o.reachable != 0 AND ${dumpFilter}
     GROUP BY heap
     ORDER BY heap
   `);
@@ -236,6 +239,7 @@ export async function getOverview(engine: Engine): Promise<OverviewData> {
     LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
     LEFT JOIN heap_graph_primitive f ON f.field_set_id = od.field_set_id
     WHERE o.reachable != 0
+      AND ${dumpFilter}
       AND (c.name = 'android.graphics.Bitmap'
         OR c.deobfuscated_name = 'android.graphics.Bitmap')
     GROUP BY o.id
@@ -331,6 +335,7 @@ export async function getOverview(engine: Engine): Promise<OverviewData> {
       JOIN heap_graph_class c ON o.type_id = c.id
       LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
       WHERE o.reachable != 0
+        AND ${dumpFilter}
         AND od.value_string IS NOT NULL
         AND (c.name = 'java.lang.String'
           OR c.deobfuscated_name = 'java.lang.String')
@@ -369,6 +374,7 @@ export async function getOverview(engine: Engine): Promise<OverviewData> {
     JOIN heap_graph_class c ON o.type_id = c.id
     LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
     WHERE o.reachable != 0
+      AND ${dumpFilter}
       AND od.array_data_hash IS NOT NULL
     GROUP BY o.type_id, od.array_data_hash
     HAVING cnt > 1
@@ -427,6 +433,7 @@ export async function getAllocations(
     JOIN heap_graph_class c ON o.type_id = c.id
     LEFT JOIN heap_graph_dominator_tree d ON d.id = o.id
     WHERE o.reachable != 0
+      AND ${dumpFilterSql('o')}
       ${hf}
     GROUP BY cls, heap
     ORDER BY retained DESC
@@ -472,6 +479,7 @@ export async function getRooted(engine: Engine): Promise<InstanceRow[]> {
     JOIN heap_graph_class c ON o.type_id = c.id
     LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
     WHERE d.idom_id IS NULL
+      AND ${dumpFilterSql('o')}
     ORDER BY d.dominated_size_bytes + d.dominated_native_size_bytes DESC
   `);
   return collectRows(res);
@@ -1388,14 +1396,16 @@ async function loadBitmapDumpData(
 ): Promise<BitmapDumpData | null> {
   if (cachedDumpData !== undefined) return cachedDumpData;
 
-  // Step 1: Find the Bitmap class object.
+  // Step 1: Find the Bitmap class object. In multi-dump traces there is a
+  // distinct Bitmap class object per dump — filter to the active dump so
+  // every downstream step (natives, buffers, blobs) lands in the right one.
   const classObjRes = await engine.query(`
     SELECT o.reference_set_id
     FROM heap_graph_object o
     JOIN heap_graph_class c ON o.type_id = c.id
-    WHERE (c.name LIKE '%Class<android.graphics.Bitmap>'
-      OR c.deobfuscated_name LIKE '%Class<android.graphics.Bitmap>')
-
+    WHERE ${dumpFilterSql('o')}
+      AND (c.name LIKE '%Class<android.graphics.Bitmap>'
+        OR c.deobfuscated_name LIKE '%Class<android.graphics.Bitmap>')
   `);
   const classIt = classObjRes.iter({reference_set_id: NUM_NULL});
   if (!classIt.valid() || classIt.reference_set_id === null) {
@@ -1602,6 +1612,7 @@ export async function search(
     LEFT JOIN heap_graph_dominator_tree d ON d.id = o.id
     LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
     WHERE o.reachable != 0
+      AND ${dumpFilterSql('o')}
       AND (c.name LIKE '%${escaped}%' ESCAPE '\\'
         OR c.deobfuscated_name LIKE '%${escaped}%' ESCAPE '\\')
     ORDER BY (ifnull(d.dominated_size_bytes, 0)
@@ -1625,6 +1636,7 @@ export async function getObjects(
     LEFT JOIN heap_graph_dominator_tree d ON d.id = o.id
     LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
     WHERE o.reachable != 0
+      AND ${dumpFilterSql('o')}
       AND (c.name = '${escaped}' OR c.deobfuscated_name = '${escaped}')
       ${hf}
     ORDER BY o.self_size + o.native_size DESC
@@ -1679,6 +1691,7 @@ export async function getStringList(engine: Engine): Promise<StringListRow[]> {
     LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
     LEFT JOIN heap_graph_dominator_tree d ON d.id = o.id
     WHERE o.reachable != 0
+      AND ${dumpFilterSql('o')}
       AND od.value_string IS NOT NULL
       AND (c.name = 'java.lang.String'
         OR c.deobfuscated_name = 'java.lang.String')
@@ -1748,6 +1761,7 @@ export async function getBitmapList(engine: Engine): Promise<BitmapListRow[]> {
     LEFT JOIN heap_graph_dominator_tree d ON d.id = o.id
     LEFT JOIN heap_graph_primitive f ON f.field_set_id = od.field_set_id
     WHERE o.reachable != 0
+      AND ${dumpFilterSql('o')}
       AND (c.name = 'android.graphics.Bitmap'
         OR c.deobfuscated_name = 'android.graphics.Bitmap')
     GROUP BY o.id

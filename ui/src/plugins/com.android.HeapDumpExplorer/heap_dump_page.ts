@@ -27,6 +27,7 @@ import type {NavState} from './nav_state';
 import type {OverviewData} from './types';
 import {nav, navigate, syncFromSubpage, setNavigateCallback} from './nav_state';
 import * as queries from './queries';
+import {resetBitmapDumpDataCache} from './queries';
 import OverviewView from './views/overview_view';
 import DominatorsView from './views/dominators_view';
 import ObjectView from './views/object_view';
@@ -40,6 +41,8 @@ import FlamegraphObjectsView, {
 } from './views/flamegraph_objects_view';
 import {SQL_PREAMBLE} from './components';
 import {NUM} from '../../trace_processor/query_result';
+import {DumpSelector} from './dumps/selector';
+import {getActive, getGen} from './dumps/state';
 
 // Each "Open in Heapdump Explorer" creates a closable flamegraph tab.
 let nextFgId = 0;
@@ -87,6 +90,23 @@ let overviewLoading = false;
 export function resetCachedOverview(): void {
   cachedOverview = null;
   overviewLoading = false;
+}
+
+// Generation we last reconciled against. When the active heap dump changes
+// the dump-state module bumps its gen counter and we wipe everything that was
+// computed against the previous dump (overview, ad-hoc tabs) so the next
+// render rebuilds from scratch against the new selection.
+let lastGen = -1;
+function reconcileDumpChange(): void {
+  const g = getGen();
+  if (g === lastGen) return;
+  lastGen = g;
+  resetCachedOverview();
+  resetFlamegraphSelection();
+  resetInstanceTabs();
+  // The bitmap-dump-data lookup is per-(upid,ts) — its cached result is
+  // wrong for the new dump and must be re-resolved on the next access.
+  resetBitmapDumpDataCache();
 }
 
 // Closable object tabs — clicking an object anywhere opens a new tab.
@@ -370,6 +390,7 @@ export class HeapDumpPage implements m.ClassComponent<HeapDumpPageAttrs> {
   view(vnode: m.Vnode<HeapDumpPageAttrs>) {
     syncFromSubpage(vnode.attrs.subpage);
     syncInstanceTabFromNav();
+    reconcileDumpChange();
 
     if (!HeapDumpPage.engine || !HeapDumpPage.hasHeapData) {
       return m(
@@ -383,21 +404,42 @@ export class HeapDumpPage implements m.ClassComponent<HeapDumpPageAttrs> {
       );
     }
 
+    const trace = HeapDumpPage.trace;
+    const selector = trace ? m(DumpSelector, {trace}) : null;
+
     if (!cachedOverview) {
+      // The dump-change reconcile clears cachedOverview but leaves
+      // overviewLoading at false, so kick off the next fetch from view().
+      // oncreate only fires once per route mount, so it can't cover the
+      // dump-switch case on its own.
+      if (!overviewLoading) {
+        this.loadOverview();
+      }
       return m(
         'div',
         {class: 'ah-page'},
+        selector,
         m('div', {class: 'ah-loading'}, m(Spinner, {easing: true})),
       );
     }
 
+    // The Tabs vnode is keyed on the active dump's generation so that view
+    // components (each owning a SQLDataSource bound to a snapshot of the
+    // active dump's filter SQL) are remounted on every selection change.
+    // Without this, the SQLDataSource keeps issuing queries against the old
+    // dump and the table contents look stale.
+    const active = getActive();
+    const tabsKey = active ? `${active.upid}:${active.ts}` : 'none';
+
     return m(
       'div',
       {class: 'ah-page'},
+      selector,
       m(
         'main',
         {class: 'ah-main'},
         m(Tabs, {
+          key: tabsKey,
           tabs: buildTabs(nav, HeapDumpPage.engine, cachedOverview),
           activeTabKey: getActiveTabKey(),
           onTabChange: handleTabChange,

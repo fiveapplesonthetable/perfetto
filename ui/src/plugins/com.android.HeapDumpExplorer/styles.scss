@@ -92,6 +92,24 @@
   flex: 1;
 }
 
+// Header strip rendered above .ah-main when a trace contains > 1 heap dump.
+// Lives at the same top-level location reserved for cross-cutting controls
+// (the eventual baseline / diff status header will render alongside this).
+.ah-dump-selector {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--pf-color-background);
+  border-bottom: 1px solid var(--pf-color-border);
+  font-size: 0.875rem;
+}
+
+.ah-dump-selector__label {
+  color: var(--pf-color-text-hint);
+}
+
 .ah-error-text {
   color: var(--pf-color-danger);
   padding: 1rem;
