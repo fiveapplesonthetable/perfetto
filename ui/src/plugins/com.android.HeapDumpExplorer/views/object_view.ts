@@ -563,6 +563,17 @@ function ObjectView(): m.Component<ObjectViewAttrs> {
           ),
           m('div', {class: 'ah-action-row'}, [
             m(InstanceLink, {row, navigate}),
+            row.className
+              ? m(
+                  'button',
+                  {
+                    class: 'ah-link',
+                    title: 'Open in Flamegraph filtered to this class',
+                    onclick: () => navigate('flamegraph', {cls: row.className}),
+                  },
+                  'Open in Flamegraph',
+                )
+              : null,
           ]),
         ]),
 

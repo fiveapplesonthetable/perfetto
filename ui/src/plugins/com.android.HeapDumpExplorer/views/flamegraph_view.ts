@@ -31,6 +31,9 @@ export interface FlamegraphViewAttrs {
   state: FlamegraphState | undefined;
   onStateChange: (state: FlamegraphState) => void;
   navigate: NavFn;
+  // One-shot: when set, seeds a SHOW_FROM_FRAME filter on this class
+  // name and is cleared from the URL after consumption.
+  initialClassFilter?: string;
 }
 
 function buildHeapGraphMetrics(
@@ -195,15 +198,38 @@ const FlamegraphView: m.ClosureComponent<FlamegraphViewAttrs> = () => {
 
       // Initialize state on first render or rebase to new metrics if dump
       // changed without the parent reseting state.
+      let state = attrs.state;
       if (
-        attrs.state === undefined ||
-        !metrics.some((mt) => mt.name === attrs.state!.selectedMetricName)
+        state === undefined ||
+        !metrics.some((mt) => mt.name === state!.selectedMetricName)
       ) {
-        attrs.onStateChange(
-          attrs.state === undefined
+        state =
+          state === undefined
             ? Flamegraph.createDefaultState(metrics)
-            : Flamegraph.updateState(attrs.state, metrics),
+            : Flamegraph.updateState(state, metrics);
+        attrs.onStateChange(state);
+      }
+
+      // If a class filter is requested via the URL and the same filter is
+      // not already present, append a SHOW_FROM_FRAME filter on the class.
+      // The check makes this idempotent — the URL stays bookmarkable, and
+      // the filter is not re-applied across redraws.
+      const cls = attrs.initialClassFilter;
+      if (cls) {
+        const exact = `^${cls}$`;
+        const alreadyApplied = state.filters.some(
+          (f) => f.kind === 'SHOW_FROM_FRAME' && f.filter === exact,
         );
+        if (!alreadyApplied) {
+          state = {
+            ...state,
+            filters: [
+              ...state.filters,
+              {kind: 'SHOW_FROM_FRAME', filter: exact},
+            ],
+          };
+          attrs.onStateChange(state);
+        }
       }
 
       return m(
@@ -212,7 +238,7 @@ const FlamegraphView: m.ClosureComponent<FlamegraphViewAttrs> = () => {
         m(FlamegraphPanel, {
           trace: attrs.trace,
           metrics,
-          state: attrs.state,
+          state,
           onStateChange: attrs.onStateChange,
         }),
       );

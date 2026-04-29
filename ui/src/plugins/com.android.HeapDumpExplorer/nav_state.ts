@@ -67,7 +67,9 @@ export function stateToSubpage(state: NavState): string {
     }
     case 'flamegraph': {
       const cls = state.params.cls;
-      return cls ? `flamegraph?cls=${encodeURIComponent(cls)}` : 'flamegraph';
+      // Encode cls in the path (not the query) because Perfetto's router
+      // strips unknown query args before handing the subpage to the page.
+      return cls ? `flamegraph_${encodeURIComponent(cls)}` : 'flamegraph';
     }
   }
 }
@@ -137,7 +139,12 @@ export function subpageToState(subpage: string | undefined): NavState {
       return {view: 'flamegraph-objects', params: n ? {name: n} : {}};
     }
     case 'flamegraph': {
-      const cls = sp.get('cls') ?? undefined;
+      // The cls token, if present, is encoded into the path as
+      // `flamegraph_{encoded}` (see stateToSubpage). Fall back to a query
+      // param if someone hand-crafted that form.
+      const cls = param
+        ? decodeURIComponent(param)
+        : sp.get('cls') ?? undefined;
       return {view: 'flamegraph', params: cls ? {cls} : {}};
     }
     default:

@@ -288,6 +288,8 @@ function buildTabs(
                 flamegraphPanelState = s;
               },
               navigate: navigateWithTabs,
+              initialClassFilter:
+                state.view === 'flamegraph' ? state.params.cls : undefined,
             }),
           },
         ]
