@@ -914,6 +914,12 @@ HEAP_GRAPH_OBJECT_TABLE = Table(
             cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
         ),
         C(
+            'root_thread_tid',
+            CppOptional(CppUint32()),
+            cpp_access=CppAccess.READ_AND_LOW_PERF_WRITE,
+            cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
+        ),
+        C(
             'root_distance',
             CppInt32(),
             flags=ColumnFlag.HIDDEN,
@@ -951,6 +957,11 @@ HEAP_GRAPH_OBJECT_TABLE = Table(
                 '''class this object is an instance of.''',
             'root_type':
                 '''if not NULL, this object is a GC root.''',
+            'root_thread_tid':
+                '''For ROOT_JAVA_FRAME objects: kernel TID of the thread whose
+                stack frame retains this object. Joinable to thread.tid. The
+                thread's full call stack at heap-dump time is in the trace's
+                perf_sample row at the same (ts, upid).''',
             'root_distance':
                 ''''''
         }))
@@ -1018,6 +1029,61 @@ HEAP_GRAPH_REFERENCE_TABLE = Table(
             'deobfuscated_field_name':
                 '''The deobfuscated name, if field_name was obfuscated and a
                 deobfuscation mapping was provided for it.'''
+        }))
+
+HEAP_GRAPH_THREAD_STACK_TABLE = Table(
+    python_module=__file__,
+    class_name='HeapGraphThreadStackTable',
+    sql_name='__intrinsic_heap_graph_thread_stack',
+    columns=[
+        C(
+            'graph_sample_ts',
+            CppInt64(),
+            cpp_access=CppAccess.READ,
+            cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
+        ),
+        C(
+            'upid',
+            CppUint32(),
+            cpp_access=CppAccess.READ,
+            cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
+        ),
+        C(
+            'utid',
+            CppUint32(),
+            cpp_access=CppAccess.READ,
+            cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
+        ),
+        C(
+            'callsite_id',
+            CppOptional(CppTableId(STACK_PROFILE_CALLSITE_TABLE)),
+            cpp_access=CppAccess.READ,
+            cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
+        ),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          One row per Java thread alive at the moment a heap graph dump
+          was taken. Same shape as `perf_sample` so existing flamegraph
+          aggregation works unchanged. NOT to be confused with
+          `perf_sample`, which holds CPU-event samples; the entries
+          here are heap-dump-time stack snapshots paired with a
+          specific HeapGraph by (graph_sample_ts, upid).
+        ''',
+        group='ART Heap Graphs',
+        columns={
+            'graph_sample_ts':
+                '''Timestamp of the HeapGraph dump this entry belongs to;
+                joins to heap_graph_object.graph_sample_ts.''',
+            'upid':
+                '''Process the dump was taken of.''',
+            'utid':
+                '''Java thread whose stack was sampled. Joinable to
+                `thread`.''',
+            'callsite_id':
+                '''Top-of-stack callsite. NULL when the thread had no
+                Java frames at the dump moment (e.g. signal catcher,
+                JIT pool, binder threads).'''
         }))
 
 VULKAN_MEMORY_ALLOCATIONS_TABLE = Table(
@@ -1088,6 +1154,7 @@ ALL_TABLES = [
     HEAP_GRAPH_CLASS_TABLE,
     HEAP_GRAPH_OBJECT_TABLE,
     HEAP_GRAPH_REFERENCE_TABLE,
+    HEAP_GRAPH_THREAD_STACK_TABLE,
     INSTRUMENTS_SAMPLE_TABLE,
     HEAP_PROFILE_ALLOCATION_TABLE,
     PACKAGE_LIST_TABLE,

@@ -78,21 +78,23 @@ HeapGraphModule::HeapGraphModule(ProtoImporterModuleContext* module_context,
 void HeapGraphModule::ParseTracePacketData(
     const protos::pbzero::TracePacket::Decoder& decoder,
     int64_t ts,
-    const TracePacketData&,
+    const TracePacketData& tpd,
     uint32_t field_id) {
   switch (field_id) {
     case TracePacket::kHeapGraphFieldNumber:
       ParseHeapGraph(decoder.trusted_packet_sequence_id(), ts,
-                     decoder.heap_graph());
+                     decoder.heap_graph(), tpd.sequence_state.get());
       return;
     default:
       break;
   }
 }
 
-void HeapGraphModule::ParseHeapGraph(uint32_t seq_id,
-                                     int64_t ts,
-                                     protozero::ConstBytes blob) {
+void HeapGraphModule::ParseHeapGraph(
+    uint32_t seq_id,
+    int64_t ts,
+    protozero::ConstBytes blob,
+    PacketSequenceStateGeneration* sequence_state) {
   auto* heap_graph_tracker = HeapGraphTracker::Get(context_);
   protos::pbzero::HeapGraph::Decoder heap_graph(blob.data, blob.size);
   UniquePid upid = context_->process_tracker->GetOrCreateProcess(
@@ -243,6 +245,50 @@ void HeapGraphModule::ParseHeapGraph(uint32_t seq_id,
       break;
     }
     heap_graph_tracker->AddRoot(seq_id, upid, ts, std::move(src_root));
+  }
+  // Per-Java-frame root attribution. ROOT_JAVA_FRAME entries land here
+  // (rather than in `roots` above); the consumer joins from
+  // heap_graph_object.root_thread_tid to the matching
+  // heap_graph_thread_stack row for the holding thread's full stack.
+  for (auto it = heap_graph.frame_roots(); it; ++it) {
+    protos::pbzero::HeapGraphFrameRoot::Decoder entry(*it);
+    HeapGraphTracker::SourceFrameRoot src_fr;
+    src_fr.object_id = entry.object_id();
+    src_fr.thread_tid = entry.thread_id();
+    heap_graph_tracker->AddFrameRoot(seq_id, upid, ts, src_fr);
+  }
+  // Per-thread stack snapshots. tid → utid is resolved here because
+  // the tracker doesn't see ProcessTracker directly. callstack_iid is
+  // resolved against the captured sequence_state in FinalizeProfile,
+  // by which time the trailing InternedData packet has been parsed.
+  // SourceThreadStack holds an owning RefPtr to the generation so the
+  // resolution survives a future producer that might flip
+  // incremental_state_cleared mid-session.
+  const auto pid = static_cast<uint32_t>(heap_graph.pid());
+  for (auto it = heap_graph.thread_stacks(); it; ++it) {
+    protos::pbzero::HeapGraphThreadStack::Decoder entry(*it);
+    if (!entry.has_tid()) {
+      // utid=0 aliases to the kernel swapper thread — refuse rather
+      // than emit a misleading row.
+      context_->storage->IncrementIndexedStats(
+          stats::heap_graph_malformed_packet, static_cast<int>(upid));
+      continue;
+    }
+    HeapGraphTracker::SourceThreadStack src_ts;
+    src_ts.utid = context_->process_tracker->UpdateThread(entry.tid(), pid);
+    if (entry.has_thread_name()) {
+      // Surface names from processes without ftrace coverage; kOther
+      // priority means a real ftrace name still wins.
+      const protozero::ConstChars name = entry.thread_name();
+      context_->process_tracker->UpdateThreadName(
+          src_ts.utid,
+          context_->storage->InternString(
+              base::StringView(name.data, name.size)),
+          ThreadNamePriority::kOther);
+    }
+    src_ts.callstack_iid = entry.callstack_iid();
+    src_ts.sequence_state.reset(sequence_state);
+    heap_graph_tracker->AddThreadStack(seq_id, upid, ts, std::move(src_ts));
   }
   if (!heap_graph.continued()) {
     heap_graph_tracker->FinalizeProfile(seq_id);

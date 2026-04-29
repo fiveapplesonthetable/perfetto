@@ -132,6 +132,57 @@ message HeapGraphObject {
   repeated uint64 runtime_internal_object_id = 10 [packed = true];
 }
 
+// Per-object attribution for ROOT_JAVA_FRAME GC roots: identifies the
+// thread whose Java stack retains the object. Only emitted for
+// ROOT_JAVA_FRAME — other root kinds (sticky class, VM internal, JNI
+// global, etc.) are not associated with a specific live thread frame and
+// continue to use HeapGraphRoot.
+//
+// The thread's full call stack at heap-dump time is available via
+// HeapGraph.thread_stacks on the same heap dump — so a consumer can
+// join from the heap dominator straight to the holding thread's stack
+// with one trace_processor query.
+message HeapGraphFrameRoot {
+  // Object retained by this Java-frame root.
+  optional uint64 object_id = 1;
+  // Kernel TID of the thread whose frame holds the reference. Producers
+  // are expected to convert any internal/runtime thread id (e.g. ART's
+  // RootInfo::GetThreadId()) to the kernel TID before emission so that
+  // consumers can join directly to the `thread` table on tid.
+  optional uint32 thread_id = 2;
+  // Reserved for a future per-frame attribution field (e.g. interning
+  // key into InternedData.frames). Not emitted by current producers and
+  // not consumed by trace_processor.
+  reserved 3;
+}
+
+// Snapshot of a single Java thread's call stack at the moment a
+// HeapGraph dump was taken. One entry per live Java thread per dump.
+//
+// Coupled tightly with the dump: the (graph_sample_ts, upid) of the
+// HeapGraph this entry rides in is the thread-stack sample's timestamp
+// and process. Reusing PerfSample for this would conflate CPU-event
+// sampling with heap-dump-time stacks; instead we surface the data on
+// its own dedicated table in trace_processor
+// (`heap_graph_thread_stack`) which is shaped like `perf_sample`
+// (`(ts, utid, callsite_id)`) so existing flamegraph aggregation works
+// unchanged.
+//
+// `callstack_iid` references InternedData.callstacks on the same packet
+// sequence, exactly as for any other stack profiling consumer; the
+// frames it walks live in InternedData.frames + InternedData.function_names.
+message HeapGraphThreadStack {
+  // Kernel TID of the Java thread.
+  optional uint32 tid = 1;
+  // Human-readable thread name (e.g. "main", "RenderThread", "FinalizerDaemon").
+  optional string thread_name = 2;
+  // Interning key into InternedData.callstacks for this thread's stack.
+  // 0 means the thread had no Java frames at the dump moment (e.g.
+  // signal catcher, JIT pool, binder threads); the row is still emitted
+  // so consumers can see the thread existed, but with a NULL callsite.
+  optional uint64 callstack_iid = 3;
+}
+
 message HeapGraph {
   optional int32 pid = 1;
 
@@ -147,6 +198,19 @@ message HeapGraph {
   // All live objects are reachable from the roots. All other objects are
   // garbage.
   repeated HeapGraphRoot roots = 7;
+
+  // Java-frame roots with per-object attribution to the retaining thread and
+  // stack frame. Disjoint from `roots` for ROOT_JAVA_FRAME entries: when this
+  // field is populated, ROOT_JAVA_FRAME objects appear here instead of in
+  // `roots`. Older producers that don't emit this still populate
+  // ROOT_JAVA_FRAME via `roots`; consumers should accept either.
+  repeated HeapGraphFrameRoot frame_roots = 11;
+
+  // One snapshot per live Java thread at the moment of this dump. The call
+  // stacks reference InternedData.callstacks (and through it
+  // InternedData.frames + function_names), which are emitted on the same
+  // packet sequence by the producer.
+  repeated HeapGraphThreadStack thread_stacks = 12;
 
   // Types used in HeapGraphObjects.
   repeated HeapGraphType types = 9;

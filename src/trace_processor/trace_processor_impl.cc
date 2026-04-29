@@ -1128,6 +1128,8 @@ TraceProcessorImpl::GetUnfinalizedStaticTables(TraceStorage* storage) {
                             storage->mutable_heap_graph_reference_table());
   AddUnfinalizedStaticTable(tables, storage->mutable_heap_graph_class_table());
   AddUnfinalizedStaticTable(tables,
+                            storage->mutable_heap_graph_thread_stack_table());
+  AddUnfinalizedStaticTable(tables,
                             storage->mutable_heap_profile_allocation_table());
   AddUnfinalizedStaticTable(tables, storage->mutable_perf_sample_table());
   AddUnfinalizedStaticTable(tables,

@@ -619,6 +619,15 @@ class TraceStorage {
     return &heap_graph_reference_table_;
   }
 
+  const tables::HeapGraphThreadStackTable& heap_graph_thread_stack_table()
+      const {
+    return heap_graph_thread_stack_table_;
+  }
+
+  tables::HeapGraphThreadStackTable* mutable_heap_graph_thread_stack_table() {
+    return &heap_graph_thread_stack_table_;
+  }
+
   const tables::VulkanMemoryAllocationsTable& vulkan_memory_allocations_table()
       const {
     return vulkan_memory_allocations_table_;
@@ -1165,6 +1174,8 @@ class TraceStorage {
   tables::HeapGraphObjectTable heap_graph_object_table_{&string_pool_};
   tables::HeapGraphClassTable heap_graph_class_table_{&string_pool_};
   tables::HeapGraphReferenceTable heap_graph_reference_table_{&string_pool_};
+  tables::HeapGraphThreadStackTable heap_graph_thread_stack_table_{
+      &string_pool_};
 
   tables::VulkanMemoryAllocationsTable vulkan_memory_allocations_table_{
       &string_pool_};

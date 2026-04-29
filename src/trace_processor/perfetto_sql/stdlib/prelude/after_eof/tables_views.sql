@@ -1118,6 +1118,11 @@ CREATE PERFETTO VIEW heap_graph_object (
   type_id JOINID(heap_graph_class.id),
   -- If not NULL, this object is a GC root.
   root_type STRING,
+  -- For ROOT_JAVA_FRAME objects: kernel TID of the thread whose stack frame
+  -- retains this object. NULL when the producer did not emit per-Java-frame
+  -- attribution. Joinable to thread.tid; the thread's full call stack at
+  -- heap-dump time lives in perf_sample at the same (ts, upid).
+  root_thread_tid LONG,
   -- Distance from the root object.
   root_distance LONG
 ) AS
@@ -1132,8 +1137,36 @@ SELECT
   heap_type,
   type_id,
   root_type,
+  root_thread_tid,
   root_distance
 FROM __intrinsic_heap_graph_object;
+
+-- One row per Java thread that was alive when a heap dump was taken.
+-- Same shape as `perf_sample` (`(ts, utid, callsite_id)`) so existing
+-- flamegraph SQL aggregates against it unchanged. Disjoint from
+-- `perf_sample` itself: those entries are CPU-event samples, while the
+-- rows here are heap-dump-time stack snapshots paired with a specific
+-- HeapGraph by (graph_sample_ts, upid).
+CREATE PERFETTO VIEW heap_graph_thread_stack (
+  -- Unique identifier for this row.
+  id ID,
+  -- Timestamp of the HeapGraph dump this entry belongs to.
+  graph_sample_ts TIMESTAMP,
+  -- Process the dump was taken of.
+  upid JOINID(process.id),
+  -- Java thread whose stack was sampled.
+  utid JOINID(thread.id),
+  -- Top-of-stack callsite. NULL when the thread had no Java frames at
+  -- the dump moment (e.g. signal catcher, JIT pool, binder threads).
+  callsite_id JOINID(stack_profile_callsite.id)
+) AS
+SELECT
+  id,
+  graph_sample_ts,
+  upid,
+  utid,
+  callsite_id
+FROM __intrinsic_heap_graph_thread_stack;
 
 -- Many-to-many mapping between heap_graph_object.
 --

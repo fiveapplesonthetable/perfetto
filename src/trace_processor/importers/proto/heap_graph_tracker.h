@@ -31,6 +31,8 @@
 #include "perfetto/ext/base/circular_queue.h"
 #include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/ext/base/string_view.h"
+#include "perfetto/trace_processor/ref_counted.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/profiler_tables_py.h"
 #include "src/trace_processor/types/destructible.h"
@@ -95,6 +97,24 @@ class HeapGraphTracker : public Destructible {
     std::vector<uint64_t> object_ids;
   };
 
+  // ROOT_JAVA_FRAME root with per-object thread attribution. Emitted
+  // disjoint from SourceRoot so per-object info isn't lost to the
+  // type-bucketed list.
+  struct SourceFrameRoot {
+    uint64_t object_id = 0;
+    uint32_t thread_tid = 0;
+  };
+
+  // One Java thread's call stack at a heap-dump moment. utid is
+  // resolved at parse time. callstack_iid is resolved at FinalizeProfile
+  // through `sequence_state`, which is held as an owning RefPtr so the
+  // generation lives until we walk its StackProfileSequenceState.
+  struct SourceThreadStack {
+    UniqueTid utid = 0;
+    uint64_t callstack_iid = 0;
+    RefPtr<PacketSequenceStateGeneration> sequence_state;
+  };
+
   explicit HeapGraphTracker(TraceStorage* storage);
 
   static HeapGraphTracker* Get(TraceProcessorContext* context) {
@@ -102,6 +122,14 @@ class HeapGraphTracker : public Destructible {
   }
 
   void AddRoot(uint32_t seq_id, UniquePid upid, int64_t ts, SourceRoot root);
+  void AddFrameRoot(uint32_t seq_id,
+                    UniquePid upid,
+                    int64_t ts,
+                    SourceFrameRoot frame_root);
+  void AddThreadStack(uint32_t seq_id,
+                      UniquePid upid,
+                      int64_t ts,
+                      SourceThreadStack thread_stack);
   void AddObject(uint32_t seq_id, UniquePid upid, int64_t ts, SourceObject obj);
   void AddInternedType(uint32_t seq_id,
                        uint64_t intern_id,
@@ -174,6 +202,8 @@ class HeapGraphTracker : public Destructible {
     protos::pbzero::HeapGraphObject::HeapType last_heap_type =
         protos::pbzero::HeapGraphObject::HEAP_TYPE_UNKNOWN;
     std::vector<SourceRoot> current_roots;
+    std::vector<SourceFrameRoot> current_frame_roots;
+    std::vector<SourceThreadStack> current_thread_stacks;
     std::vector<uint64_t> internal_vm_roots;
 
     // Note: the below maps are a mix of std::map and base::FlatHashMap because
@@ -221,6 +251,7 @@ class HeapGraphTracker : public Destructible {
       uint64_t type_id);
   bool SetPidAndTimestamp(SequenceState* seq, UniquePid upid, int64_t ts);
   void PopulateSuperClasses(const SequenceState& seq);
+  void PopulateThreadStacks(const SequenceState& seq);
   InternedType* GetSuperClass(SequenceState* sequence_state,
                               const InternedType* current_type);
   bool IsTruncated(UniquePid upid, int64_t ts);

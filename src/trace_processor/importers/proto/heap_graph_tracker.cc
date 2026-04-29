@@ -36,6 +36,9 @@
 #include "perfetto/ext/base/string_view.h"
 #include "protos/perfetto/trace/profiling/heap_graph.pbzero.h"
 #include "src/trace_processor/dataframe/specs.h"
+#include "src/trace_processor/importers/common/process_tracker.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include "src/trace_processor/importers/proto/stack_profile_sequence_state.h"
 #include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/profiler_tables_py.h"
@@ -48,6 +51,7 @@ namespace {
 using ClassTable = tables::HeapGraphClassTable;
 using ObjectTable = tables::HeapGraphObjectTable;
 using ReferenceTable = tables::HeapGraphReferenceTable;
+using ThreadStackTable = tables::HeapGraphThreadStackTable;
 
 // Iterates all the references owned by the object `id`.
 //
@@ -477,6 +481,28 @@ void HeapGraphTracker::AddRoot(uint32_t seq_id,
   sequence_state.current_roots.emplace_back(std::move(root));
 }
 
+void HeapGraphTracker::AddFrameRoot(uint32_t seq_id,
+                                    UniquePid upid,
+                                    int64_t ts,
+                                    SourceFrameRoot frame_root) {
+  SequenceState& sequence_state = GetOrCreateSequence(seq_id);
+  if (!SetPidAndTimestamp(&sequence_state, upid, ts))
+    return;
+
+  sequence_state.current_frame_roots.emplace_back(frame_root);
+}
+
+void HeapGraphTracker::AddThreadStack(uint32_t seq_id,
+                                      UniquePid upid,
+                                      int64_t ts,
+                                      SourceThreadStack thread_stack) {
+  SequenceState& sequence_state = GetOrCreateSequence(seq_id);
+  if (!SetPidAndTimestamp(&sequence_state, upid, ts))
+    return;
+
+  sequence_state.current_thread_stacks.emplace_back(std::move(thread_stack));
+}
+
 void HeapGraphTracker::AddInternedLocationName(uint32_t seq_id,
                                                uint64_t intern_id,
                                                StringId strid) {
@@ -736,6 +762,28 @@ void HeapGraphTracker::FinalizeProfile(uint32_t seq_id) {
       MarkRoot(row_ref, InternRootTypeString(root.root_type));
     }
   }
+  // ROOT_JAVA_FRAME attribution: mark each object's root_type and
+  // record the kernel TID of the retaining thread. Joins to the
+  // matching heap_graph_thread_stack row (populated below) for the
+  // full stack.
+  StringId java_frame_root_type =
+      InternRootTypeString(protos::pbzero::HeapGraphRoot::ROOT_JAVA_FRAME);
+  for (const SourceFrameRoot& fr : sequence_state.current_frame_roots) {
+    auto* ptr = sequence_state.object_id_to_db_row.Find(fr.object_id);
+    if (!ptr)
+      continue;
+    ObjectTable::RowReference row_ref =
+        ptr->ToRowReference(storage_->mutable_heap_graph_object_table());
+    roots_[std::make_pair(sequence_state.current_upid,
+                          sequence_state.current_ts)]
+        .emplace(*ptr);
+    MarkRoot(row_ref, java_frame_root_type);
+    if (fr.thread_tid != 0) {
+      row_ref.set_root_thread_tid(fr.thread_tid);
+    }
+  }
+
+  PopulateThreadStacks(sequence_state);
 
   PopulateSuperClasses(sequence_state);
   PopulateNativeSize(sequence_state);
@@ -756,6 +804,32 @@ std::optional<ObjectTable::Id> HeapGraphTracker::GetReferenceByFieldName(
                     return true;
                   });
   return referred;
+}
+
+// Inserts one row per thread snapshot. callstack_iid resolves through
+// the captured sequence state's StackProfileSequenceState — by
+// FinalizeProfile time the trailing InternedData packet has been
+// parsed so every iid is in the intern map. The owning RefPtr in
+// SourceThreadStack keeps the generation alive even across a
+// hypothetical mid-session incremental_state_cleared.
+void HeapGraphTracker::PopulateThreadStacks(const SequenceState& seq) {
+  for (const SourceThreadStack& src : seq.current_thread_stacks) {
+    std::optional<CallsiteId> callsite_id;
+    if (src.callstack_iid != 0 && src.sequence_state) {
+      auto* sps =
+          src.sequence_state->GetCustomState<StackProfileSequenceState>();
+      if (sps != nullptr) {
+        callsite_id =
+            sps->FindOrInsertCallstack(seq.current_upid, src.callstack_iid);
+      }
+    }
+    tables::HeapGraphThreadStackTable::Row row;
+    row.graph_sample_ts = seq.current_ts;
+    row.upid = seq.current_upid;
+    row.utid = src.utid;
+    row.callsite_id = callsite_id;
+    storage_->mutable_heap_graph_thread_stack_table()->Insert(row);
+  }
 }
 
 void HeapGraphTracker::PopulateNativeSize(const SequenceState& seq) {
