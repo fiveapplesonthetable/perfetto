@@ -25,7 +25,8 @@ export type NavState =
   | {view: 'bitmaps'; params: {id?: number; filterKey?: string}}
   | {view: 'strings'; params: {q?: string}}
   | {view: 'arrays'; params: {arrayHash?: string}}
-  | {view: 'flamegraph-objects'; params: {name?: string}};
+  | {view: 'flamegraph-objects'; params: {name?: string}}
+  | {view: 'flamegraph'; params: {cls?: string}};
 
 export function stateToSubpage(state: NavState): string {
   switch (state.view) {
@@ -63,6 +64,10 @@ export function stateToSubpage(state: NavState): string {
       return n
         ? `flamegraph_objects_${encodeURIComponent(n)}`
         : 'flamegraph_objects';
+    }
+    case 'flamegraph': {
+      const cls = state.params.cls;
+      return cls ? `flamegraph?cls=${encodeURIComponent(cls)}` : 'flamegraph';
     }
   }
 }
@@ -130,6 +135,10 @@ export function subpageToState(subpage: string | undefined): NavState {
     case 'flamegraph-objects': {
       const n = param ? decodeURIComponent(param) : undefined;
       return {view: 'flamegraph-objects', params: n ? {name: n} : {}};
+    }
+    case 'flamegraph': {
+      const cls = sp.get('cls') ?? undefined;
+      return {view: 'flamegraph', params: cls ? {cls} : {}};
     }
     default:
       return {view: 'overview', params: {}};

@@ -40,6 +40,8 @@ import ArraysView from './views/arrays_view';
 import FlamegraphObjectsView, {
   flamegraphQuery,
 } from './views/flamegraph_objects_view';
+import FlamegraphView from './views/flamegraph_view';
+import type {FlamegraphState} from '../../widgets/flamegraph';
 
 interface HeapdumpSelection {
   pathHashes: string;
@@ -102,10 +104,19 @@ export function resetCachedOverview(): void {
   overviewLoading = false;
 }
 
+// Module-level state for the embedded flamegraph (preserved across tab
+// switches, reset when the active dump changes).
+let flamegraphPanelState: FlamegraphState | undefined;
+
+export function resetFlamegraphPanelState(): void {
+  flamegraphPanelState = undefined;
+}
+
 function resetDumpScopedState(): void {
   resetCachedOverview();
   resetFlamegraphSelection();
   resetInstanceTabs();
+  resetFlamegraphPanelState();
   queries.resetBitmapDumpDataCache();
 }
 
@@ -256,12 +267,31 @@ function buildTabs(
   overview: OverviewData,
 ): TabsTab[] {
   const trace = HeapDumpPage.trace;
+  const activeDump = queries.getActiveDump();
   const tabs: TabsTab[] = [
     {
       key: 'overview',
       title: 'Overview',
       content: m(OverviewView, {overview, navigate: navigateWithTabs}),
     },
+    ...(trace && activeDump
+      ? [
+          {
+            key: 'flamegraph',
+            title: 'Flamegraph',
+            content: m(FlamegraphView, {
+              trace,
+              upid: activeDump.upid,
+              ts: Time.fromRaw(activeDump.ts),
+              state: flamegraphPanelState,
+              onStateChange: (s: FlamegraphState) => {
+                flamegraphPanelState = s;
+              },
+              navigate: navigateWithTabs,
+            }),
+          },
+        ]
+      : []),
     {
       key: 'classes',
       title: 'Classes',
