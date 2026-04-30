@@ -26,12 +26,13 @@ import {
   countRenderer,
   RowCounter,
 } from '../components';
-import {clearNavParam} from '../nav_state';
 import * as queries from '../queries';
 
 interface ClassesViewAttrs {
   readonly engine: Engine;
   readonly navigate: NavFn;
+  /** Clears a one-shot nav param after the view has consumed it. */
+  readonly clearNavParam: (key: string) => void;
   readonly initialRootClass?: string;
 }
 
@@ -106,7 +107,11 @@ function ClassesView(): m.Component<ClassesViewAttrs> {
   const counter = new RowCounter();
   let filters: Filter[] = [];
 
-  async function applyNavFilter(engine: Engine, root: string | undefined) {
+  async function applyNavFilter(
+    engine: Engine,
+    root: string | undefined,
+    clearNavParam: (key: string) => void,
+  ) {
     if (!root) return;
     clearNavParam('rootClass');
     const names = await queries.getSubclassNames(engine, root);
@@ -126,12 +131,18 @@ function ClassesView(): m.Component<ClassesViewAttrs> {
         preamble: PREAMBLE,
       });
       counter.init(engine, QUERY, PREAMBLE);
-      applyNavFilter(engine, vnode.attrs.initialRootClass).catch(console.error);
+      applyNavFilter(
+        engine,
+        vnode.attrs.initialRootClass,
+        vnode.attrs.clearNavParam,
+      ).catch(console.error);
     },
     onupdate(vnode) {
-      applyNavFilter(vnode.attrs.engine, vnode.attrs.initialRootClass).catch(
-        console.error,
-      );
+      applyNavFilter(
+        vnode.attrs.engine,
+        vnode.attrs.initialRootClass,
+        vnode.attrs.clearNavParam,
+      ).catch(console.error);
     },
     view(vnode) {
       const {navigate} = vnode.attrs;

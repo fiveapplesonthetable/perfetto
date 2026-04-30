@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Internal navigation state for the Heapdump Explorer plugin.
-
-import m from 'mithril';
+// Pure types and parsers for the Heapdump Explorer's hash-routed
+// navigation. The actual mutable nav state lives on
+// HeapDumpExplorerSession (see session.ts) — this file is intentionally
+// stateless so it can be imported without dragging in any singleton.
 
 export type NavState =
   | {view: 'overview'; params: Record<string, never>}
@@ -27,6 +28,10 @@ export type NavState =
   | {view: 'arrays'; params: {arrayHash?: string}}
   | {view: 'flamegraph-objects'; params: {name?: string}};
 
+/** Convenience alias for the discriminator field. */
+export type NavView = NavState['view'];
+
+/** Serializes a {@link NavState} into the URL hash subpage. */
 export function stateToSubpage(state: NavState): string {
   switch (state.view) {
     case 'overview':
@@ -67,6 +72,7 @@ export function stateToSubpage(state: NavState): string {
   }
 }
 
+/** Parses a URL hash subpage back into a {@link NavState}. */
 export function subpageToState(subpage: string | undefined): NavState {
   if (!subpage) return {view: 'overview', params: {}};
 
@@ -134,49 +140,4 @@ export function subpageToState(subpage: string | undefined): NavState {
     default:
       return {view: 'overview', params: {}};
   }
-}
-
-export let nav: NavState = {view: 'overview', params: {}};
-
-let navigateCallback: ((subpage: string) => void) | undefined;
-
-export function setNavigateCallback(
-  cb: ((subpage: string) => void) | undefined,
-): void {
-  navigateCallback = cb;
-}
-
-export function navigate(
-  v: NavState['view'],
-  p: Record<string, unknown> = {},
-): void {
-  const state = {view: v, params: p} as NavState;
-  nav = state;
-  navigateCallback?.(stateToSubpage(state));
-  m.redraw();
-}
-
-// Clear a single nav param without pushing a history entry.
-// Used after consuming a one-shot param (e.g. a filter from overview).
-export function clearNavParam(key: string): void {
-  const params = {...(nav.params as Record<string, unknown>)};
-  delete params[key];
-  nav = {view: nav.view, params} as NavState;
-}
-
-export function syncFromSubpage(subpage: string | undefined): void {
-  if (subpage?.startsWith('/')) subpage = subpage.slice(1);
-  // Compare path-only: Perfetto's router strips query params from subpage.
-  const currentSubpage = stateToSubpage(nav);
-  const currentPath = currentSubpage.split('?')[0];
-  const incomingPath = (subpage ?? '').split('?')[0];
-  if (incomingPath !== currentPath) {
-    nav = subpageToState(subpage);
-  }
-}
-
-// Shared flag for sidebar sub-item visibility (readable by sidebar callbacks).
-export let hasReadyHprofSession = false;
-export function setHasReadyHprofSession(v: boolean): void {
-  hasReadyHprofSession = v;
 }

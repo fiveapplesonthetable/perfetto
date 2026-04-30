@@ -31,7 +31,6 @@ import {
   SQL_PREAMBLE,
   RowCounter,
 } from '../components';
-import {clearNavParam} from '../nav_state';
 import * as queries from '../queries';
 
 const QUERY = `
@@ -150,6 +149,8 @@ const SUMMARY_SCHEMA: SchemaRegistry = {
 interface StringsViewAttrs {
   readonly engine: Engine;
   readonly navigate: NavFn;
+  /** Clears a one-shot nav param after the view has consumed it. */
+  readonly clearNavParam: (key: string) => void;
   readonly initialQuery?: string;
   readonly hasFieldValues?: boolean;
 }
@@ -161,7 +162,10 @@ function StringsView(): m.Component<StringsViewAttrs> {
   const counter = new RowCounter();
   let filters: Filter[] = [];
 
-  function applyNavFilter(q: string | undefined) {
+  function applyNavFilter(
+    q: string | undefined,
+    clearNavParam: (key: string) => void,
+  ) {
     if (!q) return;
     filters = [{field: 'value', op: '=' as const, value: q}];
     counter.onFiltersChanged(filters);
@@ -178,7 +182,7 @@ function StringsView(): m.Component<StringsViewAttrs> {
         preamble: SQL_PREAMBLE,
       });
       counter.init(engine, QUERY, SQL_PREAMBLE);
-      applyNavFilter(vnode.attrs.initialQuery);
+      applyNavFilter(vnode.attrs.initialQuery, vnode.attrs.clearNavParam);
       queries
         .getStringList(vnode.attrs.engine)
         .then((r) => {
@@ -189,7 +193,7 @@ function StringsView(): m.Component<StringsViewAttrs> {
         .catch(console.error);
     },
     onupdate(vnode) {
-      applyNavFilter(vnode.attrs.initialQuery);
+      applyNavFilter(vnode.attrs.initialQuery, vnode.attrs.clearNavParam);
     },
     onremove() {
       alive = false;

@@ -1377,17 +1377,27 @@ interface BitmapDumpData {
   bufferMap: Map<bigint, number>;
 }
 
-let cachedDumpData: BitmapDumpData | null | undefined;
-
-export function resetBitmapDumpDataCache(): void {
-  cachedDumpData = undefined;
-}
+// Cached per-engine: GC reclaims the entry when the engine is dropped, so
+// loading a different trace naturally invalidates the cache without an
+// explicit reset hook. Same pattern as `objectTreeReady` below.
+const bitmapDumpDataByEngine = new WeakMap<
+  Engine,
+  Promise<BitmapDumpData | null>
+>();
 
 async function loadBitmapDumpData(
   engine: Engine,
 ): Promise<BitmapDumpData | null> {
-  if (cachedDumpData !== undefined) return cachedDumpData;
+  let cached = bitmapDumpDataByEngine.get(engine);
+  if (cached !== undefined) return cached;
+  cached = computeBitmapDumpData(engine);
+  bitmapDumpDataByEngine.set(engine, cached);
+  return cached;
+}
 
+async function computeBitmapDumpData(
+  engine: Engine,
+): Promise<BitmapDumpData | null> {
   // Step 1: Find the Bitmap class object.
   const classObjRes = await engine.query(`
     SELECT o.reference_set_id
@@ -1399,7 +1409,6 @@ async function loadBitmapDumpData(
   `);
   const classIt = classObjRes.iter({reference_set_id: NUM_NULL});
   if (!classIt.valid() || classIt.reference_set_id === null) {
-    cachedDumpData = null;
     return null;
   }
 
@@ -1413,7 +1422,6 @@ async function loadBitmapDumpData(
   `);
   const ddIt = ddRes.iter({dump_data_id: NUM_NULL});
   if (!ddIt.valid() || ddIt.dump_data_id === null) {
-    cachedDumpData = null;
     return null;
   }
   const dumpDataId = ddIt.dump_data_id;
@@ -1450,7 +1458,6 @@ async function loadBitmapDumpData(
     if (it.field_name.endsWith('buffers')) buffersObjId = it.owned_id;
   }
   if (nativesObjId === null || buffersObjId === null) {
-    cachedDumpData = null;
     return null;
   }
 
@@ -1463,7 +1470,6 @@ async function loadBitmapDumpData(
   `);
   const nativesIt = nativesRes.iter({data: STR_NULL});
   if (!nativesIt.valid() || nativesIt.data === null) {
-    cachedDumpData = null;
     return null;
   }
   // Native pointers need BigInt for 64-bit precision in Map lookups.
@@ -1496,8 +1502,7 @@ async function loadBitmapDumpData(
     }
   }
 
-  cachedDumpData = {format, bufferMap};
-  return cachedDumpData;
+  return {format, bufferMap};
 }
 
 const DUMP_DATA_FORMAT_NAMES: Record<number, string> = {

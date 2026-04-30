@@ -18,14 +18,34 @@ import {Trace} from '../../public/trace';
 import {App} from '../../public/app';
 import {NUM} from '../../trace_processor/query_result';
 import HeapProfilePlugin from '../dev.perfetto.HeapProfile';
-import {
-  HeapDumpPage,
-  setFlamegraphSelection,
-  resetFlamegraphSelection,
-  resetInstanceTabs,
-  resetCachedOverview,
-} from './heap_dump_page';
-import {resetBitmapDumpDataCache} from './queries';
+import {HeapDumpPage} from './heap_dump_page';
+import {HeapDumpExplorerSession} from './session';
+
+/**
+ * Holds the single live {@link HeapDumpExplorerSession} (or null) so
+ * that `static onActivate` and the per-trace `onTraceLoad` can share
+ * one reference across the plugin's lifetime. Replaces a bag of
+ * ad-hoc module-level `let` and `static` fields.
+ *
+ * The render callback registered with `app.pages.registerPage` is
+ * created in `onActivate` and outlives any individual trace, so it
+ * has to read the session through some indirection. This registry
+ * is that indirection — a single, intentional, well-named singleton
+ * rather than a scattering of mutable globals.
+ */
+class SessionRegistry {
+  private current: HeapDumpExplorerSession | null = null;
+
+  set(session: HeapDumpExplorerSession): void {
+    this.current = session;
+  }
+
+  get(): HeapDumpExplorerSession | null {
+    return this.current;
+  }
+}
+
+const sessionRegistry = new SessionRegistry();
 
 export default class implements PerfettoPlugin {
   static readonly id = 'com.android.HeapDumpExplorer';
@@ -34,7 +54,8 @@ export default class implements PerfettoPlugin {
   static onActivate(app: App): void {
     app.pages.registerPage({
       route: '/heapdump',
-      render: (subpage) => m(HeapDumpPage, {subpage}),
+      render: (subpage) =>
+        m(HeapDumpPage, {session: sessionRegistry.get(), subpage}),
     });
   }
 
@@ -45,18 +66,13 @@ export default class implements PerfettoPlugin {
     const cnt = res.iter({cnt: NUM}).cnt;
     if (cnt === 0) return;
 
-    HeapDumpPage.engine = ctx.engine;
-    HeapDumpPage.trace = ctx;
-    HeapDumpPage.hasHeapData = true;
-    resetBitmapDumpDataCache();
-    resetFlamegraphSelection();
-    resetInstanceTabs();
-    resetCachedOverview();
+    const session = new HeapDumpExplorerSession(ctx, ctx.engine);
+    sessionRegistry.set(session);
 
     ctx.plugins
       .getPlugin(HeapProfilePlugin)
       .registerOnNodeSelectedListener(({pathHashes, isDominator}) =>
-        setFlamegraphSelection({pathHashes, isDominator}, ctx.engine),
+        session.openFlamegraph({pathHashes, isDominator}),
       );
 
     ctx.sidebar.addMenuItem({

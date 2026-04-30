@@ -29,11 +29,12 @@ import {
   SQL_PREAMBLE,
   RowCounter,
 } from '../components';
-import {clearNavParam} from '../nav_state';
 
 interface AllObjectsViewAttrs {
   readonly engine: Engine;
   readonly navigate: NavFn;
+  /** Clears a one-shot nav param after the view has consumed it. */
+  readonly clearNavParam: (key: string) => void;
   readonly initialClass?: string;
 }
 
@@ -155,7 +156,10 @@ function AllObjectsView(): m.Component<AllObjectsViewAttrs> {
   const counter = new RowCounter();
   let filters: Filter[] = [];
 
-  function applyNavFilter(cls: string | undefined) {
+  function applyNavFilter(
+    cls: string | undefined,
+    clearNavParam: (key: string) => void,
+  ) {
     if (!cls) return;
     filters = [{field: 'cls', op: '=' as const, value: cls}];
     counter.onFiltersChanged(filters);
@@ -172,10 +176,10 @@ function AllObjectsView(): m.Component<AllObjectsViewAttrs> {
         preamble: SQL_PREAMBLE,
       });
       counter.init(engine, QUERY, SQL_PREAMBLE);
-      applyNavFilter(vnode.attrs.initialClass);
+      applyNavFilter(vnode.attrs.initialClass, vnode.attrs.clearNavParam);
     },
     onupdate(vnode) {
-      applyNavFilter(vnode.attrs.initialClass);
+      applyNavFilter(vnode.attrs.initialClass, vnode.attrs.clearNavParam);
     },
     view(vnode) {
       const {navigate} = vnode.attrs;

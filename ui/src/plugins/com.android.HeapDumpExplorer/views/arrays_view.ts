@@ -29,7 +29,6 @@ import {
   shortClassName,
   RowCounter,
 } from '../components';
-import {clearNavParam} from '../nav_state';
 
 const QUERY = `
   SELECT
@@ -101,6 +100,8 @@ function makeUiSchema(navigate: NavFn): SchemaRegistry {
 interface ArraysViewAttrs {
   readonly engine: Engine;
   readonly navigate: NavFn;
+  /** Clears a one-shot nav param after the view has consumed it. */
+  readonly clearNavParam: (key: string) => void;
   readonly initialArrayHash?: string;
   readonly hasFieldValues?: boolean;
 }
@@ -110,7 +111,10 @@ function ArraysView(): m.Component<ArraysViewAttrs> {
   const counter = new RowCounter();
   let filters: Filter[] = [];
 
-  function applyNavFilter(ah: string | undefined) {
+  function applyNavFilter(
+    ah: string | undefined,
+    clearNavParam: (key: string) => void,
+  ) {
     if (!ah) return;
     filters = [{field: 'array_hash', op: '=' as const, value: ah}];
     counter.onFiltersChanged(filters);
@@ -126,10 +130,10 @@ function ArraysView(): m.Component<ArraysViewAttrs> {
         rootSchemaName: 'query',
       });
       counter.init(engine, QUERY);
-      applyNavFilter(vnode.attrs.initialArrayHash);
+      applyNavFilter(vnode.attrs.initialArrayHash, vnode.attrs.clearNavParam);
     },
     onupdate(vnode) {
-      applyNavFilter(vnode.attrs.initialArrayHash);
+      applyNavFilter(vnode.attrs.initialArrayHash, vnode.attrs.clearNavParam);
     },
     view(vnode) {
       const {navigate} = vnode.attrs;

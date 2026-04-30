@@ -32,7 +32,6 @@ import {
   renderPath,
 } from '../components';
 import type {PathEntry} from '../types';
-import {clearNavParam} from '../nav_state';
 import * as queries from '../queries';
 
 const SUMMARY_SCHEMA: SchemaRegistry = {
@@ -287,6 +286,8 @@ function BitmapCard(): m.Component<BitmapCardAttrs> {
 interface BitmapGalleryViewAttrs {
   readonly engine: Engine;
   readonly navigate: NavFn;
+  /** Clears a one-shot nav param after the view has consumed it. */
+  readonly clearNavParam: (key: string) => void;
   readonly hasFieldValues?: boolean;
   readonly filterKey?: string;
 }
@@ -315,7 +316,10 @@ function BitmapGalleryView(): m.Component<BitmapGalleryViewAttrs> {
       .catch(console.error);
   }
 
-  function applyNavFilter(fk: string | undefined) {
+  function applyNavFilter(
+    fk: string | undefined,
+    clearNavParam: (key: string) => void,
+  ) {
     if (!fk) return;
     filters = [{field: 'buffer_hash', op: '=' as const, value: fk}];
     clearNavParam('filterKey');
@@ -323,7 +327,7 @@ function BitmapGalleryView(): m.Component<BitmapGalleryViewAttrs> {
 
   return {
     oninit(vnode) {
-      applyNavFilter(vnode.attrs.filterKey);
+      applyNavFilter(vnode.attrs.filterKey, vnode.attrs.clearNavParam);
       queries
         .getBitmapList(vnode.attrs.engine)
         .then((r) => {
@@ -344,7 +348,7 @@ function BitmapGalleryView(): m.Component<BitmapGalleryViewAttrs> {
         .catch(console.error);
     },
     onupdate(vnode) {
-      applyNavFilter(vnode.attrs.filterKey);
+      applyNavFilter(vnode.attrs.filterKey, vnode.attrs.clearNavParam);
     },
     onremove() {
       alive = false;
