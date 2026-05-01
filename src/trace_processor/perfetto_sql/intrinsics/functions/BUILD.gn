@@ -83,6 +83,7 @@ source_set("functions") {
     "../../../../../protos/perfetto/trace:zero",
     "../../../../../protos/perfetto/trace/ftrace:zero",
     "../../../../../protos/perfetto/trace_processor:zero",
+    "../../../../../protos/third_party/pprof:zero",
     "../../../../base",
     "../../../../base/regex",
     "../../../containers",

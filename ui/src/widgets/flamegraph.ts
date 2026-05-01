@@ -39,6 +39,8 @@ import {Color, HSLColor} from '../base/color';
 import {hash} from '../base/hash';
 import {MithrilEvent} from '../base/mithril_utils';
 import {Icons} from '../base/semantic_icons';
+import {download} from '../base/download_utils';
+import {buildPprofFromFlamegraphNodes} from './flamegraph_pprof';
 
 const LABEL_FONT_STYLE = '12px Roboto';
 const NODE_HEIGHT = 20;
@@ -888,7 +890,34 @@ export class Flamegraph implements m.ClassComponent<FlamegraphAttrs> {
           m(SegmentedButton, {value: 'bottom-up'}, 'Bottom Up'),
         ],
       ),
+      m('.pf-flamegraph-filter-bar-spacer'),
+      m(Button, {
+        icon: 'download',
+        compact: true,
+        title: 'Download as pprof',
+        disabled: attrs.data === undefined || attrs.data.nodes.length === 0,
+        onclick: () => this.downloadPprof(attrs),
+      }),
     );
+  }
+
+  private downloadPprof(attrs: FlamegraphAttrs): void {
+    if (attrs.data === undefined) return;
+    const metric = attrs.metrics.find(
+      (m) => m.name === attrs.state.selectedMetricName,
+    );
+    if (metric === undefined) return;
+    const bytes = buildPprofFromFlamegraphNodes(
+      attrs.data.nodes,
+      metric.name,
+      metric.unit,
+    );
+    const safeName = metric.name.replace(/[^A-Za-z0-9._-]+/g, '_');
+    download({
+      content: bytes,
+      fileName: `${safeName || 'flamegraph'}.pb`,
+      mimeType: 'application/octet-stream',
+    });
   }
 
   private renderTooltip() {
