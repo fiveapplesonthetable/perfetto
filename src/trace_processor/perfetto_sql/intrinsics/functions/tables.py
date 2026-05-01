@@ -14,6 +14,7 @@
 
 from python.generators.trace_processor_table.public import Column as C
 from python.generators.trace_processor_table.public import CppAccess
+from python.generators.trace_processor_table.public import CppInt64
 from python.generators.trace_processor_table.public import CppOptional
 from python.generators.trace_processor_table.public import CppUint32
 from python.generators.trace_processor_table.public import Table
@@ -56,8 +57,31 @@ STRUCTURAL_TREE_PARTITION_TABLE = Table(
         C("group_key", CppUint32()),
     ])
 
+# Output table of `__intrinsic_critical_path_walk`. One row per emitted
+# attribution: thread `blocker_utid` (wakeup-graph entry `blocker_id`)
+# was running on `root_id`'s behalf during [ts, ts + dur), at `depth`
+# cross-thread hops away from `root_id` along the wakeup chain.
+CRITICAL_PATH_WALK_TABLE = Table(
+    python_module=__file__,
+    class_name="CriticalPathWalkTable",
+    sql_name="__intrinsic_critical_path_walk_out",
+    columns=[
+        C("root_id", CppUint32(),
+          cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C("depth", CppUint32(), cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C("ts", CppInt64(), cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C("dur", CppInt64(), cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C("blocker_id",
+          CppUint32(),
+          cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C("blocker_utid",
+          CppUint32(),
+          cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+    ])
+
 # Keep this list sorted.
 ALL_TABLES = [
+    CRITICAL_PATH_WALK_TABLE,
     DOMINATOR_TREE_TABLE,
     STRUCTURAL_TREE_PARTITION_TABLE,
     TREE_TABLE,

@@ -530,12 +530,87 @@ RETURNS TableOrSubQuery AS
     flat.ts
 );
 
--- Generates the critical path for only the set of roots <id> passed in.
--- _intervals_to_roots can be used to generate root ids from a given time interval.
--- This can be used to genrate the critical path over sparse regions of a trace, e.g
--- binder transactions. It might be more efficient to generate the _critical_path
--- for the entire trace, see _thread_executing_span_critical_path_all, but for a
--- per-process susbset of binder txns for instance, this is likely faster.
+-- Userspace critical path for each root id. Each frame in the walk is
+-- bounded by its own [ts - idle_dur, ts + dur] window, with same-depth
+-- descent into `prev_id` for time predating that window. IRQ self-wakes
+-- chain through `prev_id`; all other wakeups chain through `waker_id`.
+CREATE PERFETTO MACRO _critical_path_userspace_by_roots(
+    _roots_table TableOrSubQuery,
+    _node_table TableOrSubQuery
+)
+RETURNS TableOrSubQuery AS
+(
+  SELECT
+    c0 AS root_id,
+    c4 AS id,
+    c2 AS ts,
+    c3 AS dur
+  FROM __intrinsic_table_ptr(
+    __intrinsic_critical_path_walk(
+      (
+        SELECT
+          __intrinsic_wakeup_graph_agg(id, utid, ts, dur, idle_dur, waker_id, prev_id, is_idle_reason_self)
+        FROM $_node_table
+      ),
+      (
+        SELECT
+          __intrinsic_array_agg(root_node_id)
+        FROM $_roots_table
+      ),
+      0
+    )
+  )
+  WHERE
+    __intrinsic_table_ptr_bind(c0, 'root_id')
+    AND __intrinsic_table_ptr_bind(c1, 'depth')
+    AND __intrinsic_table_ptr_bind(c2, 'ts')
+    AND __intrinsic_table_ptr_bind(c3, 'dur')
+    AND __intrinsic_table_ptr_bind(c4, 'blocker_id')
+    AND __intrinsic_table_ptr_bind(c5, 'blocker_utid')
+);
+
+-- Kernel-mode critical path for each root id. Always chains through
+-- `waker_id`; `is_idle_reason_self` is ignored. Mirrors the
+-- `_wakeup_kernel_edges` view.
+CREATE PERFETTO MACRO _critical_path_kernel_by_roots(
+    _roots_table TableOrSubQuery,
+    _node_table TableOrSubQuery
+)
+RETURNS TableOrSubQuery AS
+(
+  SELECT
+    c0 AS root_id,
+    c4 AS id,
+    c2 AS ts,
+    c3 AS dur
+  FROM __intrinsic_table_ptr(
+    __intrinsic_critical_path_walk(
+      (
+        SELECT
+          __intrinsic_wakeup_graph_agg(id, utid, ts, dur, idle_dur, waker_id, prev_id, is_idle_reason_self)
+        FROM $_node_table
+      ),
+      (
+        SELECT
+          __intrinsic_array_agg(root_node_id)
+        FROM $_roots_table
+      ),
+      1
+    )
+  )
+  WHERE
+    __intrinsic_table_ptr_bind(c0, 'root_id')
+    AND __intrinsic_table_ptr_bind(c1, 'depth')
+    AND __intrinsic_table_ptr_bind(c2, 'ts')
+    AND __intrinsic_table_ptr_bind(c3, 'dur')
+    AND __intrinsic_table_ptr_bind(c4, 'blocker_id')
+    AND __intrinsic_table_ptr_bind(c5, 'blocker_utid')
+);
+
+-- Critical path for the given set of root ids, with kernel and userspace
+-- chains merged. `_intervals_to_roots` produces root ids from a time
+-- interval, which makes this form well suited to sparse-region queries
+-- (e.g. binder transactions) without walking the whole trace.
 CREATE PERFETTO MACRO _critical_path_by_roots(
     _roots_table TableOrSubQuery,
     _node_table TableOrSubQuery
@@ -546,10 +621,7 @@ RETURNS TableOrSubQuery AS
     _userspace_critical_path_by_roots AS (
       SELECT
         *
-      FROM _critical_path_intervals
-        !(_wakeup_userspace_edges,
-          $_roots_table,
-          _wakeup_intervals)
+      FROM _critical_path_userspace_by_roots!($_roots_table, $_node_table)
     ),
     _kernel_nodes AS (
       SELECT
@@ -568,14 +640,9 @@ RETURNS TableOrSubQuery AS
         cr.id,
         cr.ts,
         cr.dur
-      FROM _critical_path_intervals
-        !(_wakeup_kernel_edges,
-          (
-           SELECT graph.id AS root_node_id, graph.id - COALESCE(graph.prev_id, graph.id) AS capacity
-           FROM _kernel_nodes
-           JOIN _wakeup_graph graph USING(id)
-          ),
-          _wakeup_intervals) AS cr
+      FROM _critical_path_kernel_by_roots!(
+        (SELECT id AS root_node_id FROM _kernel_nodes),
+        $_node_table) AS cr
       JOIN _kernel_nodes
         ON _kernel_nodes.id = cr.root_id
     )
