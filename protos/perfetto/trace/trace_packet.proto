@@ -31,6 +31,7 @@ import "protos/perfetto/trace/android/frame_timeline_event.proto";
 import "protos/perfetto/trace/android/gpu_mem_event.proto";
 import "protos/perfetto/trace/android/graphics_frame_event.proto";
 import "protos/perfetto/trace/android/initial_display_state.proto";
+import "protos/perfetto/trace/android/art_method_trace.proto";
 import "protos/perfetto/trace/android/kernel_wakelock_data.proto";
 import "protos/perfetto/trace/android/network_trace.proto";
 import "protos/perfetto/trace/android/packages_list.proto";
@@ -111,7 +112,7 @@ package perfetto.protos;
 // See the [Buffers and Dataflow](/docs/concepts/buffers.md) doc for details.
 //
 // Next reserved id: 14 (up to 15).
-// Next id: 123.
+// Next id: 124.
 message TracePacket {
   // The timestamp of the TracePacket.
   // By default this timestamps refers to the trace clock (CLOCK_BOOTTIME on
@@ -263,6 +264,7 @@ message TracePacket {
     GenericKernelCpuFrequencyEvent generic_kernel_cpu_freq_event = 118;
     GenericKernelTaskRenameEvent generic_kernel_task_rename_event = 120;
     GenericKernelProcessTree generic_kernel_process_tree = 122;
+    ArtMethodTraceLongRunning art_method_trace_long_running = 123;
 
     CpuPerUidData cpu_per_uid_data = 119;
 

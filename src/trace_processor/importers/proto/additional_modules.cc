@@ -29,6 +29,7 @@
 #include "src/trace_processor/importers/proto/android_kernel_wakelocks_module.h"
 #include "src/trace_processor/importers/proto/android_probes_module.h"
 #include "src/trace_processor/importers/proto/app_wakelock_module.h"
+#include "src/trace_processor/importers/proto/art_method_trace_module.h"
 #include "src/trace_processor/importers/proto/content_analyzer.h"
 #include "src/trace_processor/importers/proto/deobfuscation_module.h"
 #include "src/trace_processor/importers/proto/graphics_event_module.h"
@@ -87,6 +88,8 @@ void RegisterAdditionalModules(ProtoImporterModuleContext* module_context,
       new ProfileModule(module_context, context));
   module_context->modules.emplace_back(
       new AppWakelockModule(module_context, context));
+  module_context->modules.emplace_back(
+      new ArtMethodTraceModule(module_context, context));
   module_context->modules.emplace_back(
       new GenericKernelModule(module_context, context));
 

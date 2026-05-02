@@ -1,0 +1,51 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto2";
+
+package perfetto.protos;
+
+// Wraps an ART long-running method trace dump emitted by the
+// "android.art.method_trace" data source. Carries an opaque byte stream in
+// the same on-the-wire layout that art::TraceProfiler::DumpData produces, but
+// prefixed with a 32-byte SLOW magic header (see
+// art/runtime/trace.h for kTraceMagicValue / kTraceVersionLongRunningStreamingV2)
+// so trace_processor's art_method tokenizer can consume it directly.
+//
+// Body layout (matches art::TraceProfiler):
+//   * Sequence of kEntryHeaderV2 chunks (1B header byte + 4B tid +
+//     3B num_records + 4B size + SLEB128(time_action_diff) +
+//     [SLEB128(method_diff) only on method-enter]).
+//   * Followed by kThreadInfoHeaderV2 records (1B header + 4B tid +
+//     2B name_len + name) and kMethodInfoHeaderV2 records (1B header +
+//     8B method_ptr + 2B info_len + info text).
+//
+// A single trace session typically emits exactly one ArtMethodTraceLongRunning
+// packet at session-stop. For very large dumps a producer is free to chunk the
+// payload across multiple packets; the consumer concatenates by trusted_uid /
+// trusted_pid + clock domain order.
+message ArtMethodTraceLongRunning {
+  // The full ART long-running V2 stream (SLOW header + chunks).
+  optional bytes payload = 1;
+
+  // Producer process command line (read from /proc/self/cmdline). Used by
+  // trace_processor to label the process whose threads emitted the
+  // contained slices. The producer pid itself is already on the enclosing
+  // TracePacket (`trusted_pid`, field 79); this provides a human-readable
+  // name without requiring a separate ProcessTree packet from another
+  // data source.
+  optional string process_name = 2;
+}

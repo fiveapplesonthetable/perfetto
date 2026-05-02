@@ -131,6 +131,8 @@ source_set("full") {
     "android_probes_parser.h",
     "android_probes_tracker.cc",
     "android_probes_tracker.h",
+    "art_method_trace_module.cc",
+    "art_method_trace_module.h",
     "content_analyzer.cc",
     "content_analyzer.h",
     "deobfuscation_module.cc",

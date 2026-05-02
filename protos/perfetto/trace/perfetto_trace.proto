@@ -652,6 +652,28 @@ message AppWakelocksConfig {
 
 // End of protos/perfetto/config/android/app_wakelock_config.proto
 
+// Begin of protos/perfetto/config/android/art_method_trace_config.proto
+
+// Configuration for the ART long-running method tracer perfetto data source
+// ("android.art.method_trace"). When this data source is active, ART emits
+// method enter/exit events for any method whose run-time exceeds
+// art::kLongRunningMethodThreshold (~341ms) into the recording perfetto
+// session. The captured events are visible in the perfetto UI as per-thread
+// slices labelled with the fully-qualified method name.
+//
+// Producer-side state lives in art's TraceProfiler (running in
+// LowOverheadTraceType::kLongRunningMethods mode); the data source starts the
+// profiler on session start and dumps the per-thread buffers on session stop.
+message ArtMethodTraceConfig {
+  // Process command-line allowlist, matched against /proc/<pid>/cmdline using
+  // fnmatch(3). When non-empty the data source is a no-op in any process
+  // whose cmdline does not match at least one pattern. Matches the convention
+  // used by JavaHprofConfig.process_cmdline.
+  repeated string process_cmdline = 1;
+}
+
+// End of protos/perfetto/config/android/art_method_trace_config.proto
+
 // Begin of protos/perfetto/config/android/cpu_per_uid_config.proto
 
 // Data source that records CPU per UID data.
@@ -3887,7 +3909,7 @@ message TrackEventConfig {
 // Begin of protos/perfetto/config/data_source_config.proto
 
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 138
+// Next id: 139
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -4086,6 +4108,9 @@ message DataSourceConfig {
 
   // Data source name: android.cpu_per_uid
   optional CpuPerUidConfig cpu_per_uid_config = 137 [lazy = true];
+
+  // Data source name: android.art.method_trace
+  optional ArtMethodTraceConfig art_method_trace_config = 138 [lazy = true];
 
   // This is a fallback mechanism to send a free-form text config to the
   // producer. In theory this should never be needed. All the code that
@@ -5278,6 +5303,42 @@ message AppWakelockBundle {
 }
 
 // End of protos/perfetto/trace/android/app_wakelock_data.proto
+
+// Begin of protos/perfetto/trace/android/art_method_trace.proto
+
+// Wraps an ART long-running method trace dump emitted by the
+// "android.art.method_trace" data source. Carries an opaque byte stream in
+// the same on-the-wire layout that art::TraceProfiler::DumpData produces, but
+// prefixed with a 32-byte SLOW magic header (see
+// art/runtime/trace.h for kTraceMagicValue / kTraceVersionLongRunningStreamingV2)
+// so trace_processor's art_method tokenizer can consume it directly.
+//
+// Body layout (matches art::TraceProfiler):
+//   * Sequence of kEntryHeaderV2 chunks (1B header byte + 4B tid +
+//     3B num_records + 4B size + SLEB128(time_action_diff) +
+//     [SLEB128(method_diff) only on method-enter]).
+//   * Followed by kThreadInfoHeaderV2 records (1B header + 4B tid +
+//     2B name_len + name) and kMethodInfoHeaderV2 records (1B header +
+//     8B method_ptr + 2B info_len + info text).
+//
+// A single trace session typically emits exactly one ArtMethodTraceLongRunning
+// packet at session-stop. For very large dumps a producer is free to chunk the
+// payload across multiple packets; the consumer concatenates by trusted_uid /
+// trusted_pid + clock domain order.
+message ArtMethodTraceLongRunning {
+  // The full ART long-running V2 stream (SLOW header + chunks).
+  optional bytes payload = 1;
+
+  // Producer process command line (read from /proc/self/cmdline). Used by
+  // trace_processor to label the process whose threads emitted the
+  // contained slices. The producer pid itself is already on the enclosing
+  // TracePacket (`trusted_pid`, field 79); this provides a human-readable
+  // name without requiring a separate ProcessTree packet from another
+  // data source.
+  optional string process_name = 2;
+}
+
+// End of protos/perfetto/trace/android/art_method_trace.proto
 
 // Begin of protos/perfetto/trace/android/bluetooth_trace.proto
 
@@ -17089,7 +17150,7 @@ message UiState {
 // See the [Buffers and Dataflow](/docs/concepts/buffers.md) doc for details.
 //
 // Next reserved id: 14 (up to 15).
-// Next id: 123.
+// Next id: 124.
 message TracePacket {
   // The timestamp of the TracePacket.
   // By default this timestamps refers to the trace clock (CLOCK_BOOTTIME on
@@ -17241,6 +17302,7 @@ message TracePacket {
     GenericKernelCpuFrequencyEvent generic_kernel_cpu_freq_event = 118;
     GenericKernelTaskRenameEvent generic_kernel_task_rename_event = 120;
     GenericKernelProcessTree generic_kernel_process_tree = 122;
+    ArtMethodTraceLongRunning art_method_trace_long_running = 123;
 
     CpuPerUidData cpu_per_uid_data = 119;
 
