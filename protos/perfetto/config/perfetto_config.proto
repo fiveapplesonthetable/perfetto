@@ -894,6 +894,28 @@ message AppWakelocksConfig {
 
 // End of protos/perfetto/config/android/app_wakelock_config.proto
 
+// Begin of protos/perfetto/config/android/art_method_trace_config.proto
+
+// Configuration for the ART long-running method tracer perfetto data source
+// ("android.art.method_trace"). When this data source is active, ART emits
+// method enter/exit events for any method whose run-time exceeds
+// art::kLongRunningMethodThreshold (~341ms) into the recording perfetto
+// session. The captured events are visible in the perfetto UI as per-thread
+// slices labelled with the fully-qualified method name.
+//
+// Producer-side state lives in art's TraceProfiler (running in
+// LowOverheadTraceType::kLongRunningMethods mode); the data source starts the
+// profiler on session start and dumps the per-thread buffers on session stop.
+message ArtMethodTraceConfig {
+  // Process command-line allowlist, matched against /proc/<pid>/cmdline using
+  // fnmatch(3). When non-empty the data source is a no-op in any process
+  // whose cmdline does not match at least one pattern. Matches the convention
+  // used by JavaHprofConfig.process_cmdline.
+  repeated string process_cmdline = 1;
+}
+
+// End of protos/perfetto/config/android/art_method_trace_config.proto
+
 // Begin of protos/perfetto/config/android/cpu_per_uid_config.proto
 
 // Data source that records CPU per UID data.

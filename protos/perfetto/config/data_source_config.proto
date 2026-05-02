@@ -53,6 +53,7 @@ import "protos/perfetto/config/protovm/protovm_config.proto";
 import "protos/perfetto/config/statsd/statsd_tracing_config.proto";
 import "protos/perfetto/config/priority_boost/priority_boost_config.proto";
 import "protos/perfetto/config/process_stats/process_stats_config.proto";
+import "protos/perfetto/config/android/art_method_trace_config.proto";
 import "protos/perfetto/config/profiling/heapprofd_config.proto";
 import "protos/perfetto/config/profiling/java_hprof_config.proto";
 import "protos/perfetto/config/profiling/perf_event_config.proto";
