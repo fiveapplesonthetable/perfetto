@@ -18,37 +18,30 @@ INCLUDE PERFETTO MODULE slices.flat_slices;
 
 INCLUDE PERFETTO MODULE sched.thread_executing_span;
 
-INCLUDE PERFETTO MODULE intervals.intersect;
+-- The previous implementation eagerly materialised four whole-trace
+-- tables at module load: the per-root critical-path walk, a thread_state
+-- × flat-slice SPAN_LEFT_JOIN, the (CP × thread_state-slice) interval
+-- intersect, and the joined cross product. On a 17 MB Android trace
+-- this was ~95 s of `INCLUDE PERFETTO MODULE` cost for queries that
+-- scoped down to a single `(root_utid, ts, dur)` window. Every consumer
+-- of the module — `_thread_executing_span_critical_path_stack`,
+-- `_critical_path_stack`, `_thread_executing_span_critical_path_graph`,
+-- and the matching UI commands — already passes such a window, so the
+-- pre-aggregation is wasted work.
+--
+-- The function bodies below now build the same intermediates lazily,
+-- restricted to the rows that overlap the requested window: the walk
+-- runs over only the wakeup nodes for `root_utid` that intersect
+-- `[ts, ts + dur]`, the SPAN_LEFT_JOIN virtual tables are queried with
+-- `WHERE utid = …` push-down, and the SPAN_JOIN of self and CP is
+-- replaced by `_interval_intersect!` over the local CTEs (the
+-- LEFT-join semantics survive on the SPAN_LEFT_JOIN side, which is
+-- the part that needs to keep thread_state rows with no overlapping
+-- slice; the self vs CP join is inner in both designs).
 
--- Critical path rooted at every entry of `_wakeup_graph`, with the
--- on-CPU blocker thread (`utid`) and the root's thread (`root_utid`)
--- joined in. Materialised so the slice-aware tables below can join in
--- id-space.
-CREATE PERFETTO TABLE _critical_path_all AS
-WITH
-  _per_root AS (
-    SELECT
-      *
-    FROM _critical_path_by_roots!(
-      (SELECT id AS root_node_id FROM _wakeup_graph),
-      _wakeup_graph)
-  )
-SELECT
-  row_number() OVER (ORDER BY cr.ts) AS id,
-  cr.ts,
-  cr.dur,
-  cr.ts + cr.dur AS ts_end,
-  id_graph.utid,
-  root_id_graph.utid AS root_utid
-FROM _per_root AS cr
-JOIN _wakeup_graph AS id_graph
-  ON cr.id = id_graph.id
-JOIN _wakeup_graph AS root_id_graph
-  ON cr.root_id = root_id_graph.id
-ORDER BY
-  cr.ts;
-
--- Limited thread_state view that will later be span joined with the |_thread_executing_span_graph|.
+-- thread_state and flat-slice projections used by the
+-- SPAN_LEFT_JOIN virtual tables below. Cheap: no rows are produced
+-- until the function body queries them with a `utid` filter.
 CREATE PERFETTO VIEW _span_thread_state_view AS
 SELECT
   id AS thread_state_id,
@@ -61,10 +54,6 @@ SELECT
   cpu
 FROM thread_state;
 
--- Slice projection for SPAN_JOIN with thread_state. Carries `slice_id`
--- only; the slice's name is joined on demand at the leaves of
--- `_critical_path_stack` so the materialised cross-product below does
--- not duplicate every slice's name across every blocker region.
 CREATE PERFETTO VIEW _span_slice_view AS
 SELECT
   slice_id,
@@ -74,67 +63,17 @@ SELECT
   utid
 FROM _slice_flattened;
 
--- thread state span joined with slice.
+-- Lazy SPAN_LEFT_JOIN of thread_state × flat-slice. Used by
+-- `_critical_path_stack` for the *blocker* side, filtered to the small
+-- set of utids the per-window CP touches.
 CREATE VIRTUAL TABLE _span_thread_state_slice_sp USING SPAN_LEFT_JOIN (
     _span_thread_state_view PARTITIONED utid,
     _span_slice_view PARTITIONED utid);
 
-CREATE PERFETTO TABLE _span_thread_state_slice AS
-SELECT
-  row_number() OVER (ORDER BY ts) AS id,
-  ts,
-  dur,
-  ts + dur AS ts_end,
-  utid,
-  thread_state_id,
-  state,
-  function,
-  cpu,
-  io_wait,
-  slice_id,
-  slice_depth
-FROM _span_thread_state_slice_sp
-WHERE
-  dur > 0
-ORDER BY
-  ts;
-
-CREATE PERFETTO TABLE _critical_path_thread_state_slice_raw AS
-SELECT
-  id_0 AS cr_id,
-  id_1 AS th_id,
-  ts,
-  dur
-FROM _interval_intersect!((_critical_path_all, _span_thread_state_slice), (utid));
-
--- Critical-path × slice cross product, restricted to id-space columns.
--- Slice names are not stored here; `_critical_path_stack` joins `slice`
--- on `slice_id` for the rows it actually returns.
-CREATE PERFETTO TABLE _critical_path_thread_state_slice AS
-SELECT
-  raw.ts,
-  raw.dur,
-  cr.utid,
-  thread_state_id,
-  state,
-  function,
-  cpu,
-  io_wait,
-  slice_id,
-  slice_depth,
-  root_utid
-FROM _critical_path_thread_state_slice_raw AS raw
-JOIN _critical_path_all AS cr
-  ON cr.id = raw.cr_id
-JOIN _span_thread_state_slice AS th
-  ON th.id = raw.th_id;
-
--- Flattened slices span joined with their thread_states. This contains the 'self' information
--- without 'critical_path' (blocking) information.
+-- Lazy SPAN_LEFT_JOIN of thread_state × flat-slice for the *self*
+-- side. Filtered to `utid = $root_utid` inside the function body.
 CREATE VIRTUAL TABLE _self_sp USING SPAN_LEFT_JOIN (thread_state PARTITIONED utid, _slice_flattened PARTITIONED utid);
 
--- Projection of |_self_sp| in id-space. Slice names are joined on
--- `self_slice_id` at the leaves of `_critical_path_stack`.
 CREATE PERFETTO VIEW _self_view AS
 SELECT
   id AS self_thread_state_id,
@@ -149,12 +88,150 @@ SELECT
   depth AS self_slice_depth
 FROM _self_sp;
 
--- Self and critical path span join. This contains the union of the time intervals from the following:
---  a. Self slice stack + thread_state.
---  b. Critical path stack + thread_state.
-CREATE VIRTUAL TABLE _self_and_critical_path_sp USING SPAN_JOIN (
-    _self_view PARTITIONED root_utid,
-    _critical_path_thread_state_slice PARTITIONED root_utid);
+-- Equivalent of `_self_and_critical_path_sp WHERE root_utid = $root_utid
+-- AND dur > 0`, scoped to a query window. Extracted into its own
+-- function so the downstream `_critical_path_stack` body — which
+-- references `relevant_spans` ten times across self/critical/cpu UNION
+-- ALLs — pays the upstream cost only once. The walk runs only over
+-- wakeup nodes for `$root_utid` that overlap `[ts, ts + dur]`; the
+-- SPAN_LEFT_JOIN virtual tables are queried with `WHERE utid = …` /
+-- `WHERE utid IN (…)` so partition push-down keeps them cheap.
+CREATE PERFETTO FUNCTION _critical_path_relevant_spans(
+    root_utid JOINID(thread.id),
+    ts TIMESTAMP,
+    dur DURATION
+)
+RETURNS TABLE (
+  self_thread_state_id LONG,
+  self_state STRING,
+  self_slice_id LONG,
+  self_slice_depth LONG,
+  self_function STRING,
+  self_io_wait LONG,
+  thread_state_id LONG,
+  state STRING,
+  function STRING,
+  io_wait LONG,
+  slice_id LONG,
+  slice_depth LONG,
+  cpu LONG,
+  utid JOINID(thread.id),
+  ts TIMESTAMP,
+  dur DURATION,
+  root_utid JOINID(thread.id)
+) AS
+WITH
+  -- Critical-path frames for this root in this window.
+  _scoped_cp AS MATERIALIZED (
+    SELECT
+      cr.ts,
+      cr.dur,
+      g.utid
+    FROM _critical_path_by_roots!(
+      _intervals_to_roots!(
+        (SELECT $root_utid AS utid, $ts AS ts, $dur AS dur),
+        _wakeup_graph),
+      _wakeup_graph) AS cr
+    JOIN _wakeup_graph AS g
+      ON g.id = cr.id
+    WHERE
+      cr.dur > 0 AND cr.ts < $ts + $dur AND cr.ts + cr.dur > $ts
+  ),
+  -- Blocker thread_state × flat-slice for the utids the CP touches.
+  -- `utid IN (subquery)` is what triggers the SPAN_LEFT_JOIN's
+  -- per-partition push-down; a `JOIN … USING (utid)` instead caused
+  -- the engine to scan all partitions (~4× slower in microbenchmarks).
+  _scoped_blocker_th_slice AS MATERIALIZED (
+    SELECT
+      sp.thread_state_id,
+      sp.ts,
+      sp.dur,
+      sp.utid,
+      sp.state,
+      sp.function,
+      sp.cpu,
+      sp.io_wait,
+      sp.slice_id,
+      sp.slice_depth
+    FROM _span_thread_state_slice_sp AS sp
+    WHERE
+      sp.utid IN (
+        SELECT DISTINCT
+          utid
+        FROM _scoped_cp
+      )
+      AND sp.dur > 0
+      AND sp.ts < $ts + $dur
+      AND sp.ts + sp.dur > $ts
+  ),
+  -- Inner intersection of local CP × blocker thread_state-slice. We
+  -- open-code the join with overlap predicates rather than use
+  -- `_interval_intersect!`: empirically the macro path was ~40×
+  -- slower on whole-trace queries (the join-back to recover columns
+  -- interacts badly with the macro's twin evaluation, even with
+  -- MATERIALIZED inputs).
+  _scoped_cp_th_slice AS MATERIALIZED (
+    SELECT
+      max(cp.ts, bts.ts) AS ts,
+      min(cp.ts + cp.dur, bts.ts + bts.dur) - max(cp.ts, bts.ts) AS dur,
+      bts.thread_state_id,
+      bts.utid,
+      bts.state,
+      bts.function,
+      bts.cpu,
+      bts.io_wait,
+      bts.slice_id,
+      bts.slice_depth
+    FROM _scoped_cp AS cp
+    JOIN _scoped_blocker_th_slice AS bts
+      ON bts.utid = cp.utid AND bts.ts < cp.ts + cp.dur AND bts.ts + bts.dur > cp.ts
+  ),
+  -- Self thread_state × flat-slice for `$root_utid` in the window.
+  -- The SPAN_LEFT_JOIN keeps thread_state rows even when no slice
+  -- overlaps (the original `_self_view` semantics).
+  _scoped_self AS MATERIALIZED (
+    SELECT
+      sp.id AS self_thread_state_id,
+      sp.slice_id AS self_slice_id,
+      sp.ts,
+      sp.dur,
+      sp.state AS self_state,
+      sp.blocked_function AS self_function,
+      sp.cpu AS self_cpu,
+      sp.io_wait AS self_io_wait,
+      sp.depth AS self_slice_depth
+    FROM _self_sp AS sp
+    WHERE
+      sp.utid = $root_utid AND sp.dur > 0 AND sp.ts < $ts + $dur AND sp.ts + sp.dur > $ts
+  )
+-- Replaces `_self_and_critical_path_sp WHERE root_utid = $root_utid`
+-- with an open-coded interval intersection of the two local sides.
+-- Both are implicitly partitioned by `root_utid = $root_utid`. Output
+-- ts is clipped to the query window for parity with the prior
+-- `max(ts, $ts) / min(ts + dur, $ts + $dur)` projection.
+SELECT
+  self.self_thread_state_id,
+  self.self_state,
+  self.self_slice_id,
+  self.self_slice_depth,
+  self.self_function,
+  self.self_io_wait,
+  cps.thread_state_id,
+  cps.state,
+  cps.function,
+  cps.io_wait,
+  cps.slice_id,
+  cps.slice_depth,
+  cps.cpu,
+  cps.utid,
+  max(self.ts, cps.ts, $ts) AS ts,
+  min(self.ts + self.dur, cps.ts + cps.dur, $ts + $dur) - max(self.ts, cps.ts, $ts) AS dur,
+  $root_utid AS root_utid
+FROM _scoped_self AS self
+JOIN _scoped_cp_th_slice AS cps
+  ON cps.ts < self.ts + self.dur AND cps.ts + cps.dur > self.ts
+WHERE
+  min(self.ts + self.dur, cps.ts + cps.dur, $ts + $dur) > max(self.ts, cps.ts, $ts);
 
 -- Returns a view of |_self_and_critical_path_sp| unpivoted over the following columns:
 -- self thread_state.
@@ -187,59 +264,14 @@ RETURNS TABLE (
   table_name STRING,
   root_utid JOINID(thread.id)
 ) AS
--- Spans filtered to the query time window and root_utid.
--- This is a preliminary step that gets the start and end ts of all the rows
--- so that we can chop the ends of each interval correctly if it overlaps with the query time interval.
 WITH
-  relevant_spans_starts AS (
-    SELECT
-      self_thread_state_id,
-      self_state,
-      self_slice_id,
-      self_slice_depth,
-      self_function,
-      self_io_wait,
-      thread_state_id,
-      state,
-      function,
-      io_wait,
-      slice_id,
-      slice_depth,
-      cpu,
-      utid,
-      max(ts, $ts) AS ts,
-      min(ts + dur, $ts + $dur) AS end_ts,
-      root_utid
-    FROM _self_and_critical_path_sp
-    WHERE
-      dur > 0 AND root_utid = $root_utid
-  ),
-  -- This is the final step that gets the |dur| of each span from the start and
-  -- and end ts of the previous step.
-  -- Now we manually unpivot the result with 3 key steps: 1) Self 2) Critical path 3) CPU
-  -- This CTE is heavily used throughout the entire function so materializing it is
-  -- very important.
+  -- One materialised pass over the helper feeds the self/critical/cpu
+  -- UNION ALLs below. Without MATERIALIZED the helper would be
+  -- re-evaluated on every reference.
   relevant_spans AS MATERIALIZED (
     SELECT
-      self_thread_state_id,
-      self_state,
-      self_slice_id,
-      self_slice_depth,
-      self_function,
-      self_io_wait,
-      thread_state_id,
-      state,
-      function,
-      io_wait,
-      slice_id,
-      slice_depth,
-      cpu,
-      utid,
-      ts,
-      end_ts - ts AS dur,
-      root_utid,
-      utid
-    FROM relevant_spans_starts
+      *
+    FROM _critical_path_relevant_spans($root_utid, $ts, $dur)
     WHERE
       dur > 0
   ),
