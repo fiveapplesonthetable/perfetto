@@ -18,6 +18,8 @@ INCLUDE PERFETTO MODULE intervals.overlap;
 
 INCLUDE PERFETTO MODULE intervals.intersect;
 
+INCLUDE PERFETTO MODULE graphs.scan;
+
 -- A 'thread_executing_span' is thread_state span starting with a runnable slice
 -- until the next runnable slice that's woken up by a process (as opposed
 -- to an interrupt). Note that within a 'thread_executing_span' we can have sleep
@@ -383,14 +385,13 @@ RETURNS TableOrSubQuery AS
     AND _interval_to_root_nodes.utid = _bound.utid
 );
 
--- Critical path for the given roots with the chain depth retained.
--- One row per `(root_id, depth, ts, dur, id, parent_id)` blocker
--- frame: `id` is the on-CPU blocker at this depth, `parent_id` is
--- the blocker one level up (the root at depth 0). At a self-wake the
--- woken thread is the depth-N fallback (it is in kernel) and the
--- waker chain layers at depth N+1. `_critical_path_by_roots`
--- collapses these depths to one blocker per `(root_id, ts)`.
-CREATE PERFETTO MACRO _critical_path_with_depth_by_roots(
+-- Critical-path frames for the given roots, one row per
+-- `(root_id, depth, ts, dur, id, blocker_utid, parent_id)`: `id` is
+-- the on-CPU thread at this depth; `parent_id` is the depth-(N-1)
+-- frame's id (root self-references at depth 0). Multiple rows may
+-- cover `(root_id, ts)` — pair with `_critical_path_flatten!` for
+-- the deepest-wins collapse.
+CREATE PERFETTO MACRO _critical_path_layered_by_roots(
     _roots_table TableOrSubQuery,
     _node_table TableOrSubQuery
 )
@@ -402,6 +403,7 @@ RETURNS TableOrSubQuery AS
     c2 AS ts,
     c3 AS dur,
     c4 AS id,
+    c5 AS blocker_utid,
     c6 AS parent_id
   FROM __intrinsic_table_ptr(
     __intrinsic_critical_path_walk(
@@ -427,13 +429,10 @@ RETURNS TableOrSubQuery AS
     AND __intrinsic_table_ptr_bind(c6, 'parent_id')
 );
 
--- Critical path for the given roots, one blocker per `(root_id, ts)`.
--- Pair with `_intervals_to_roots` to compute the path over a sparse
--- time region (e.g. binder transactions) without walking the whole
--- trace.
-CREATE PERFETTO MACRO _critical_path_by_roots(
-    _roots_table TableOrSubQuery,
-    _node_table TableOrSubQuery
+-- Collapses layered frames to one row per `(root_id, ts)`: the
+-- deepest covering layer wins; shallower layers fill the gaps.
+CREATE PERFETTO MACRO _critical_path_flatten(
+    _layered_table TableOrSubQuery
 )
 RETURNS TableOrSubQuery AS
 (
@@ -441,7 +440,7 @@ RETURNS TableOrSubQuery AS
     _frames AS (
       SELECT
         *
-      FROM _critical_path_with_depth_by_roots!($_roots_table, $_node_table)
+      FROM $_layered_table
     ),
     _root_spans AS (
       SELECT
@@ -476,6 +475,25 @@ RETURNS TableOrSubQuery AS
   GROUP BY
     flat.root_id,
     flat.ts
+);
+
+-- Critical path for the given roots: one blocker per `(root_id, ts)`.
+-- Equivalent to `flatten(layered(...))`.
+CREATE PERFETTO MACRO _critical_path_by_roots(
+    _roots_table TableOrSubQuery,
+    _node_table TableOrSubQuery
+)
+RETURNS TableOrSubQuery AS
+(
+  WITH
+    _cp_layered AS (
+      SELECT
+        *
+      FROM _critical_path_layered_by_roots!($_roots_table, $_node_table)
+    )
+  SELECT
+    *
+  FROM _critical_path_flatten!(_cp_layered)
 );
 
 -- Generates the critical path for only the time intervals for the utids given.
@@ -542,6 +560,165 @@ RETURNS TableOrSubQuery AS
     ON _span.id = ii.id_0
   JOIN _intervals
     ON _intervals.id = ii.id_1
+);
+
+-- Layered critical path clipped to user intervals. Same shape as
+-- `_critical_path_layered_by_roots!` with `(ts, dur)` intersected
+-- against the intervals; deduped to one row per
+-- `(utid, depth, ts, dur)` by smallest `root_id`. `root_id` is
+-- preserved so children can be joined to their parent within the
+-- same chain (a `parent_id` is unique only within one `root_id`).
+CREATE PERFETTO MACRO _critical_path_layered_by_intervals(
+    _intervals_table TableOrSubQuery,
+    _node_table TableOrSubQuery
+)
+RETURNS TableOrSubQuery AS
+(
+  WITH
+    _nodes AS (
+      SELECT
+        *
+      FROM $_node_table
+    ),
+    _raw_intervals AS (
+      SELECT
+        ts,
+        dur,
+        utid
+      FROM $_intervals_table
+    ),
+    _intervals AS (
+      SELECT
+        row_number() OVER (ORDER BY ts) AS id,
+        ts,
+        dur,
+        utid AS root_utid
+      FROM _raw_intervals
+    ),
+    _layers AS (
+      SELECT
+        row_number() OVER (ORDER BY ts) AS id,
+        root_id,
+        depth,
+        parent_id,
+        id AS cr_id,
+        ts,
+        dur
+      FROM _critical_path_layered_by_roots!(
+        _intervals_to_roots!(_raw_intervals, _nodes), _nodes)
+    ),
+    _span AS (
+      SELECT
+        _root_nodes.utid AS root_utid,
+        _nodes.utid,
+        cr.root_id,
+        cr.depth,
+        cr.parent_id,
+        cr.cr_id,
+        cr.id,
+        cr.ts,
+        cr.dur
+      FROM _layers AS cr
+      JOIN _nodes AS _root_nodes
+        ON _root_nodes.id = cr.root_id
+      JOIN _nodes
+        ON _nodes.id = cr.cr_id
+    ),
+    _intersected AS (
+      SELECT
+        _span.root_utid,
+        _span.root_id,
+        _span.utid,
+        _span.depth,
+        _span.cr_id AS id,
+        _span.parent_id,
+        ii.ts,
+        ii.dur
+      FROM _interval_intersect!((_span, _intervals), (root_utid)) AS ii
+      JOIN _span
+        ON _span.id = ii.id_0
+    ),
+    _ranked AS (
+      SELECT
+        root_utid,
+        root_id,
+        utid,
+        depth,
+        id,
+        parent_id,
+        ts,
+        dur,
+        row_number() OVER (PARTITION BY root_utid, utid, depth, ts, dur ORDER BY root_id) AS rn
+      FROM _intersected
+    )
+  SELECT
+    root_utid,
+    root_id,
+    utid,
+    depth,
+    id,
+    parent_id,
+    ts,
+    dur
+  FROM _ranked
+  WHERE
+    rn = 1
+);
+
+-- For each layered row at `depth >= $_target_depth`, returns its
+-- chain ancestor at exactly `$_target_depth` (a row at the target
+-- depth is its own ancestor). The per-tile attribution primitive for
+-- drill-down: tracks anchored at depth N partition tiles by their
+-- ancestor-at-N, so siblings never overlap.
+--
+-- `_layered` must expose `(id, root_id, node_id, parent_node_id,
+-- depth)` with a dense uint32 `id`.
+CREATE PERFETTO MACRO _critical_path_ancestor_at_depth(
+    _layered TableOrSubQuery,
+    _target_depth Expr
+)
+RETURNS TableOrSubQuery AS
+(
+  WITH
+    _frames AS (
+      SELECT
+        id,
+        root_id,
+        node_id,
+        parent_node_id,
+        depth
+      FROM $_layered
+    ),
+    -- One incoming edge per child. A parent frame may be split into
+    -- multiple time-clipped rows that all share the same chain
+    -- ancestry; pick one deterministically via MIN(id).
+    _edges AS (
+      SELECT
+        min(parent.id) AS source_node_id,
+        child.id AS dest_node_id
+      FROM _frames AS child
+      JOIN _frames AS parent
+        ON parent.root_id = child.root_id
+        AND parent.node_id = child.parent_node_id
+        AND parent.depth = child.depth - 1
+      WHERE
+        child.depth > 0
+      GROUP BY
+        child.id
+    )
+  SELECT
+    descendant.id AS id,
+    ancestor.id AS ancestor_id,
+    ancestor.node_id AS ancestor_node_id
+  FROM _graph_aggregating_scan!(
+    _edges,
+    (SELECT id, id AS anc_id FROM _frames WHERE depth = $_target_depth),
+    (anc_id),
+    (SELECT id, MIN(anc_id) AS anc_id FROM $table GROUP BY id)) AS s
+  JOIN _frames AS descendant
+    ON descendant.id = s.id
+  JOIN _frames AS ancestor
+    ON ancestor.id = s.anc_id
 );
 
 -- Generates the critical path for a given utid over the <ts, dur> interval.

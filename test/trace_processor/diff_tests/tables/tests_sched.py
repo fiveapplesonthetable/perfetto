@@ -353,6 +353,233 @@ class TablesSched(TestSuite):
         12521,1477,12521,1737407641875,1830015,1477
         """))
 
+  # parent_id on each layered row is the wakeup-graph node id of the
+  # depth-(N-1) thread that descended into this frame via waker_id.
+  # Validates that every depth-N row's parent_id resolves to a row at
+  # depth N-1 within the same root_id — i.e. (id, parent_id) forms a
+  # proper tree the UI can drill by `WHERE parent_id IN (...)`. At
+  # depth 0 parent_id == id (self-reference).
+  def test_thread_executing_span_critical_path_parent_id_tree(self):
+    return DiffTestBlueprint(
+        trace=DataPath('sched_wakeup_trace.atr'),
+        query="""
+        INCLUDE PERFETTO MODULE sched.thread_executing_span;
+        WITH cp AS (
+          SELECT
+            root_id,
+            depth,
+            id,
+            parent_id
+          FROM _critical_path_layered_by_roots!(
+            (SELECT id AS root_node_id FROM _wakeup_graph LIMIT 200),
+            _wakeup_graph)
+        ),
+        joined AS (
+          SELECT
+            a.depth AS depth,
+            (SELECT b.depth FROM cp b
+             WHERE b.id = a.parent_id AND b.root_id = a.root_id LIMIT 1) AS parent_depth,
+            (a.depth = 0 AND a.parent_id = a.id) AS depth0_self,
+            (a.depth > 0 AND a.parent_id != a.id) AS deeper_real_parent
+          FROM cp a
+        )
+        SELECT
+          depth,
+          COUNT(*) AS rows_at_depth,
+          SUM(CASE WHEN depth = 0 THEN depth0_self ELSE deeper_real_parent END) AS rows_with_valid_link,
+          SUM(CASE WHEN depth > 0 AND parent_depth = depth - 1 THEN 1 ELSE 0 END) AS rows_with_parent_one_shallower
+        FROM joined
+        GROUP BY depth
+        ORDER BY depth
+        """,
+        out=Csv("""
+        "depth","rows_at_depth","rows_with_valid_link","rows_with_parent_one_shallower"
+        0,224,224,0
+        1,159,159,159
+        2,99,99,99
+        3,34,34,34
+        4,10,10,10
+        """))
+
+  # End-to-end shape: depth-1 frames attributed back to their chain
+  # root (target_depth=0).
+  def test_critical_path_ancestor_at_depth(self):
+    return DiffTestBlueprint(
+        trace=DataPath('sched_wakeup_trace.atr'),
+        query="""
+        INCLUDE PERFETTO MODULE sched.thread_executing_span;
+
+        CREATE PERFETTO TABLE _layered AS
+        SELECT
+          row_number() OVER (ORDER BY cr.depth, cr.ts) AS id,
+          cr.root_id, cr.id AS node_id, cr.parent_id AS parent_node_id,
+          cr.depth, cr.ts, cr.utid
+        FROM _critical_path_layered_by_intervals!(
+               (SELECT
+                  (SELECT utid FROM thread WHERE tid = 3487) AS utid,
+                  start_ts AS ts,
+                  end_ts - start_ts AS dur
+                FROM trace_bounds),
+               _wakeup_graph) AS cr;
+
+        SELECT
+          d.depth AS descendant_depth,
+          a.depth AS ancestor_depth,
+          thread.name AS ancestor_thread
+        FROM _critical_path_ancestor_at_depth!(_layered, 0) AS anc
+        JOIN _layered AS d ON d.id = anc.id
+        JOIN _layered AS a ON a.id = anc.ancestor_id
+        JOIN thread ON thread.utid = a.utid
+        WHERE d.depth = 1
+        ORDER BY a.ts, d.ts
+        LIMIT 5
+        """,
+        out=Csv("""
+        "descendant_depth","ancestor_depth","ancestor_thread"
+        1,0,"rs.media.module"
+        1,0,"rs.media.module"
+        1,0,"rs.media.module"
+        1,0,"rs.media.module"
+        1,0,"rs.media.module"
+        """))
+
+  # Tree, self-ancestry, depth and coverage invariants over every
+  # reachable target depth.
+  def test_critical_path_ancestor_at_depth_invariants(self):
+    return DiffTestBlueprint(
+        trace=DataPath('sched_wakeup_trace.atr'),
+        query="""
+        INCLUDE PERFETTO MODULE sched.thread_executing_span;
+
+        CREATE PERFETTO TABLE _layered AS
+        SELECT
+          row_number() OVER (ORDER BY cr.depth, cr.ts) AS id,
+          cr.root_id, cr.id AS node_id, cr.parent_id AS parent_node_id,
+          cr.depth
+        FROM _critical_path_layered_by_intervals!(
+               (SELECT
+                  (SELECT utid FROM thread WHERE tid = 3487) AS utid,
+                  start_ts AS ts,
+                  end_ts - start_ts AS dur
+                FROM trace_bounds),
+               _wakeup_graph) AS cr;
+
+        CREATE PERFETTO TABLE _anc_all AS
+        SELECT 0 AS target_depth, * FROM _critical_path_ancestor_at_depth!(_layered, 0)
+        UNION ALL SELECT 1, * FROM _critical_path_ancestor_at_depth!(_layered, 1)
+        UNION ALL SELECT 2, * FROM _critical_path_ancestor_at_depth!(_layered, 2)
+        UNION ALL SELECT 3, * FROM _critical_path_ancestor_at_depth!(_layered, 3)
+        UNION ALL SELECT 4, * FROM _critical_path_ancestor_at_depth!(_layered, 4);
+
+        WITH
+          tree_violations AS (
+            SELECT COUNT(*) AS n FROM (
+              SELECT target_depth, id FROM _anc_all
+              GROUP BY target_depth, id HAVING COUNT(*) > 1
+            )
+          ),
+          self_ancestry_violations AS (
+            SELECT COUNT(*) AS n FROM _anc_all anc
+            JOIN _layered l ON l.id = anc.id
+            WHERE l.depth = anc.target_depth
+              AND anc.ancestor_id <> anc.id
+          ),
+          ancestor_depth_violations AS (
+            SELECT COUNT(*) AS n FROM _anc_all anc
+            JOIN _layered d ON d.id = anc.id
+            JOIN _layered a ON a.id = anc.ancestor_id
+            WHERE a.depth <> anc.target_depth OR a.root_id <> d.root_id
+          ),
+          coverage_gaps AS (
+            SELECT COUNT(*) AS n FROM (
+              SELECT l.id, td.target_depth
+              FROM _layered l, (
+                SELECT 0 AS target_depth UNION ALL SELECT 1 UNION ALL
+                SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+              ) td
+              WHERE l.depth >= td.target_depth
+            ) expected
+            LEFT JOIN _anc_all anc USING (target_depth, id)
+            WHERE anc.ancestor_id IS NULL
+          )
+        SELECT
+          (SELECT n FROM tree_violations) AS tree_violations,
+          (SELECT n FROM self_ancestry_violations) AS self_ancestry_violations,
+          (SELECT n FROM ancestor_depth_violations) AS ancestor_depth_violations,
+          (SELECT n FROM coverage_gaps) AS coverage_gaps
+        """,
+        out=Csv("""
+        "tree_violations","self_ancestry_violations","ancestor_depth_violations","coverage_gaps"
+        0,0,0,0
+        """))
+
+  # Per-tile attribution invariant: every lite tile maps to exactly
+  # one ancestor at every depth — the property sibling drill-down
+  # tracks rely on to not overlap.
+  def test_critical_path_ancestor_at_depth_partition_lite(self):
+    return DiffTestBlueprint(
+        trace=DataPath('sched_wakeup_trace.atr'),
+        query="""
+        INCLUDE PERFETTO MODULE sched.thread_executing_span;
+
+        CREATE PERFETTO TABLE _layered AS
+        SELECT
+          row_number() OVER (ORDER BY cr.depth, cr.ts) AS id,
+          cr.root_id, cr.id AS node_id, cr.parent_id AS parent_node_id,
+          cr.depth, cr.utid, cr.ts,
+          ifnull(CAST(cr.dur AS INT), -1) AS dur
+        FROM _critical_path_layered_by_intervals!(
+               (SELECT
+                  (SELECT utid FROM thread WHERE tid = 3487) AS utid,
+                  start_ts AS ts,
+                  end_ts - start_ts AS dur
+                FROM trace_bounds),
+               _wakeup_graph) AS cr;
+
+        CREATE PERFETTO TABLE _lite AS
+        WITH lite AS (
+          SELECT root_id, id AS lite_node_id, ts, dur, utid
+          FROM _thread_executing_span_critical_path(
+            (SELECT utid FROM thread WHERE tid = 3487),
+            (SELECT start_ts FROM trace_bounds),
+            (SELECT end_ts - start_ts FROM trace_bounds))
+        )
+        SELECT lite.root_id, lite.ts, lite.dur, ld.id AS layered_id,
+               ld.depth AS lite_depth
+        FROM lite
+        JOIN _layered ld
+          ON ld.root_id = lite.root_id AND ld.utid = lite.utid
+          AND ld.ts <= lite.ts AND ld.ts + ld.dur >= lite.ts + lite.dur;
+
+        CREATE PERFETTO TABLE _per_depth_anchors AS
+        SELECT 0 AS target_depth, * FROM _critical_path_ancestor_at_depth!(_layered, 0)
+        UNION ALL SELECT 1, * FROM _critical_path_ancestor_at_depth!(_layered, 1)
+        UNION ALL SELECT 2, * FROM _critical_path_ancestor_at_depth!(_layered, 2)
+        UNION ALL SELECT 3, * FROM _critical_path_ancestor_at_depth!(_layered, 3);
+
+        SELECT
+          target_depth,
+          COUNT(*) AS lite_tiles_attributed,
+          MAX(n_anchors) AS max_anchors_per_tile,
+          SUM(CASE WHEN n_anchors > 1 THEN 1 ELSE 0 END) AS tiles_with_multi_anchor
+        FROM (
+          SELECT pd.target_depth, lite.layered_id, lite.ts,
+                 COUNT(DISTINCT pd.ancestor_node_id) AS n_anchors
+          FROM _lite lite
+          JOIN _per_depth_anchors pd ON pd.id = lite.layered_id
+          GROUP BY pd.target_depth, lite.layered_id
+        )
+        GROUP BY target_depth
+        ORDER BY target_depth
+        """,
+        out=Csv("""
+        "target_depth","lite_tiles_attributed","max_anchors_per_tile","tiles_with_multi_anchor"
+        0,865,1,0
+        1,754,1,0
+        2,625,1,0
+        3,517,1,0
+        """))
+
   def test_thread_executing_span_critical_path_stack(self):
     return DiffTestBlueprint(
         trace=DataPath('sched_wakeup_trace.atr'),

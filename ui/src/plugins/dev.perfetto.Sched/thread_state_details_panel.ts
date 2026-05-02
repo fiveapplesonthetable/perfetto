@@ -320,19 +320,30 @@ export class ThreadStateDetailsPanel implements TrackEventDetailsPanel {
         renderWaker(this.relatedStates),
         renderWakees(this.relatedStates),
       ]),
-      this.trace.commands.hasCommand(CRITICAL_PATH_LITE_CMD) &&
+      this.trace.commands.hasCommand('dev.perfetto.CriticalPathTree') &&
         m(ButtonBar, [
           m(Button, {
-            label: 'Critical path lite',
+            label: 'Critical path',
             intent: Intent.Primary,
             variant: ButtonVariant.Filled,
             onclick: () => {
               this.trace.commands.runCommand(
-                CRITICAL_PATH_LITE_CMD,
+                'dev.perfetto.CriticalPathTree',
                 this.threadState?.thread?.utid,
               );
             },
           }),
+          this.trace.commands.hasCommand(CRITICAL_PATH_LITE_CMD) &&
+            m(Button, {
+              label: 'Critical path lite',
+              intent: Intent.Primary,
+              onclick: () => {
+                this.trace.commands.runCommand(
+                  CRITICAL_PATH_LITE_CMD,
+                  this.threadState?.thread?.utid,
+                );
+              },
+            }),
         ]),
     ]);
   }

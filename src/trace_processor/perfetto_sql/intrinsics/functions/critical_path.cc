@@ -36,14 +36,11 @@
 #include "src/trace_processor/sqlite/bindings/sqlite_result.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_value.h"
 
-// SQLite intrinsics backing `sched.thread_executing_span`'s critical
-// path: an aggregate that materialises the wakeup graph and a walk that
-// turns it into per-root blocker frames. Each root is walked
-// independently as iterative DFS over the wakeup chain; every frame is
-// bounded by its node's [ts - idle_dur, ts + dur] window intersected
-// with the caller's recursion window. Each push descends to a node
-// with a strictly smaller `ts`, bounding work at one (node, sub-window)
-// per reachable causal predecessor.
+// SQLite intrinsics for `sched.thread_executing_span`'s critical path:
+// an aggregate that materialises the wakeup graph and an iterative DFS
+// that emits per-root blocker frames. Each push descends to a node with
+// a strictly smaller `ts`, bounding work at one (node, sub-window) per
+// reachable causal predecessor.
 namespace perfetto::trace_processor {
 namespace {
 
@@ -95,12 +92,9 @@ struct WakeupGraphAgg : public sqlite::AggregateFunction<WakeupGraphAgg> {
   }
 };
 
-// Attribute time during `[window_start, window_end)` using `node_id`
-// at chain `depth` from the root. `parent_node_id` is the layer one
-// level above this frame in the attribution hierarchy (the root for
-// depth-0 frames) and propagates into every emitted row's `parent_id`
-// so `_intervals_flatten` can collapse overlapping layers to the
-// deepest active blocker per `(root, ts)`.
+// `parent_node_id` is the depth-(N-1) frame that descended into us
+// via `waker_id` (root self-references at depth 0); emitted on every
+// row's `parent_id` so callers can drill `(parent_id -> node_id)`.
 struct Frame {
   uint32_t node_id;
   int64_t window_start;
@@ -119,8 +113,7 @@ void WalkOneRoot(const WakeupGraph& graph,
   const WakeupNode& root = *graph.nodes_by_id[root_id];
   stack.clear();
 
-  // Seed with the root's idle window plus its run. Unknown `idle_dur`
-  // collapses the idle half (no lower bound from this node).
+  // Unknown `idle_dur` collapses the idle half.
   int64_t initial_start = root.ts - root.idle_dur.value_or(0);
   int64_t initial_end = root.ts + root.dur;
   stack.push_back({root_id, initial_start, initial_end, 0, root_id});
@@ -136,8 +129,7 @@ void WalkOneRoot(const WakeupGraph& graph,
     }
 
     const WakeupNode& n = *graph.nodes_by_id[f.node_id];
-    // Unset `idle_dur` leaves the idle half open below; clip to the
-    // caller's window so the `waker_id` chain still propagates.
+    // Unset `idle_dur`: clip the lower bound to the caller's window.
     int64_t node_idle_start =
         n.idle_dur.has_value() ? (n.ts - *n.idle_dur) : f.window_start;
     int64_t node_run_end = n.ts + n.dur;
@@ -145,8 +137,7 @@ void WalkOneRoot(const WakeupGraph& graph,
     int64_t eff_start = std::max(f.window_start, node_idle_start);
     int64_t eff_end = std::min(f.window_end, node_run_end);
 
-    // Time predating this node's idle: descend into `prev_id` at the
-    // same depth to keep the same-thread chain going backwards.
+    // Same-thread predecessor: stay at this depth.
     if (n.idle_dur.has_value() && f.window_start < node_idle_start &&
         n.prev_id) {
       int64_t prev_window_end = std::min(f.window_end, node_idle_start);
@@ -158,10 +149,8 @@ void WalkOneRoot(const WakeupGraph& graph,
       continue;
     }
 
-    // Idle portion of the effective window. With no `waker_id` (IRQ
-    // context, no thread chain to walk) the woken thread is in kernel
-    // and self-attributes; otherwise descend into `waker_id` at
-    // depth+1 to chain through the cross-thread waker.
+    // Idle: with `waker_id` descend to it at depth+1; without one
+    // (IRQ wake) the woken thread self-attributes.
     int64_t idle_clip_start = eff_start;
     int64_t idle_clip_end = std::min(eff_end, n.ts);
     if (idle_clip_start < idle_clip_end) {
@@ -177,11 +166,11 @@ void WalkOneRoot(const WakeupGraph& graph,
         out.Insert(row);
       } else if (n.waker_id) {
         stack.push_back({*n.waker_id, idle_clip_start, idle_clip_end,
-                         f.depth + 1, f.parent_node_id});
+                         f.depth + 1, f.node_id});
       }
     }
 
-    // Run portion: this thread is on-CPU and is the blocker.
+    // Run: this thread is on-CPU and is the blocker.
     int64_t run_start = std::max(eff_start, n.ts);
     if (run_start < eff_end) {
       tables::CriticalPathWalkTable::Row row;
@@ -197,9 +186,11 @@ void WalkOneRoot(const WakeupGraph& graph,
   }
 }
 
-// Args, in order: WakeupGraph* (from `__intrinsic_wakeup_graph_agg`),
-// IntArray* of root ids (from `__intrinsic_array_agg`). Returns a
-// `Dataframe*` tagged "TABLE", consumed via `__intrinsic_table_ptr`.
+// Args, in order:
+//   WakeupGraph* (from `__intrinsic_wakeup_graph_agg`),
+//   IntArray*    (from `__intrinsic_array_agg`, root ids).
+// Returns a `Dataframe*` tagged "TABLE", consumed via
+// `__intrinsic_table_ptr`.
 struct CriticalPathWalk : public sqlite::AggregateFunction<CriticalPathWalk> {
   static constexpr char kName[] = "__intrinsic_critical_path_walk";
   static constexpr int kArgCount = 2;
