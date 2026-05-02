@@ -233,477 +233,371 @@ JOIN _scoped_cp_th_slice AS cps
 WHERE
   min(self.ts + self.dur, cps.ts + cps.dur, $ts + $dur) > max(self.ts, cps.ts, $ts);
 
--- Returns a view of |_self_and_critical_path_sp| unpivoted over the following columns:
--- self thread_state.
--- self blocked_function (if one exists).
--- self process_name (enabled with |enable_process_name|).
--- self thread_name (enabled with |enable_thread_name|).
--- self slice_stack (enabled with |enable_self_slice|).
--- critical_path thread_state.
--- critical_path process_name.
--- critical_path thread_name.
--- critical_path slice_stack (enabled with |enable_critical_path_slice|).
--- running cpu (if one exists).
--- A 'stack' is the group of resulting unpivoted rows sharing the same timestamp.
-CREATE PERFETTO FUNCTION _critical_path_stack(
+-- Wide-row context for the critical path of `$root_utid` over the
+-- query window. One row per maximal `(ts, dur)` interval where every
+-- self and blocker attribute is constant (the same intervals
+-- `_critical_path_relevant_spans` produces, with thread / process /
+-- slice names joined in). Designed for UI tracks and pprof to consume
+-- without parsing typed-prefix strings: each axis is its own column.
+--
+-- Slice columns carry the *leaf* of the flat-slice stack only. For the
+-- ancestor stack on either side, see `_critical_path_self_slice_stack`
+-- and `_critical_path_blocker_slice_stack`.
+CREATE PERFETTO FUNCTION _critical_path_context(
+    -- The blocked thread we are computing the critical path for.
     root_utid JOINID(thread.id),
+    -- Window start.
     ts TIMESTAMP,
-    dur DURATION,
-    enable_process_name LONG,
-    enable_thread_name LONG,
-    enable_self_slice LONG,
-    enable_critical_path_slice LONG
-)
-RETURNS TABLE (
-  id LONG,
-  ts TIMESTAMP,
-  dur DURATION,
-  utid JOINID(thread.id),
-  stack_depth LONG,
-  name STRING,
-  table_name STRING,
-  root_utid JOINID(thread.id)
-) AS
-WITH
-  -- One materialised pass over the helper feeds the self/critical/cpu
-  -- UNION ALLs below. Without MATERIALIZED the helper would be
-  -- re-evaluated on every reference.
-  relevant_spans AS MATERIALIZED (
-    SELECT
-      *
-    FROM _critical_path_relevant_spans($root_utid, $ts, $dur)
-    WHERE
-      dur > 0
-  ),
-  -- 1. Builds the 'self' stack of items as an ordered UNION ALL
-  self_stack AS MATERIALIZED (
-    -- Builds the self thread_state
-    SELECT
-      self_thread_state_id AS id,
-      ts,
-      dur,
-      root_utid AS utid,
-      0 AS stack_depth,
-      'thread_state: ' || self_state AS name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM relevant_spans
-    UNION ALL
-    -- Builds the self kernel blocked_function
-    SELECT
-      self_thread_state_id AS id,
-      ts,
-      dur,
-      root_utid AS utid,
-      1 AS stack_depth,
-      iif(self_state GLOB 'R*', NULL, 'kernel function: ' || self_function) AS name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM relevant_spans
-    UNION ALL
-    -- Builds the self kernel io_wait
-    SELECT
-      self_thread_state_id AS id,
-      ts,
-      dur,
-      root_utid AS utid,
-      2 AS stack_depth,
-      iif(self_state GLOB 'R*', NULL, 'io_wait: ' || self_io_wait) AS name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM relevant_spans
-    UNION ALL
-    -- Builds the self process_name
-    SELECT
-      self_thread_state_id AS id,
-      ts,
-      dur,
-      thread.utid,
-      3 AS stack_depth,
-      iif($enable_process_name, 'process_name: ' || process.name, NULL) AS name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM relevant_spans
-    LEFT JOIN thread
-      ON thread.utid = root_utid
-    LEFT JOIN process
-      USING (upid)
-    -- Builds the self thread_name
-    UNION ALL
-    SELECT
-      self_thread_state_id AS id,
-      ts,
-      dur,
-      thread.utid,
-      4 AS stack_depth,
-      iif($enable_thread_name, 'thread_name: ' || thread.name, NULL) AS name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM relevant_spans
-    LEFT JOIN thread
-      ON thread.utid = root_utid
-    JOIN process
-      USING (upid)
-    UNION ALL
-    -- Builds the self 'ancestor' slice stack
-    SELECT
-      anc.id,
-      slice.ts,
-      slice.dur,
-      root_utid AS utid,
-      anc.depth + 5 AS stack_depth,
-      iif($enable_self_slice, anc.name, NULL) AS name,
-      'slice' AS table_name,
-      root_utid
-    FROM relevant_spans AS slice, ancestor_slice(self_slice_id) AS anc
-    WHERE
-      anc.dur != -1
-    UNION ALL
-    -- Self 'deepest' slice. The slice name is fetched here on
-    -- `self_slice_id` so the upstream materialised tables stay in
-    -- id-space.
-    SELECT
-      spans.self_slice_id AS id,
-      spans.ts,
-      spans.dur,
-      spans.root_utid AS utid,
-      spans.self_slice_depth + 5 AS stack_depth,
-      iif($enable_self_slice, sl.name, NULL) AS name,
-      'slice' AS table_name,
-      spans.root_utid
-    FROM relevant_spans AS spans
-    LEFT JOIN slice AS sl
-      ON sl.id = spans.self_slice_id
-    ORDER BY
-      stack_depth
-  ),
-  -- Prepares for stage 2 in building the entire stack.
-  -- Computes the starting depth for each stack. This is necessary because
-  -- each self slice stack has variable depth and the depth in each stack
-  -- most be contiguous in order to efficiently generate a pprof in the future.
-  critical_path_start_depth AS MATERIALIZED (
-    SELECT
-      root_utid,
-      ts,
-      max(stack_depth) + 1 AS start_depth
-    FROM self_stack
-    GROUP BY
-      root_utid,
-      ts
-  ),
-  critical_path_span AS MATERIALIZED (
-    SELECT
-      thread_state_id,
-      state,
-      function,
-      io_wait,
-      slice_id,
-      slice_depth,
-      spans.ts,
-      spans.dur,
-      spans.root_utid,
-      utid,
-      start_depth
-    FROM relevant_spans AS spans
-    JOIN critical_path_start_depth
-      ON critical_path_start_depth.root_utid = spans.root_utid
-      AND critical_path_start_depth.ts = spans.ts
-    WHERE
-      critical_path_start_depth.root_utid = $root_utid
-      AND spans.root_utid != spans.utid
-  ),
-  -- 2. Builds the 'critical_path' stack of items as an ordered UNION ALL
-  critical_path_stack AS MATERIALIZED (
-    -- Builds the critical_path thread_state
-    SELECT
-      thread_state_id AS id,
-      ts,
-      dur,
-      utid,
-      start_depth AS stack_depth,
-      'blocking thread_state: ' || state AS name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM critical_path_span
-    UNION ALL
-    -- Builds the critical_path process_name
-    SELECT
-      thread_state_id AS id,
-      ts,
-      dur,
-      thread.utid,
-      start_depth + 1 AS stack_depth,
-      'blocking process_name: ' || process.name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM critical_path_span
-    JOIN thread
-      USING (utid)
-    LEFT JOIN process
-      USING (upid)
-    UNION ALL
-    -- Builds the critical_path thread_name
-    SELECT
-      thread_state_id AS id,
-      ts,
-      dur,
-      thread.utid,
-      start_depth + 2 AS stack_depth,
-      'blocking thread_name: ' || thread.name,
-      'thread_state' AS table_name,
-      root_utid
-    FROM critical_path_span
-    JOIN thread
-      USING (utid)
-    UNION ALL
-    -- Builds the critical_path kernel blocked_function
-    SELECT
-      thread_state_id AS id,
-      ts,
-      dur,
-      thread.utid,
-      start_depth + 3 AS stack_depth,
-      'blocking kernel_function: ' || function,
-      'thread_state' AS table_name,
-      root_utid
-    FROM critical_path_span
-    JOIN thread
-      USING (utid)
-    UNION ALL
-    -- Builds the critical_path kernel io_wait
-    SELECT
-      thread_state_id AS id,
-      ts,
-      dur,
-      thread.utid,
-      start_depth + 4 AS stack_depth,
-      'blocking io_wait: ' || io_wait,
-      'thread_state' AS table_name,
-      root_utid
-    FROM critical_path_span
-    JOIN thread
-      USING (utid)
-    UNION ALL
-    -- Builds the critical_path 'ancestor' slice stack
-    SELECT
-      anc.id,
-      slice.ts,
-      slice.dur,
-      slice.utid,
-      anc.depth + start_depth + 5 AS stack_depth,
-      iif($enable_critical_path_slice, anc.name, NULL) AS name,
-      'slice' AS table_name,
-      root_utid
-    FROM critical_path_span AS slice, ancestor_slice(slice_id) AS anc
-    WHERE
-      anc.dur != -1
-    UNION ALL
-    -- Critical-path 'deepest' slice. The slice name is fetched here on
-    -- `slice_id` so the upstream materialised tables stay in id-space.
-    SELECT
-      cps.slice_id AS id,
-      cps.ts,
-      cps.dur,
-      cps.utid,
-      cps.slice_depth + cps.start_depth + 5 AS stack_depth,
-      iif($enable_critical_path_slice, sl.name, NULL) AS name,
-      'slice' AS table_name,
-      cps.root_utid
-    FROM critical_path_span AS cps
-    LEFT JOIN slice AS sl
-      ON sl.id = cps.slice_id
-    ORDER BY
-      stack_depth
-  ),
-  -- Prepares for stage 3 in building the entire stack.
-  -- Computes the starting depth for each stack using the deepest stack_depth between
-  -- the critical_path stack and self stack. The self stack depth is
-  -- already computed and materialized in |critical_path_start_depth|.
-  cpu_start_depth_raw AS (
-    SELECT
-      root_utid,
-      ts,
-      max(stack_depth) + 1 AS start_depth
-    FROM critical_path_stack
-    GROUP BY
-      root_utid,
-      ts
-    UNION ALL
-    SELECT
-      *
-    FROM critical_path_start_depth
-  ),
-  cpu_start_depth AS (
-    SELECT
-      root_utid,
-      ts,
-      max(start_depth) AS start_depth
-    FROM cpu_start_depth_raw
-    GROUP BY
-      root_utid,
-      ts
-  ),
-  -- 3. Builds the 'CPU' stack for 'Running' states in either the self or critical path stack.
-  cpu_stack AS (
-    SELECT
-      thread_state_id AS id,
-      spans.ts,
-      spans.dur,
-      utid,
-      start_depth AS stack_depth,
-      'cpu: ' || cpu AS name,
-      'thread_state' AS table_name,
-      spans.root_utid
-    FROM relevant_spans AS spans
-    JOIN cpu_start_depth
-      ON cpu_start_depth.root_utid = spans.root_utid AND cpu_start_depth.ts = spans.ts
-    WHERE
-      cpu_start_depth.root_utid = $root_utid
-      AND state = 'Running'
-      OR self_state = 'Running'
-  ),
-  merged AS (
-    SELECT
-      *
-    FROM self_stack
-    UNION ALL
-    SELECT
-      *
-    FROM critical_path_stack
-    UNION ALL
-    SELECT
-      *
-    FROM cpu_stack
-  )
-SELECT
-  *
-FROM merged
-WHERE
-  id IS NOT NULL;
-
--- Critical path stack of thread_executing_spans with the following entities in the critical path
--- stacked from top to bottom: self thread_state, self blocked_function, self process_name,
--- self thread_name, slice stack, critical_path thread_state, critical_path process_name,
--- critical_path thread_name, critical_path slice_stack, running_cpu.
-CREATE PERFETTO FUNCTION _thread_executing_span_critical_path_stack(
-    -- Thread utid to filter critical paths to.
-    root_utid JOINID(thread.id),
-    -- Timestamp of start of time range to filter critical paths to.
-    ts TIMESTAMP,
-    -- Duration of time range to filter critical paths to.
+    -- Window duration.
     dur DURATION
 )
 RETURNS TABLE (
-  -- Id of the thread_state or slice in the thread_executing_span.
-  id LONG,
-  -- Timestamp of slice in the critical path.
+  -- Start of this critical-path interval, clipped to the query window.
   ts TIMESTAMP,
-  -- Duration of slice in the critical path.
+  -- Duration of this critical-path interval.
   dur DURATION,
-  -- Utid of thread that emitted the slice.
-  utid JOINID(thread.id),
-  -- Stack depth of the entitity in the debug track.
-  stack_depth LONG,
-  -- Name of entity in the critical path (could be a thread_state, kernel blocked_function, process_name, thread_name, slice name or cpu).
-  name STRING,
-  -- Table name of entity in the critical path (could be either slice or thread_state).
-  table_name STRING,
-  -- Utid of the thread the critical path was filtered to.
-  root_utid JOINID(thread.id)
+  -- The blocked thread (== input `root_utid`).
+  root_utid JOINID(thread.id),
+  -- thread_state.id of `root_utid` over this interval.
+  self_thread_state_id LONG,
+  -- thread_state.state of `root_utid` over this interval (e.g. 'S', 'D', 'R').
+  self_state STRING,
+  -- thread_state.blocked_function — the kernel function the thread is
+  -- waiting in (e.g. 'futex_wait_queue_me'), NULL when running.
+  self_function STRING,
+  -- thread_state.io_wait of `root_utid` over this interval.
+  self_io_wait LONG,
+  -- Leaf slice on `root_utid` at this time, NULL if no slice is active.
+  self_slice_id LONG,
+  -- Name of the leaf self slice.
+  self_slice_name STRING,
+  -- Depth of the leaf self slice in the original (un-flattened) stack.
+  self_slice_depth LONG,
+  -- The thread that was on-CPU during `root_utid`'s wait at this
+  -- interval (the on-CPU blocker in the wakeup chain).
+  blocker_utid JOINID(thread.id),
+  -- thread.name of the blocker.
+  blocker_thread_name STRING,
+  -- process.name of the blocker.
+  blocker_process_name STRING,
+  -- thread_state.id of the blocker over this interval.
+  blocker_thread_state_id LONG,
+  -- thread_state.state of the blocker over this interval.
+  blocker_state STRING,
+  -- thread_state.blocked_function of the blocker (NULL when running).
+  blocker_function STRING,
+  -- thread_state.io_wait of the blocker over this interval.
+  blocker_io_wait LONG,
+  -- CPU the blocker was running on, NULL when not running.
+  blocker_cpu LONG,
+  -- Leaf slice on the blocker at this time.
+  blocker_slice_id LONG,
+  -- Name of the leaf blocker slice.
+  blocker_slice_name STRING,
+  -- Depth of the leaf blocker slice in the original (un-flattened) stack.
+  blocker_slice_depth LONG
 ) AS
 SELECT
-  *
-FROM _critical_path_stack($root_utid, $ts, $dur, 1, 1, 1, 1);
+  rs.ts,
+  rs.dur,
+  rs.root_utid,
+  rs.self_thread_state_id,
+  rs.self_state,
+  rs.self_function,
+  rs.self_io_wait,
+  rs.self_slice_id,
+  self_sl.name AS self_slice_name,
+  rs.self_slice_depth,
+  rs.utid AS blocker_utid,
+  blocker_th.name AS blocker_thread_name,
+  blocker_proc.name AS blocker_process_name,
+  rs.thread_state_id AS blocker_thread_state_id,
+  rs.state AS blocker_state,
+  rs.function AS blocker_function,
+  rs.io_wait AS blocker_io_wait,
+  rs.cpu AS blocker_cpu,
+  rs.slice_id AS blocker_slice_id,
+  blocker_sl.name AS blocker_slice_name,
+  rs.slice_depth AS blocker_slice_depth
+FROM _critical_path_relevant_spans($root_utid, $ts, $dur) AS rs
+LEFT JOIN slice AS self_sl
+  ON self_sl.id = rs.self_slice_id
+LEFT JOIN slice AS blocker_sl
+  ON blocker_sl.id = rs.slice_id
+LEFT JOIN thread AS blocker_th
+  ON blocker_th.utid = rs.utid
+LEFT JOIN process AS blocker_proc
+  ON blocker_proc.upid = blocker_th.upid;
 
--- Returns a pprof aggregation of the stacks in |_critical_path_stack|.
-CREATE PERFETTO FUNCTION _critical_path_graph(
-    graph_title STRING,
+-- Ancestor slice stack for the *self* (blocked) side at each
+-- critical-path interval. One row per (ts, dur, ancestor depth) — for
+-- intervals where `root_utid` has an active slice, this returns the
+-- slice and every ancestor up to the root. `stack_depth` is the
+-- ancestor's depth in the original (un-flattened) slice stack, so
+-- consumers can stack-display from `stack_depth = 0` (root) outward.
+CREATE PERFETTO FUNCTION _critical_path_self_slice_stack(
     root_utid JOINID(thread.id),
     ts TIMESTAMP,
-    dur DURATION,
-    enable_process_name LONG,
-    enable_thread_name LONG,
-    enable_self_slice LONG,
-    enable_critical_path_slice LONG
+    dur DURATION
 )
 RETURNS TABLE (
+  -- Start of the critical-path interval this stack frame covers,
+  -- clipped to the query window.
+  ts TIMESTAMP,
+  -- Duration of the interval.
+  dur DURATION,
+  -- The blocked thread (== input `root_utid`).
+  root_utid JOINID(thread.id),
+  -- slice.id of this ancestor (or the leaf, when `stack_depth` equals
+  -- the leaf's depth).
+  slice_id LONG,
+  -- slice.name of this ancestor.
+  slice_name STRING,
+  -- Depth of this ancestor in the original (un-flattened) slice stack.
+  -- 0 = root, increasing toward the leaf.
+  stack_depth LONG
+) AS
+WITH
+  ctx AS MATERIALIZED (
+    SELECT
+      *
+    FROM _critical_path_context($root_utid, $ts, $dur)
+    WHERE
+      self_slice_id IS NOT NULL
+  )
+SELECT
+  ctx.ts,
+  ctx.dur,
+  ctx.root_utid,
+  anc.id AS slice_id,
+  anc.name AS slice_name,
+  anc.depth AS stack_depth
+FROM ctx, ancestor_slice(ctx.self_slice_id) AS anc
+WHERE
+  anc.dur != -1
+UNION ALL
+SELECT
+  ctx.ts,
+  ctx.dur,
+  ctx.root_utid,
+  ctx.self_slice_id AS slice_id,
+  ctx.self_slice_name AS slice_name,
+  ctx.self_slice_depth AS stack_depth
+FROM ctx;
+
+-- Same as `_critical_path_self_slice_stack` but for the on-CPU blocker
+-- at each critical-path interval. The blocker switches as the wakeup
+-- chain advances; this returns the active blocker's slice stack at
+-- each step.
+CREATE PERFETTO FUNCTION _critical_path_blocker_slice_stack(
+    root_utid JOINID(thread.id),
+    ts TIMESTAMP,
+    dur DURATION
+)
+RETURNS TABLE (
+  -- Start of the critical-path interval this stack frame covers,
+  -- clipped to the query window.
+  ts TIMESTAMP,
+  -- Duration of the interval.
+  dur DURATION,
+  -- The blocked thread (== input `root_utid`).
+  root_utid JOINID(thread.id),
+  -- The blocker thread that was on-CPU during this interval.
+  blocker_utid JOINID(thread.id),
+  -- slice.id of this ancestor (or the leaf).
+  slice_id LONG,
+  -- slice.name of this ancestor.
+  slice_name STRING,
+  -- Depth of this ancestor in the blocker's original slice stack.
+  -- 0 = root, increasing toward the leaf.
+  stack_depth LONG
+) AS
+WITH
+  ctx AS MATERIALIZED (
+    SELECT
+      *
+    FROM _critical_path_context($root_utid, $ts, $dur)
+    WHERE
+      blocker_slice_id IS NOT NULL
+  )
+SELECT
+  ctx.ts,
+  ctx.dur,
+  ctx.root_utid,
+  ctx.blocker_utid,
+  anc.id AS slice_id,
+  anc.name AS slice_name,
+  anc.depth AS stack_depth
+FROM ctx, ancestor_slice(ctx.blocker_slice_id) AS anc
+WHERE
+  anc.dur != -1
+UNION ALL
+SELECT
+  ctx.ts,
+  ctx.dur,
+  ctx.root_utid,
+  ctx.blocker_utid,
+  ctx.blocker_slice_id AS slice_id,
+  ctx.blocker_slice_name AS slice_name,
+  ctx.blocker_slice_depth AS stack_depth
+FROM ctx;
+
+-- pprof aggregation of the critical path. Builds the per-interval stack
+-- from `_critical_path_context` columns + (optionally)
+-- `_critical_path_blocker_slice_stack`, then folds via `cat_stacks`
+-- and aggregates with `experimental_profile`. Each frame is a typed
+-- column value (no `'process_name: ' || ...` string smashing), so the
+-- resulting flame graph aggregates correctly: identical
+-- `(blocker_thread, blocker_state, blocker_slice_path)` paths land on
+-- the same leaf instead of being fragmented by accidental columns
+-- like `cpu` or `io_wait`.
+--
+-- Stack ordering (outer → inner, matching pprof convention where the
+-- inner frame is "where the time was spent"):
+--
+--   graph_title
+--    └─ self thread_state          (e.g. 'S', 'D', 'R')
+--        └─ self kernel function   (if `enable_self_function` and non-NULL)
+--            └─ blocker process    (if `enable_blocker_process`)
+--                └─ blocker thread (if `enable_blocker_thread`)
+--                    └─ blocker thread_state
+--                        └─ blocker kernel function (if blocker in kernel)
+--                            └─ blocker slice stack (root → leaf,
+--                                if `enable_blocker_slice_stack`)
+CREATE PERFETTO FUNCTION _critical_path_pprof(
+    -- Descriptive name shown as the root frame of every sample.
+    graph_title STRING,
+    -- The blocked thread we are computing the critical path for.
+    root_utid JOINID(thread.id),
+    -- Window start.
+    ts TIMESTAMP,
+    -- Window duration.
+    dur DURATION,
+    -- Whether to add the blocker's process name as a frame.
+    enable_blocker_process LONG,
+    -- Whether to add the blocker's thread name as a frame.
+    enable_blocker_thread LONG,
+    -- Whether to expand the blocker's slice stack (root → leaf) inline.
+    enable_blocker_slice_stack LONG,
+    -- Whether to add the self-side blocked_function as a frame.
+    enable_self_function LONG
+)
+RETURNS TABLE (
+  -- pprof bytes. `experimental_profile` uses 'duration' / 'ns' values.
   pprof BYTES
 ) AS
 WITH
+  ctx AS MATERIALIZED (
+    SELECT
+      *
+    FROM _critical_path_context($root_utid, $ts, $dur)
+  ),
+  -- Per-(ts) frames at synthetic depths. Depth 0 = graph title (the
+  -- outermost frame); depth grows inward toward the leaf. Frames whose
+  -- value would be NULL are omitted; depths are then re-densified
+  -- below so the recursive cat_stacks walk has no gaps.
+  frames AS (
+    SELECT
+      ts,
+      dur,
+      0 AS frame_order,
+      $graph_title AS name
+    FROM ctx
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      1,
+      'thread_state: ' || self_state
+    FROM ctx
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      2,
+      'kernel function: ' || self_function
+    FROM ctx
+    WHERE
+      $enable_self_function AND self_function IS NOT NULL
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      3,
+      'blocking process_name: ' || blocker_process_name
+    FROM ctx
+    WHERE
+      $enable_blocker_process AND blocker_process_name IS NOT NULL
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      4,
+      'blocking thread_name: ' || blocker_thread_name
+    FROM ctx
+    WHERE
+      $enable_blocker_thread AND blocker_thread_name IS NOT NULL
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      5,
+      'blocking thread_state: ' || blocker_state
+    FROM ctx
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      6,
+      'blocking kernel function: ' || blocker_function
+    FROM ctx
+    WHERE
+      blocker_function IS NOT NULL
+    UNION ALL
+    SELECT
+      ts,
+      dur,
+      -- Slice stack frames go after the fixed frames (offset 7),
+      -- ordered root → leaf via `stack_depth`.
+      7 + stack_depth,
+      slice_name
+    FROM _critical_path_blocker_slice_stack($root_utid, $ts, $dur)
+    WHERE
+      $enable_blocker_slice_stack
+  ),
+  -- Re-densify `frame_order` per-(ts) into a contiguous `stack_depth`
+  -- starting at 0, so the recursive walk can hop parent → child via
+  -- `stack_depth + 1`. dur is converted to *self* time (full dur at
+  -- the leaf, 0 at non-leaf frames) so the pprof aggregator does not
+  -- double-count the same interval at every level of the stack.
   stack AS MATERIALIZED (
     SELECT
       ts,
-      dur - coalesce(lead(dur) OVER (PARTITION BY root_utid, ts ORDER BY stack_depth), 0) AS dur,
+      dur - coalesce(lead(dur) OVER (PARTITION BY ts ORDER BY frame_order), 0) AS dur,
       name,
-      utid,
-      root_utid,
-      stack_depth
-    FROM _critical_path_stack(
-      $root_utid,
-      $ts,
-      $dur,
-      $enable_process_name,
-      $enable_thread_name,
-      $enable_self_slice,
-      $enable_critical_path_slice
-    )
+      row_number() OVER (PARTITION BY ts ORDER BY frame_order) - 1 AS stack_depth
+    FROM frames
   ),
-  graph AS (
-    SELECT
-      cat_stacks($graph_title) AS stack
-  ),
+  -- Walk parent → child building cumulative cat_stacks.
   parent AS (
     SELECT
-      cr.ts,
-      cr.dur,
-      cr.name,
-      cr.utid,
-      cr.stack_depth,
-      cat_stacks(graph.stack, cr.name) AS stack,
-      cr.root_utid
-    FROM stack AS cr, graph
+      ts,
+      dur,
+      stack_depth,
+      cat_stacks(name) AS stack
+    FROM stack
     WHERE
       stack_depth = 0
     UNION ALL
     SELECT
       child.ts,
       child.dur,
-      child.name,
-      child.utid,
       child.stack_depth,
-      cat_stacks(stack, child.name) AS stack,
-      child.root_utid
+      cat_stacks(parent.stack, child.name) AS stack
     FROM stack AS child
     JOIN parent
-      ON parent.root_utid = child.root_utid
-      AND parent.ts = child.ts
-      AND child.stack_depth = parent.stack_depth + 1
-  ),
-  stacks AS (
-    SELECT
-      dur,
-      stack
-    FROM parent
+      ON parent.ts = child.ts AND child.stack_depth = parent.stack_depth + 1
   )
 SELECT
   experimental_profile(stack, 'duration', 'ns', dur) AS pprof
-FROM stacks;
-
--- Returns a pprof aggreagation of the stacks in |_thread_executing_span_critical_path_stack|
-CREATE PERFETTO FUNCTION _thread_executing_span_critical_path_graph(
-    -- Descriptive name for the graph.
-    graph_title STRING,
-    -- Thread utid to filter critical paths to.
-    root_utid JOINID(thread.id),
-    -- Timestamp of start of time range to filter critical paths to.
-    ts TIMESTAMP,
-    -- Duration of time range to filter critical paths to.
-    dur DURATION
-)
-RETURNS TABLE (
-  -- Pprof of critical path stacks.
-  pprof BYTES
-) AS
-SELECT
-  *
-FROM _critical_path_graph($graph_title, $root_utid, $ts, $dur, 1, 1, 1, 1);
+FROM parent;

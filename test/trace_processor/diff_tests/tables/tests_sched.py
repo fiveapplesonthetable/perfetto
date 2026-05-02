@@ -353,48 +353,61 @@ class TablesSched(TestSuite):
         12521,1477,12521,1737407641875,1830015,1477
         """))
 
-  def test_thread_executing_span_critical_path_stack(self):
+  def test_critical_path_context(self):
     return DiffTestBlueprint(
         trace=DataPath('sched_wakeup_trace.atr'),
         query="""
         INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;
         SELECT
-          id,
-          ts,
-          dur,
-          utid,
-          stack_depth,
-          name,
-          table_name,
-          root_utid
-        FROM _thread_executing_span_critical_path_stack((select utid from thread where tid = 3487), start_ts, end_ts), trace_bounds
+          ts, dur, root_utid,
+          self_state, self_function, self_io_wait,
+          self_slice_id, self_slice_name, self_slice_depth,
+          blocker_utid, blocker_thread_name, blocker_process_name,
+          blocker_state, blocker_function, blocker_io_wait, blocker_cpu,
+          blocker_slice_id, blocker_slice_name, blocker_slice_depth
+        FROM _critical_path_context(
+          (SELECT utid FROM thread WHERE tid = 3487),
+          (SELECT start_ts FROM trace_bounds),
+          (SELECT end_ts FROM trace_bounds)),
+          trace_bounds
         WHERE ts = 1737500355691
-        ORDER BY utid, id
+        ORDER BY blocker_utid
         """,
         out=Csv("""
-        "id","ts","dur","utid","stack_depth","name","table_name","root_utid"
-        4271,1737500355691,1456753,1477,5,"bindApplication","slice",1477
-        13120,1737500355691,1456753,1477,0,"thread_state: S","thread_state",1477
-        13120,1737500355691,1456753,1477,1,"[NULL]","thread_state",1477
-        13120,1737500355691,1456753,1477,2,"[NULL]","thread_state",1477
-        13120,1737500355691,1456753,1477,3,"process_name: com.android.providers.media.module","thread_state",1477
-        13120,1737500355691,1456753,1477,4,"thread_name: rs.media.module","thread_state",1477
-        4800,1737500355691,1456753,1498,11,"HIDL::IComponentStore::getStructDescriptors::client","slice",1477
-        4801,1737500355691,1456753,1498,12,"binder transaction","slice",1477
-        13648,1737500355691,1456753,1498,6,"blocking thread_state: R+","thread_state",1477
-        13648,1737500355691,1456753,1498,7,"blocking process_name: com.android.providers.media.module","thread_state",1477
-        13648,1737500355691,1456753,1498,8,"blocking thread_name: CodecLooper","thread_state",1477
-        13648,1737500355691,1456753,1498,9,"[NULL]","thread_state",1477
-        13648,1737500355691,1456753,1498,10,"[NULL]","thread_state",1477
+        "ts","dur","root_utid","self_state","self_function","self_io_wait","self_slice_id","self_slice_name","self_slice_depth","blocker_utid","blocker_thread_name","blocker_process_name","blocker_state","blocker_function","blocker_io_wait","blocker_cpu","blocker_slice_id","blocker_slice_name","blocker_slice_depth"
+        1737500355691,1456753,1477,"S","[NULL]","[NULL]",4271,"bindApplication",0,1498,"CodecLooper","com.android.providers.media.module","R+","[NULL]","[NULL]","[NULL]",4801,"binder transaction",1
         """))
 
-  def test_thread_executing_span_critical_path_graph(self):
+  def test_critical_path_self_slice_stack(self):
     return DiffTestBlueprint(
         trace=DataPath('sched_wakeup_trace.atr'),
         query="""
         INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;
-        SELECT HEX(pprof) FROM _thread_executing_span_critical_path_graph("critical path", (select utid from thread where tid = 3487), 1737488133487, 16000), trace_bounds
-      """,
+        SELECT ts, dur, root_utid, slice_id, slice_name, stack_depth
+        FROM _critical_path_self_slice_stack(
+          (SELECT utid FROM thread WHERE tid = 3487),
+          (SELECT start_ts FROM trace_bounds),
+          (SELECT end_ts FROM trace_bounds)),
+          trace_bounds
+        WHERE ts = 1737500355691
+        ORDER BY stack_depth, slice_id
+        """,
+        out=Csv("""
+        "ts","dur","root_utid","slice_id","slice_name","stack_depth"
+        1737500355691,1456753,1477,4271,"bindApplication",0
+        """))
+
+  def test_critical_path_pprof(self):
+    return DiffTestBlueprint(
+        trace=DataPath('sched_wakeup_trace.atr'),
+        query="""
+        INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;
+        SELECT HEX(pprof) FROM _critical_path_pprof(
+          "critical path",
+          (SELECT utid FROM thread WHERE tid = 3487),
+          1737488133487, 16000,
+          1, 1, 1, 1)
+        """,
         out=BinaryProto(
             message_type="perfetto.third_party.perftools.profiles.Profile",
             post_processing=PrintProfileProto,
@@ -403,54 +416,24 @@ class TablesSched(TestSuite):
             Values: 0
             Stack:
             bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
+            blocking thread_state: R (0x0)
+            blocking thread_name: rs.media.module (0x0)
+            blocking process_name: com.android.providers.media.module (0x0)
             thread_state: R (0x0)
             critical path (0x0)
 
             Sample:
             Values: 0
             Stack:
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
-            thread_state: S (0x0)
-            critical path (0x0)
-
-            Sample:
-            Values: 0
-            Stack:
-            binder reply (0x0)
-            blocking thread_name: binder:553_3 (0x0)
             blocking process_name: /system/bin/mediaserver (0x0)
-            blocking thread_state: Running (0x0)
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
             thread_state: S (0x0)
             critical path (0x0)
 
             Sample:
             Values: 0
             Stack:
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
-            thread_state: S (0x0)
-            critical path (0x0)
-
-            Sample:
-            Values: 0
-            Stack:
-            blocking process_name: /system/bin/mediaserver (0x0)
-            blocking thread_state: Running (0x0)
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
-            thread_state: S (0x0)
+            blocking process_name: com.android.providers.media.module (0x0)
+            thread_state: R (0x0)
             critical path (0x0)
 
             Sample:
@@ -458,53 +441,29 @@ class TablesSched(TestSuite):
             Stack:
             blocking thread_name: binder:553_3 (0x0)
             blocking process_name: /system/bin/mediaserver (0x0)
-            blocking thread_state: Running (0x0)
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
             thread_state: S (0x0)
             critical path (0x0)
 
             Sample:
             Values: 0
             Stack:
-            blocking thread_state: Running (0x0)
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
-            thread_state: S (0x0)
-            critical path (0x0)
-
-            Sample:
-            Values: 0
-            Stack:
-            process_name: com.android.providers.media.module (0x0)
+            blocking thread_name: rs.media.module (0x0)
+            blocking process_name: com.android.providers.media.module (0x0)
             thread_state: R (0x0)
             critical path (0x0)
 
             Sample:
             Values: 0
             Stack:
-            process_name: com.android.providers.media.module (0x0)
-            thread_state: S (0x0)
-            critical path (0x0)
-
-            Sample:
-            Values: 0
-            Stack:
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
+            blocking thread_state: R (0x0)
+            blocking thread_name: rs.media.module (0x0)
+            blocking process_name: com.android.providers.media.module (0x0)
             thread_state: R (0x0)
             critical path (0x0)
 
             Sample:
             Values: 0
             Stack:
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
-            thread_state: S (0x0)
             critical path (0x0)
 
             Sample:
@@ -524,39 +483,50 @@ class TablesSched(TestSuite):
             Stack:
             binder transaction (0x0)
             bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
+            blocking thread_state: R (0x0)
+            blocking thread_name: rs.media.module (0x0)
+            blocking process_name: com.android.providers.media.module (0x0)
             thread_state: R (0x0)
             critical path (0x0)
 
             Sample:
             Values: 13010
             Stack:
-            cpu: 0 (0x0)
             binder reply (0x0)
+            blocking thread_state: Running (0x0)
             blocking thread_name: binder:553_3 (0x0)
             blocking process_name: /system/bin/mediaserver (0x0)
-            blocking thread_state: Running (0x0)
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
             thread_state: S (0x0)
             critical path (0x0)
 
             Sample:
             Values: 1889
             Stack:
-            cpu: 0 (0x0)
+            blocking thread_state: Running (0x0)
             blocking thread_name: binder:553_3 (0x0)
             blocking process_name: /system/bin/mediaserver (0x0)
-            blocking thread_state: Running (0x0)
-            binder transaction (0x0)
-            bindApplication (0x0)
-            thread_name: rs.media.module (0x0)
-            process_name: com.android.providers.media.module (0x0)
             thread_state: S (0x0)
             critical path (0x0)
+        """))
+
+  def test_critical_path_blocker_slice_stack(self):
+    return DiffTestBlueprint(
+        trace=DataPath('sched_wakeup_trace.atr'),
+        query="""
+        INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;
+        SELECT ts, dur, root_utid, blocker_utid, slice_id, slice_name, stack_depth
+        FROM _critical_path_blocker_slice_stack(
+          (SELECT utid FROM thread WHERE tid = 3487),
+          (SELECT start_ts FROM trace_bounds),
+          (SELECT end_ts FROM trace_bounds)),
+          trace_bounds
+        WHERE ts = 1737500355691
+        ORDER BY stack_depth, slice_id
+        """,
+        out=Csv("""
+        "ts","dur","root_utid","blocker_utid","slice_id","slice_name","stack_depth"
+        1737500355691,1456753,1477,1498,4800,"HIDL::IComponentStore::getStructDescriptors::client",0
+        1737500355691,1456753,1477,1498,4801,"binder transaction",1
         """))
 
   # Test machine_id ID of the sched table.

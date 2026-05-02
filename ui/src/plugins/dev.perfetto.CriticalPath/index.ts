@@ -27,19 +27,33 @@ import {
 import {getTimeSpanOfSelectionOrVisibleWindow} from '../../public/utils';
 import {NUM} from '../../trace_processor/query_result';
 
-const criticalPathSliceColumns = {
-  ts: 'ts',
-  dur: 'dur',
-  name: 'name',
-};
-
-const criticalPathsliceColumnNames = [
-  'id',
-  'utid',
+// Debug-track schema for the "blocker" view emitted by the new
+// `_critical_path_context` helper: one slice per CP interval, named
+// after the blocker's thread + state + active slice/function. `utid`
+// is the blocker's utid (not the root), so the track's color hash
+// matches the blocker's main thread track — visual link between the
+// CP overlay and the underlying thread that's blocking us.
+const blockerColumns = {ts: 'ts', dur: 'dur', name: 'name'};
+const blockerColumnNames = [
   'ts',
   'dur',
   'name',
-  'table_name',
+  'utid',
+  'thread_state_id',
+  'slice_id',
+];
+
+// Debug-track schema for the "self wait-reason" view: one slice per
+// CP interval, named after `root_utid`'s state + blocked_function /
+// active slice. `utid` is the root.
+const selfColumns = {ts: 'ts', dur: 'dur', name: 'name'};
+const selfColumnNames = [
+  'ts',
+  'dur',
+  'name',
+  'utid',
+  'thread_state_id',
+  'slice_id',
 ];
 
 const criticalPathsliceLiteColumns = {
@@ -69,10 +83,6 @@ const sliceLiteColumnNames = [
   'process_name',
   'table_name',
 ];
-
-const sliceColumns = {ts: 'ts', dur: 'dur', name: 'name'};
-
-const sliceColumnNames = ['id', 'utid', 'ts', 'dur', 'name', 'table_name'];
 
 function getFirstUtidOfSelectionOrVisibleWindow(trace: Trace): number {
   const selection = trace.selection.selection;
@@ -211,30 +221,15 @@ export default class implements PerfettoPlugin {
         if (thdInfo === undefined) {
           return showModalErrorThreadStateRequired();
         }
-        ctx.engine
-          .query(
-            `INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;`,
-          )
-          .then(() =>
-            addDebugSliceTrack({
-              trace: ctx,
-              data: {
-                sqlSource: `
-                SELECT cr.id, cr.utid, cr.ts, cr.dur, cr.name, cr.table_name
-                  FROM
-                    _thread_executing_span_critical_path_stack(
-                      ${thdInfo.utid},
-                      trace_bounds.start_ts,
-                      trace_bounds.end_ts - trace_bounds.start_ts) cr,
-                    trace_bounds WHERE name IS NOT NULL
-              `,
-                columns: sliceColumnNames,
-              },
-              title: `${thdInfo.name}`,
-              columns: sliceColumns,
-              rawColumns: sliceColumnNames,
-            }),
-          );
+        await ctx.engine.query(
+          `INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;`,
+        );
+        await addCriticalPathContextTracks(
+          ctx,
+          thdInfo,
+          'trace_bounds.start_ts',
+          'trace_bounds.end_ts - trace_bounds.start_ts',
+        );
       },
     });
 
@@ -293,26 +288,13 @@ export default class implements PerfettoPlugin {
         await ctx.engine.query(
           `INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;`,
         );
-        await addDebugSliceTrack({
-          trace: ctx,
-          data: {
-            sqlSource: `
-                SELECT cr.id, cr.utid, cr.ts, cr.dur, cr.name, cr.table_name
-                FROM
-                _critical_path_stack(
-                  ${trackUtid},
-                  ${window.start},
-                  ${window.end} - ${window.start}, 1, 1, 1, 1) cr
-                WHERE name IS NOT NULL
-                `,
-            columns: criticalPathsliceColumnNames,
-          },
-          title:
-            (await getThreadInfo(ctx.engine, trackUtid as Utid)).name ??
-            '<thread name>',
-          columns: criticalPathSliceColumns,
-          rawColumns: criticalPathsliceColumnNames,
-        });
+        const thdInfo = await getThreadInfo(ctx.engine, trackUtid as Utid);
+        await addCriticalPathContextTracks(
+          ctx,
+          thdInfo,
+          `${window.start}`,
+          `${window.end} - ${window.start}`,
+        );
       },
     });
 
@@ -329,15 +311,86 @@ export default class implements PerfettoPlugin {
           query: `
               INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;
               SELECT *
-                FROM
-                  _thread_executing_span_critical_path_graph(
-                  "criical_path",
-                    ${trackUtid},
-                    ${window.start},
-                    ${window.end} - ${window.start}) cr`,
+                FROM _critical_path_pprof(
+                  "critical path",
+                  ${trackUtid},
+                  ${window.start},
+                  ${window.end} - ${window.start},
+                  1, 1, 1, 1)`,
           title: 'Critical path',
         });
       },
     });
   }
+}
+
+// Adds two debug-slice tracks for the critical path of `thdInfo` over
+// `[ts, ts + dur]`:
+//   1. a *blocker* track — one slice per CP interval, named after the
+//      blocker's thread / state / active slice. `utid` is the
+//      blocker's, so the track inherits the same color hash as the
+//      blocker's main thread track.
+//   2. a *self wait-reason* track — one slice per CP interval, named
+//      after the root's thread_state and what kept it from running.
+function addCriticalPathContextTracks(
+  ctx: Trace,
+  thdInfo: ThreadInfo,
+  tsExpr: string,
+  durExpr: string,
+): Promise<unknown> {
+  // `trace_bounds` is included unconditionally so callers can use
+  // `trace_bounds.start_ts` / `trace_bounds.end_ts` in `tsExpr` and
+  // `durExpr`; for literal-number callers (area selection) it's just
+  // a no-op single-row join.
+  const blockerSql = `
+    WITH win AS (
+      SELECT (${tsExpr}) AS ts, (${durExpr}) AS dur FROM trace_bounds
+    )
+    SELECT
+      ctx.ts,
+      ctx.dur,
+      ctx.blocker_thread_name
+        || ' [' || ctx.blocker_state || ']'
+        || coalesce(': ' || ctx.blocker_slice_name, '')
+        || coalesce(': ' || ctx.blocker_function, '') AS name,
+      ctx.blocker_utid AS utid,
+      ctx.blocker_thread_state_id AS thread_state_id,
+      ctx.blocker_slice_id AS slice_id
+    FROM win,
+      _critical_path_context(${thdInfo.utid}, win.ts, win.dur) AS ctx
+    WHERE ctx.dur > 0`;
+
+  const selfSql = `
+    WITH win AS (
+      SELECT (${tsExpr}) AS ts, (${durExpr}) AS dur FROM trace_bounds
+    )
+    SELECT
+      ctx.ts,
+      ctx.dur,
+      ctx.self_state
+        || coalesce(': ' || ctx.self_function, '')
+        || coalesce(' (' || ctx.self_slice_name || ')', '') AS name,
+      ctx.root_utid AS utid,
+      ctx.self_thread_state_id AS thread_state_id,
+      ctx.self_slice_id AS slice_id
+    FROM win,
+      _critical_path_context(${thdInfo.utid}, win.ts, win.dur) AS ctx
+    WHERE ctx.dur > 0`;
+
+  return Promise.all([
+    addDebugSliceTrack({
+      trace: ctx,
+      data: {sqlSource: blockerSql, columns: blockerColumnNames},
+      title: `${thdInfo.name} ◀ blocker`,
+      columns: blockerColumns,
+      rawColumns: blockerColumnNames,
+    }),
+    addDebugSliceTrack({
+      trace: ctx,
+      data: {sqlSource: selfSql, columns: selfColumnNames},
+      title: `${thdInfo.name} ◀ wait reason`,
+      columns: selfColumns,
+      rawColumns: selfColumnNames,
+    }),
+  ]);
 }
