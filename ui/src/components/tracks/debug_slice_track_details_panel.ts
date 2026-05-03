@@ -13,11 +13,16 @@
 // limitations under the License.
 
 import m from 'mithril';
-import {duration, Time, time} from '../../base/time';
+import {duration, Time, time, TimeSpan} from '../../base/time';
 import {hasArgs, renderArguments} from '../details/args';
 import {getSlice, SliceDetails} from '../sql_utils/slice';
 import {asArgSetId, asSliceSqlId, Utid} from '../sql_utils/core_types';
 import {getThreadState, ThreadState} from '../sql_utils/thread_state';
+import {
+  BreakdownByThreadState,
+  BreakdownByThreadStateTreeNode,
+  breakDownIntervalByThreadState,
+} from '../details/thread_state';
 import {DurationWidget} from '../widgets/duration';
 import {Timestamp} from '../widgets/timestamp';
 import {
@@ -75,6 +80,13 @@ export class DebugSliceTrackDetailsPanel implements TrackEventDetailsPanel {
   // in these well-known tables).
   private threadState?: ThreadState;
   private slice?: SliceDetails;
+
+  // Thread-state breakdown for the slice's [ts, ts+dur] interval. Populated
+  // when the underlying row carries a `utid` column and a positive duration —
+  // most importantly for Critical Path tracks, where without this the panel
+  // shows only name/ts/dur and gives no insight into how the thread spent the
+  // interval.
+  private breakdownByThreadState?: BreakdownByThreadState;
 
   constructor(
     private readonly trace: Trace,
@@ -205,6 +217,15 @@ export class DebugSliceTrackDetailsPanel implements TrackEventDetailsPanel {
       sqlValueToReadableString(this.data.rawCols['table_name']),
       sqlValueToNumber(this.data.rawCols['track_id']),
     );
+
+    const utid = sqlValueToUtid(this.data.rawCols['utid']);
+    if (utid !== undefined && this.data.dur > 0n) {
+      this.breakdownByThreadState = await breakDownIntervalByThreadState(
+        this.trace.engine,
+        TimeSpan.fromTimeAndDuration(this.data.ts, this.data.dur),
+        utid,
+      );
+    }
   }
 
   render() {
@@ -236,10 +257,20 @@ export class DebugSliceTrackDetailsPanel implements TrackEventDetailsPanel {
           left: 'Start time',
           right: m(Timestamp, {trace, ts: data.ts}),
         }),
-        m(TreeNode, {
-          left: 'Duration',
-          right: m(DurationWidget, {trace, dur: data.dur}),
-        }),
+        m(
+          TreeNode,
+          {
+            left: 'Duration',
+            right: m(DurationWidget, {trace, dur: data.dur}),
+          },
+          this.breakdownByThreadState !== undefined &&
+            data.dur > 0n &&
+            m(BreakdownByThreadStateTreeNode, {
+              trace,
+              data: this.breakdownByThreadState,
+              dur: data.dur,
+            }),
+        ),
         m(TreeNode, {
           left: 'SQL ID',
           right: m(SqlRef, {table: this.tableName, id: this.eventId}),
