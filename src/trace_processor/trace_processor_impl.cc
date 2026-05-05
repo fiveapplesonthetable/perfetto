@@ -445,7 +445,8 @@ uint64_t GetBoundsMutationCount(const TraceStorage& storage) {
          storage.heap_graph_object_table().mutations() +
          storage.perf_sample_table().mutations() +
          storage.instruments_sample_table().mutations() +
-         storage.cpu_profile_stack_sample_table().mutations();
+         storage.cpu_profile_stack_sample_table().mutations() +
+         storage.process_state_snapshot_table().mutations();
 }
 
 // IMPORTANT: GetBoundsMutationCount and GetTraceTimestampBoundsNs must be kept
@@ -496,6 +497,15 @@ std::pair<int64_t, int64_t> GetTraceTimestampBoundsNs(
     end_ns = std::max(it.ts(), end_ns);
   }
   for (auto it = storage.cpu_profile_stack_sample_table().IterateRows(); it;
+       ++it) {
+    start_ns = std::min(it.ts(), start_ns);
+    end_ns = std::max(it.ts(), end_ns);
+  }
+  // android_process_state_snapshot — instant samples; include them so
+  // traces containing only ProcessStateController data still get
+  // non-zero trace bounds (otherwise the UI's default viewport sits at
+  // ts=0 and the snapshot track instants render off-screen).
+  for (auto it = storage.process_state_snapshot_table().IterateRows(); it;
        ++it) {
     start_ns = std::min(it.ts(), start_ns);
     end_ns = std::max(it.ts(), end_ns);
@@ -1148,6 +1158,17 @@ std::vector<PerfettoSqlEngine::StaticTable> TraceProcessorImpl::GetStaticTables(
   AddStaticTable(tables, storage->mutable_user_list_table());
   AddStaticTable(tables, storage->mutable_perf_session_table());
   AddStaticTable(tables, storage->mutable_process_memory_snapshot_table());
+  AddStaticTable(tables, storage->mutable_process_state_snapshot_table());
+  AddStaticTable(tables, storage->mutable_process_state_process_table());
+  AddStaticTable(tables, storage->mutable_process_state_uid_table());
+  AddStaticTable(tables, storage->mutable_process_state_service_table());
+  AddStaticTable(tables, storage->mutable_process_state_binding_table());
+  AddStaticTable(tables, storage->mutable_process_state_provider_table());
+  AddStaticTable(tables,
+                 storage->mutable_process_state_provider_binding_table());
+  AddStaticTable(tables, storage->mutable_process_state_mutation_event_table());
+  AddStaticTable(tables, storage->mutable_process_state_adj_compute_table());
+  AddStaticTable(tables, storage->mutable_process_state_adj_step_table());
   AddStaticTable(tables, storage->mutable_profiler_smaps_table());
   AddStaticTable(tables, storage->mutable_protolog_table());
   AddStaticTable(tables, storage->mutable_winscope_trace_rect_table());

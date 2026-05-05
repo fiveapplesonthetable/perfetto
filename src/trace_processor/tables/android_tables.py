@@ -398,6 +398,613 @@ ANDROID_AFLAGS_TABLE = Table(
     ),
 )
 
+PROCESS_STATE_SNAPSHOT_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateSnapshotTable',
+    sql_name='android_process_state_snapshot',
+    columns=[
+        # cpp_access=READ so trace_processor_impl.cc can iterate ts to
+        # contribute snapshot timestamps to trace_bounds — without this
+        # a trace containing only process_state packets has bounds=0..0
+        # and the UI's default viewport renders the snapshot track
+        # off-screen.
+        C('ts', CppInt64(), cpp_access=CppAccess.READ),
+        C('oom_adj_reason', CppInt32()),
+        C('top_pid', CppOptional(CppInt32())),
+        C('is_full', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          One row per ProcessStateSnapshot packet emitted by the
+          android.process_state data source. Use snapshot_id (auto-id) as a
+          foreign key into android_process_state_process /
+          android_process_state_uid to drill into the per-process and
+          per-uid state at a given moment.
+        ''',
+        group='Android',
+        columns={
+            'ts':
+                'Boot-clock timestamp the snapshot was observed.',
+            'oom_adj_reason':
+                'OomAdjReason that triggered this snapshot. 0 == NONE.',
+            'top_pid':
+                'PID of the top process at this moment, if any.',
+            'is_full':
+                '1 if this is a full anchor snapshot, 0 if it is a delta.',
+        },
+    ),
+)
+
+PROCESS_STATE_PROCESS_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateProcessTable',
+    sql_name='android_process_state_process',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('pid', CppInt32()),
+        C('uid', CppInt32()),
+        C('user_id', CppInt32()),
+        C('process_name', CppOptional(CppString())),
+        C('package_name', CppOptional(CppString())),
+        C('lru_index', CppInt32()),
+        C('cur_adj', CppOptional(CppInt32())),
+        C('cur_raw_adj', CppOptional(CppInt32())),
+        C('set_adj', CppOptional(CppInt32())),
+        C('max_adj', CppOptional(CppInt32())),
+        C('cur_proc_state', CppOptional(CppInt32())),
+        C('set_proc_state', CppOptional(CppInt32())),
+        C('cur_raw_proc_state', CppOptional(CppInt32())),
+        C('cur_capability', CppOptional(CppInt32())),
+        C('set_capability', CppOptional(CppInt32())),
+        C('cur_sched_group', CppOptional(CppInt32())),
+        C('set_sched_group', CppOptional(CppInt32())),
+        C('has_foreground_activities', CppOptional(CppInt32())),
+        C('has_top_ui', CppOptional(CppInt32())),
+        C('has_overlay_ui', CppOptional(CppInt32())),
+        C('has_shown_ui', CppOptional(CppInt32())),
+        C('has_visible_activities', CppOptional(CppInt32())),
+        C('has_started_services', CppOptional(CppInt32())),
+        C('persistent', CppInt32()),
+        C('isolated', CppInt32()),
+        C('has_active_instrumentation', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Per-process state observed at the time of a
+          ProcessStateSnapshot. One row per (snapshot, pid). Joined to
+          android_process_state_snapshot via snapshot_id.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_snapshot.',
+                    joinable='android_process_state_snapshot.id'),
+            'pid':
+                'Process id.',
+            'uid':
+                'Owning UID.',
+            'user_id':
+                'Android multi-user user id.',
+            'process_name':
+                'ProcessRecord.processName.',
+            'package_name':
+                'Owning ApplicationInfo.packageName.',
+            'lru_index':
+                'Position in mLruProcesses (0 = MRU).',
+            'cur_adj':
+                'ProcessRecord.mState.curAdj.',
+            'cur_raw_adj':
+                'curRawAdj — pre-clamp adj.',
+            'set_adj':
+                'setAdj — last adj written to lmkd.',
+            'max_adj':
+                'Maximum adj this process is allowed to take.',
+            'cur_proc_state':
+                'ActivityManager.PROCESS_STATE_*.',
+            'set_proc_state':
+                'Last proc state reported.',
+            'cur_raw_proc_state':
+                'Pre-clamp proc state.',
+            'cur_capability':
+                'PROCESS_CAPABILITY_* bitmask.',
+            'set_capability':
+                'Last capability reported.',
+            'cur_sched_group':
+                'ProcessList.SCHED_GROUP_*.',
+            'set_sched_group':
+                'Last sched group applied.',
+            'has_foreground_activities':
+                '1 if any foreground activities.',
+            'has_top_ui':
+                '1 if process has top UI.',
+            'has_overlay_ui':
+                '1 if process has an overlay UI window.',
+            'has_shown_ui':
+                '1 if process has at some point shown UI.',
+            'has_visible_activities':
+                '1 if any visible activities.',
+            'has_started_services':
+                '1 if any services were startService()ed.',
+            'persistent':
+                '1 if process is marked persistent.',
+            'isolated':
+                '1 if process is isolated.',
+            'has_active_instrumentation':
+                '1 if instrumentation is currently attached.',
+        },
+    ),
+)
+
+PROCESS_STATE_UID_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateUidTable',
+    sql_name='android_process_state_uid',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('uid', CppInt32()),
+        C('cur_proc_state', CppInt32()),
+        C('set_proc_state', CppInt32()),
+        C('cur_capability', CppInt32()),
+        C('idle', CppInt32()),
+        C('ephemeral', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Per-uid (UidRecord) state observed at the time of a
+          ProcessStateSnapshot.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_snapshot.',
+                    joinable='android_process_state_snapshot.id'),
+            'uid':
+                'Android UID.',
+            'cur_proc_state':
+                'Aggregate cur proc state across processes.',
+            'set_proc_state':
+                'Last reported proc state.',
+            'cur_capability':
+                'Aggregate PROCESS_CAPABILITY_* bitmask.',
+            'idle':
+                '1 if UidRecord.isIdle().',
+            'ephemeral':
+                '1 if UidRecord.isEphemeral().',
+        },
+    ),
+)
+
+PROCESS_STATE_SERVICE_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateServiceTable',
+    sql_name='android_process_state_service',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('service_id', CppInt32()),
+        C('owning_pid', CppInt32()),
+        C('short_name', CppOptional(CppString())),
+        C('package_name', CppOptional(CppString())),
+        C('is_foreground', CppInt32()),
+        C('foreground_id', CppInt32()),
+        C('foreground_service_type', CppInt32()),
+        C('is_short_fgs', CppInt32()),
+        C('start_requested', CppInt32()),
+        C('delayed', CppInt32()),
+        C('delayed_stop', CppInt32()),
+        C('execute_nesting', CppInt32()),
+        C('execute_fg', CppInt32()),
+        C('restart_count', CppInt32()),
+        C('crash_count', CppInt32()),
+        C('is_isolated', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Per-service (ServiceRecord) state observed at the time of a
+          ProcessStateSnapshot. Use service_id (unique within a snapshot)
+          to join against android_process_state_binding.service_id.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_snapshot.',
+                    joinable='android_process_state_snapshot.id'),
+            'service_id':
+                'Service id, unique within (snapshot_id).',
+            'owning_pid':
+                'PID of the ProcessRecord this service runs in. 0 if absent.',
+            'short_name':
+                'ComponentName.flattenToShortString.',
+            'package_name':
+                'Package implementing the service component.',
+            'is_foreground':
+                '1 if startForeground() is in effect.',
+            'foreground_id':
+                'Notification id of last foreground request (0 if none).',
+            'foreground_service_type':
+                'Bitmask of ServiceInfo.FOREGROUND_SERVICE_TYPE_*.',
+            'is_short_fgs':
+                '1 if this is a SHORT_SERVICE-typed FGS.',
+            'start_requested':
+                '1 if startService() has been called >= 1 times.',
+            'delayed':
+                '1 if waiting to start in background.',
+            'delayed_stop':
+                '1 if stopped but in a delayed restart.',
+            'execute_nesting':
+                'Outstanding execute operations keeping foreground active.',
+            'execute_fg':
+                '1 if any of the executes were started from foreground.',
+            'restart_count':
+                'Number of restarts performed in a row.',
+            'crash_count':
+                'Number of times the host process crashed with this service.',
+            'is_isolated':
+                '1 if this service runs in an isolated process.',
+        },
+    ),
+)
+
+PROCESS_STATE_BINDING_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateBindingTable',
+    sql_name='android_process_state_binding',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('binding_id', CppInt32()),
+        C('client_pid', CppInt32()),
+        C('client_uid', CppInt32()),
+        C('client_process_name', CppOptional(CppString())),
+        C('service_id', CppInt32()),
+        C('flags', CppInt64()),
+        C('flag_auto_create', CppInt32()),
+        C('flag_foreground_service', CppInt32()),
+        C('flag_not_foreground', CppInt32()),
+        C('flag_above_client', CppInt32()),
+        C('flag_allow_oom_management', CppInt32()),
+        C('flag_waive_priority', CppInt32()),
+        C('flag_important', CppInt32()),
+        C('flag_adjust_with_activity', CppInt32()),
+        C('flag_include_capabilities', CppInt32()),
+        C('client_label', CppInt32()),
+        C('service_dead', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Per-ConnectionRecord between a client process and a service. One
+          row per binding present at the time of a snapshot. Joins to
+          android_process_state_service via service_id.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_snapshot.',
+                    joinable='android_process_state_snapshot.id'),
+            'binding_id':
+                'Binding id, unique within (snapshot_id).',
+            'client_pid':
+                'PID of the client process.',
+            'client_uid':
+                'UID of the client process.',
+            'client_process_name':
+                'Process name of the client.',
+            'service_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_service.',
+                    joinable='android_process_state_service.service_id'),
+            'flags':
+                'Long bitmask of Context.BIND_* flags as written to the wire.',
+            'flag_auto_create':
+                '1 if BIND_AUTO_CREATE is set in flags.',
+            'flag_foreground_service':
+                '1 if BIND_FOREGROUND_SERVICE is set.',
+            'flag_not_foreground':
+                '1 if BIND_NOT_FOREGROUND is set.',
+            'flag_above_client':
+                '1 if BIND_ABOVE_CLIENT is set.',
+            'flag_allow_oom_management':
+                '1 if BIND_ALLOW_OOM_MANAGEMENT is set.',
+            'flag_waive_priority':
+                '1 if BIND_WAIVE_PRIORITY is set.',
+            'flag_important':
+                '1 if BIND_IMPORTANT is set.',
+            'flag_adjust_with_activity':
+                '1 if BIND_ADJUST_WITH_ACTIVITY is set.',
+            'flag_include_capabilities':
+                '1 if BIND_INCLUDE_CAPABILITIES is set.',
+            'client_label':
+                'String resource labeling this client (or 0).',
+            'service_dead':
+                '1 if the connection is dead.',
+        },
+    ),
+)
+
+PROCESS_STATE_PROVIDER_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateProviderTable',
+    sql_name='android_process_state_provider',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('provider_id', CppInt32()),
+        C('owning_pid', CppInt32()),
+        C('authority', CppOptional(CppString())),
+        C('package_name', CppOptional(CppString())),
+        C('class_name', CppOptional(CppString())),
+        C('external_handle_count', CppInt32()),
+        C('launched', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Per-ContentProviderRecord state observed at the time of a
+          ProcessStateSnapshot.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_snapshot.',
+                    joinable='android_process_state_snapshot.id'),
+            'provider_id':
+                'Provider id, unique within (snapshot_id).',
+            'owning_pid':
+                'PID of the hosting ProcessRecord.',
+            'authority':
+                'Provider authority (e.g. com.android.contacts).',
+            'package_name':
+                'Package implementing the provider.',
+            'class_name':
+                'Class implementing the provider.',
+            'external_handle_count':
+                'External-process handle count without explicit handles.',
+            'launched':
+                '1 if the provider has a hosting process attached.',
+        },
+    ),
+)
+
+PROCESS_STATE_PROVIDER_BINDING_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateProviderBindingTable',
+    sql_name='android_process_state_provider_binding',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('binding_id', CppInt32()),
+        C('provider_id', CppInt32()),
+        C('client_pid', CppInt32()),
+        C('stable_count', CppInt32()),
+        C('unstable_count', CppInt32()),
+        C('dead', CppInt32()),
+        C('waiting', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Per-ContentProviderConnection state observed at the time of a
+          ProcessStateSnapshot. Joins to android_process_state_provider via
+          provider_id.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_snapshot.',
+                    joinable='android_process_state_snapshot.id'),
+            'binding_id':
+                'Provider-binding id, unique within (snapshot_id).',
+            'provider_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_provider.',
+                    joinable='android_process_state_provider.provider_id'),
+            'client_pid':
+                'PID of the client process.',
+            'stable_count':
+                'Stable references the client holds.',
+            'unstable_count':
+                'Unstable references the client holds.',
+            'dead':
+                '1 if the connection is dead.',
+            'waiting':
+                '1 if the initial getProvider() is still blocked.',
+        },
+    ),
+)
+
+PROCESS_STATE_MUTATION_EVENT_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateMutationEventTable',
+    sql_name='android_process_state_mutation_event',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('ts', CppInt64()),
+        C('kind', CppInt32()),
+        C('pid', CppInt32()),
+        C('uid', CppInt32()),
+        C('service_id', CppInt32()),
+        C('binding_id', CppInt32()),
+        C('provider_id', CppInt32()),
+        C('provider_binding_id', CppInt32()),
+        C('prev_adj', CppInt32()),
+        C('next_adj', CppInt32()),
+        C('prev_proc_state', CppInt32()),
+        C('next_proc_state', CppInt32()),
+        C('prev_capability', CppInt32()),
+        C('next_capability', CppInt32()),
+        C('prev_sched_group', CppInt32()),
+        C('next_sched_group', CppInt32()),
+        C('oom_adj_reason', CppInt32()),
+        C('bind_flags', CppInt64()),
+        C('fg_service_types', CppInt32()),
+        C('label', CppOptional(CppString())),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Mutation events emitted between snapshots. Replay these on top
+          of the most-recent snapshot to scrub forward through every
+          state change. kind values mirror MutationEvent.Kind in
+          process_state_data.proto (e.g. 6=SERVICE_BIND, 9=FGS_START,
+          50=WAKEFULNESS_CHANGE).
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Snapshot containing this event in its tail batch.',
+                    joinable='android_process_state_snapshot.id'),
+            'ts':
+                'Boot-clock time of the event in nanoseconds.',
+            'kind':
+                'MutationEvent.Kind enum value (PROCESS_BEGIN, SERVICE_BIND, etc).',
+            'pid':
+                'PID this event applies to (0 if absent).',
+            'uid':
+                'UID this event applies to (0 if absent).',
+            'service_id':
+                'Service id, when the event scopes to a service.',
+            'binding_id':
+                'Binding id, when the event scopes to a binding.',
+            'provider_id':
+                'Provider id, when the event scopes to a provider.',
+            'provider_binding_id':
+                'Provider binding id, when the event scopes to a CPC.',
+            'prev_adj':
+                'Adj before the change.',
+            'next_adj':
+                'Adj after the change.',
+            'prev_proc_state':
+                'Proc state before.',
+            'next_proc_state':
+                'Proc state after.',
+            'prev_capability':
+                'Capability before.',
+            'next_capability':
+                'Capability after.',
+            'prev_sched_group':
+                'Sched group before.',
+            'next_sched_group':
+                'Sched group after.',
+            'oom_adj_reason':
+                'OomAdjReason if event is an OOM_ADJ_RECOMPUTE.',
+            'bind_flags':
+                'BIND_* bitmask for SERVICE_BIND events.',
+            'fg_service_types':
+                'FGS type bitmask for FGS_START / FGS_TYPE_CHANGE.',
+            'label':
+                'Free-form label (action name, broadcast component, etc).',
+        },
+    ),
+)
+
+PROCESS_STATE_ADJ_COMPUTE_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateAdjComputeTable',
+    sql_name='android_process_state_adj_compute',
+    columns=[
+        C('snapshot_id', CppTableId(PROCESS_STATE_SNAPSHOT_TABLE)),
+        C('compute_id', CppInt32()),
+        C('pid', CppInt32()),
+        C('start_ts', CppInt64()),
+        C('duration_ns', CppInt64()),
+        C('oom_adj_reason', CppInt32()),
+        C('final_adj', CppInt32()),
+        C('final_proc_state', CppInt32()),
+        C('final_capability', CppInt32()),
+        C('final_sched_group', CppInt32()),
+        C('prev_adj', CppInt32()),
+        C('prev_proc_state', CppInt32()),
+        C('prev_capability', CppInt32()),
+        C('prev_sched_group', CppInt32()),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          One row per ProcessRecord recomputed during a single oom_adj
+          cycle. Use compute_id to join against
+          android_process_state_adj_step for the ordered list of
+          conditions that fired during this computation.
+        ''',
+        group='Android',
+        columns={
+            'snapshot_id':
+                ColumnDoc(
+                    doc='Snapshot this compute belongs to.',
+                    joinable='android_process_state_snapshot.id'),
+            'compute_id':
+                'Compute id, unique within (snapshot_id).',
+            'pid':
+                'PID being recomputed.',
+            'start_ts':
+                'Boot-clock start of the computation in nanoseconds.',
+            'duration_ns':
+                'Duration of the computation in nanoseconds.',
+            'oom_adj_reason':
+                'Reason that triggered this cycle.',
+            'final_adj':
+                'Adj produced by this computation.',
+            'final_proc_state':
+                'Proc state produced.',
+            'final_capability':
+                'Capability bitmask produced.',
+            'final_sched_group':
+                'Sched group produced.',
+            'prev_adj':
+                'Adj before the computation.',
+            'prev_proc_state':
+                'Proc state before.',
+            'prev_capability':
+                'Capability before.',
+            'prev_sched_group':
+                'Sched group before.',
+        },
+    ),
+)
+
+PROCESS_STATE_ADJ_STEP_TABLE = Table(
+    python_module=__file__,
+    class_name='ProcessStateAdjStepTable',
+    sql_name='android_process_state_adj_step',
+    columns=[
+        C('compute_id', CppTableId(PROCESS_STATE_ADJ_COMPUTE_TABLE)),
+        C('step_index', CppInt32()),
+        C('kind', CppInt32()),
+        C('value', CppInt64()),
+        C('binding_id', CppInt32()),
+        C('source_pid', CppInt32()),
+        C('chain_depth', CppInt32()),
+        C('note', CppOptional(CppString())),
+    ],
+    tabledoc=TableDoc(
+        doc='''
+          Ordered list of AdjStep entries that fired during a single
+          adj computation. step_index is monotonic within each
+          compute_id, so ORDER BY step_index reconstructs the original
+          sequence.
+        ''',
+        group='Android',
+        columns={
+            'compute_id':
+                ColumnDoc(
+                    doc='Foreign key into android_process_state_adj_compute.',
+                    joinable='android_process_state_adj_compute.compute_id'),
+            'step_index':
+                'Position of this step in the compute (0-based).',
+            'kind':
+                'AdjStep.Kind enum value.',
+            'value':
+                'Numeric value associated with the step (often the new adj).',
+            'binding_id':
+                'Binding id when the step references a binding.',
+            'source_pid':
+                'Source PID when the step propagates from another process.',
+            'chain_depth':
+                'Depth in the binding chain when propagating.',
+            'note':
+                'Free-form note (e.g. interned adj_type label).',
+        },
+    ),
+)
+
 # Keep this list sorted.
 ALL_TABLES = [
     ANDROID_AFLAGS_TABLE,
@@ -409,4 +1016,14 @@ ALL_TABLES = [
     ANDROID_LOG_TABLE,
     ANDROID_MOTION_EVENTS_TABLE,
     ANDROID_USER_LIST_TABLE,
+    PROCESS_STATE_SNAPSHOT_TABLE,
+    PROCESS_STATE_PROCESS_TABLE,
+    PROCESS_STATE_UID_TABLE,
+    PROCESS_STATE_SERVICE_TABLE,
+    PROCESS_STATE_BINDING_TABLE,
+    PROCESS_STATE_PROVIDER_TABLE,
+    PROCESS_STATE_PROVIDER_BINDING_TABLE,
+    PROCESS_STATE_MUTATION_EVENT_TABLE,
+    PROCESS_STATE_ADJ_COMPUTE_TABLE,
+    PROCESS_STATE_ADJ_STEP_TABLE,
 ]

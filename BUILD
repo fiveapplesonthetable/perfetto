@@ -6759,6 +6759,7 @@ perfetto_cc_library(
         "src/trace_processor/importers/proto/pigweed_detokenizer.cc",
         "src/trace_processor/importers/proto/pixel_modem_module.cc",
         "src/trace_processor/importers/proto/pixel_modem_parser.cc",
+        "src/trace_processor/importers/proto/process_state_module.cc",
         "src/trace_processor/importers/proto/profile_module.cc",
         "src/trace_processor/importers/proto/statsd_module.cc",
         "src/trace_processor/importers/proto/string_encoding_utils.cc",
@@ -6794,6 +6795,7 @@ perfetto_cc_library(
         "src/trace_processor/importers/proto/pigweed_detokenizer.h",
         "src/trace_processor/importers/proto/pixel_modem_module.h",
         "src/trace_processor/importers/proto/pixel_modem_parser.h",
+        "src/trace_processor/importers/proto/process_state_module.h",
         "src/trace_processor/importers/proto/profile_module.h",
         "src/trace_processor/importers/proto/statsd_module.h",
         "src/trace_processor/importers/proto/string_encoding_utils.h",
@@ -9225,6 +9227,7 @@ perfetto_filegroup(
         "src/trace_processor/perfetto_sql/stdlib/android/memory/lmk.sql",
         "src/trace_processor/perfetto_sql/stdlib/android/memory/memory_breakdown.sql",
         "src/trace_processor/perfetto_sql/stdlib/android/memory/process.sql",
+        "src/trace_processor/perfetto_sql/stdlib/android/memory/process_state.sql",
     ],
 )
 
@@ -17311,6 +17314,7 @@ perfetto_proto_library(
         "protos/perfetto/config/android/network_trace_config.proto",
         "protos/perfetto/config/android/packages_list_config.proto",
         "protos/perfetto/config/android/pixel_modem_config.proto",
+        "protos/perfetto/config/android/process_state_config.proto",
         "protos/perfetto/config/android/protolog_config.proto",
         "protos/perfetto/config/android/surfaceflinger_layers_config.proto",
         "protos/perfetto/config/android/surfaceflinger_transactions_config.proto",
@@ -18276,6 +18280,7 @@ perfetto_proto_library(
         "protos/perfetto/trace/android/network_trace.proto",
         "protos/perfetto/trace/android/packages_list.proto",
         "protos/perfetto/trace/android/pixel_modem_events.proto",
+        "protos/perfetto/trace/android/process_state_data.proto",
         "protos/perfetto/trace/android/user_list.proto",
     ],
     visibility = [

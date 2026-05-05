@@ -172,6 +172,8 @@ source_set("full") {
     "pixel_modem_module.h",
     "pixel_modem_parser.cc",
     "pixel_modem_parser.h",
+    "process_state_module.cc",
+    "process_state_module.h",
     "profile_module.cc",
     "profile_module.h",
     "statsd_module.cc",
