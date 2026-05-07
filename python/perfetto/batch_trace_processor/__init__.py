@@ -15,3 +15,5 @@
 from perfetto.batch_trace_processor.api import TraceListReference
 from perfetto.batch_trace_processor.api import BatchTraceProcessorConfig
 from perfetto.batch_trace_processor.api import BatchTraceProcessor
+from perfetto.batch_trace_processor.api import FailureHandling
+from perfetto.batch_trace_processor.inputs import TracesWithMetadata

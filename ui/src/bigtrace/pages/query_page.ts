@@ -40,6 +40,7 @@ import {SettingFilter} from '../settings/settings_types';
 import {bigTraceSettingsStorage} from '../settings/bigtrace_settings_storage';
 import {endpointStorage} from '../settings/endpoint_storage';
 import {HttpDataSource} from '../query/http_data_source';
+import {BtpDataSource} from '../query/btp_data_source';
 import {Tabs, TabsTab} from '../../widgets/tabs';
 import {linkify} from '../../widgets/anchor';
 import {shortUuid} from '../../base/uuid';
@@ -76,7 +77,7 @@ interface BigTraceEditorTab {
   isLoading: boolean;
   dataSource?: DataSource;
   querySettings: SettingFilter[];
-  activeHttpDataSource?: HttpDataSource;
+  activeHttpDataSource?: HttpDataSource | BtpDataSource;
 }
 
 // Manages the collection of editor tabs. Survives component re-mounts.
@@ -459,7 +460,55 @@ export class QueryPage implements m.ClassComponent<QueryPageAttrs> {
     tab.queryResult = undefined;
     m.redraw();
 
-    if (this.useBrushBackend) {
+    // The single `bigtraceEndpoint` setting drives both the /btp
+    // status page and this query page. When set, the URL points at a
+    // BatchTraceProcessor HTTP server (`btp.serve(...)`) and we route
+    // through `BtpDataSource`. The legacy brush gRPC path remains
+    // available for upstream callers that pass `useBrushBackend`.
+    const btpSetting = endpointStorage.get('bigtraceEndpoint');
+    const btpUrl = btpSetting ? (btpSetting.get() as string) || '' : '';
+
+    if (btpUrl.length > 0) {
+      await bigTraceSettingsStorage.loadSettings();
+      const settings = bigTraceSettingsStorage.buildSettingFilters();
+      tab.querySettings = settings;
+
+      const dataSource = new BtpDataSource(btpUrl, query);
+      tab.activeHttpDataSource = dataSource;
+      const startMs = performance.now();
+      try {
+        const data = await dataSource.query();
+        tab.queryResult = {
+          rows: data,
+          columns: data.length > 0 ? Object.keys(data[0]) : [],
+          error: undefined,
+          totalRowCount: data.length,
+          durationMs: performance.now() - startMs,
+          statementWithOutputCount: 1,
+          statementCount: 1,
+          lastStatementSql: query,
+          query,
+        };
+      } catch (e) {
+        if (e instanceof Error && e.message === 'Query was cancelled.') {
+          return;
+        }
+        const error = e instanceof Error ? e.message : String(e);
+        tab.queryResult = {
+          rows: [],
+          columns: [],
+          error,
+          totalRowCount: 0,
+          durationMs: performance.now() - startMs,
+          statementWithOutputCount: 0,
+          statementCount: 1,
+          lastStatementSql: query,
+          query,
+        };
+      } finally {
+        tab.activeHttpDataSource = undefined;
+      }
+    } else if (this.useBrushBackend) {
       const endpointSetting = endpointStorage.get('bigtraceEndpoint');
       const endpoint = endpointSetting ? (endpointSetting.get() as string) : '';
 

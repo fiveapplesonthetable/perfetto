@@ -23,11 +23,22 @@ export const endpointStorage = new LocalSettingsStorage(
   new LocalStorage(BIGTRACE_SETTINGS_STORAGE_KEY),
 );
 
+// One setting, one endpoint. The bigtrace UI talks to a running
+// BatchTraceProcessor HTTP server (`btp.serve(host=..., port=...)`)
+// — same URL drives the /btp status page and the /query backend.
+//
+// Default is empty so first-time visitors see the "no endpoint
+// configured" empty state and are deliberately routed through this
+// settings page to set their own URL.
 endpointStorage.register({
   id: 'bigtraceEndpoint',
-  name: 'BigTrace Endpoint',
-  description: 'The URL of the BigTrace backend service.',
+  name: 'Bigtrace endpoint',
+  description:
+    'URL of a running BatchTraceProcessor HTTP server ' +
+    '(`btp.serve(host=..., port=...)` or `python3 ' +
+    'python/tools/btp_serve.py`). Drives both the /btp status page ' +
+    'and the /query SQL backend. Example: http://fiat-sandbox:8080',
   schema: z.string(),
-  defaultValue: 'https://brush-googleapis.corp.google.com/v1',
-  requiresReload: true,
+  defaultValue: '',
+  requiresReload: false,
 });

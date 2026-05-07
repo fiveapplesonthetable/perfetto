@@ -23,6 +23,7 @@ import {ThemeProvider} from '../frontend/theme_provider';
 import {OverlayContainer} from '../widgets/overlay_container';
 import {QueryPage} from './pages/query_page';
 import {HomePage} from './pages/home_page';
+import {BtpPage} from './pages/btp_page';
 import {bigTraceSettingsStorage} from './settings/bigtrace_settings_storage';
 import {queryState} from './query/query_state';
 import {SettingsPage} from './pages/settings_page';
@@ -58,10 +59,20 @@ function setupContentSecurityPolicy() {
     'default-src': [`'self'`],
     'script-src': [`'self'`],
     'object-src': ['none'],
+    // The BTP server (`btp.serve(...)`) the user points at can live
+    // anywhere — localhost during dev, a Tailscale node from another
+    // machine, a corp-net jumpbox. Limiting connect-src to a fixed
+    // list breaks every non-trivial setup, so we allow any HTTP(S)
+    // origin. CORS still gates the actual request, so this isn't a
+    // free pass for arbitrary cross-site reads.
     'connect-src': [
       `'self'`,
       'https://autopush-brush-googleapis.corp.google.com',
       'https://brush-googleapis.corp.google.com',
+      'http:',
+      'https:',
+      'ws:',
+      'wss:',
     ],
     'img-src': [`'self'`, 'data:', 'blob:'],
     'style-src': [
@@ -154,6 +165,14 @@ class BigTraceLayout implements m.ClassComponent {
       },
       {
         section: 'bigtrace',
+        text: 'BTP status',
+        href: `#!${Routes.BTP}`,
+        icon: 'view_quilt',
+        active: currentRoute === Routes.BTP,
+        onclick: () => {},
+      },
+      {
+        section: 'bigtrace',
         text: 'Settings',
         href: `#!${Routes.SETTINGS}`,
         icon: 'settings',
@@ -228,6 +247,8 @@ class BigTraceRoot implements m.ClassComponent {
           useBrushBackend: true,
           initialQuery: this.queryInitialQuery,
         });
+      case Routes.BTP:
+        return m(BtpPage);
       case Routes.SETTINGS:
         return m(SettingsPage);
       default:

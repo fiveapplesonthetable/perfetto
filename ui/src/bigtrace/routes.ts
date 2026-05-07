@@ -15,5 +15,6 @@
 export const Routes = {
   HOME: '/',
   QUERY: '/query',
+  BTP: '/btp',
   SETTINGS: '/settings',
 } as const;

@@ -1,24 +1,32 @@
 # Batch Trace Processor
 
-_The Batch Trace Processor is a Python library wrapping the
+_Batch Trace Processor (BTP) is a Python library wrapping the
 [Trace Processor](/docs/analysis/trace-processor.md): it allows fast (<1s)
-interactive queries on large sets (up to ~1000) of traces._
+interactive queries on large corpora — from a handful of traces to **tens of
+thousands** with bounded memory and durable caching._
+
+A short version: hand BTP a list of traces, get one or more pandas /
+[Polars](https://pola.rs/) DataFrames back per query. The hard parts —
+subprocess management, memory budgeting, retry / timeout / failure
+reporting, durable result caching, and an optional HTTP/JSON server for
+agents and UIs — are handled for you.
 
 ## Installation
 
-Batch Trace Processor is part of the `perfetto` Python library and can be
-installed by running:
+BTP is part of the `perfetto` Python library:
 
 ```shell
-pip3 install pandas       # prerequisite for Batch Trace Processor
+pip3 install pandas              # required
+pip3 install pyarrow             # required for the durable session cache
+                                 # (sqlite3 is stdlib — no install needed)
 pip3 install perfetto
+pip3 install perfetto[polars]    # optional: Polars support
 ```
 
 ## Loading traces
-NOTE: if you are a Googler, have a look at
-[go/perfetto-btp-load-internal](http://goto.corp.google.com/perfetto-btp-load-internal) for how to load traces from Google-internal sources.
 
-The simplest way to load traces in is by passing a list of file paths to load:
+The simplest way is to pass a list of file paths:
+
 ```python
 from perfetto.batch_trace_processor.api import BatchTraceProcessor
 
@@ -31,8 +39,8 @@ with BatchTraceProcessor(files) as btp:
   btp.query('...')
 ```
 
-[glob](https://docs.python.org/3/library/glob.html) can be used to load
-all traces in a directory:
+[glob](https://docs.python.org/3/library/glob.html) for whole directories:
+
 ```python
 from perfetto.batch_trace_processor.api import BatchTraceProcessor
 
@@ -41,34 +49,34 @@ with BatchTraceProcessor(files) as btp:
   btp.query('...')
 ```
 
-NOTE: loading too many traces can cause out-of-memory issues: see
-[this](/docs/analysis/batch-trace-processor#memory-usage) section for details.
+Or supply per-trace metadata that flows through to query results,
+filtering, and the failure log:
 
-A common requirement is to load traces located in the cloud or by sending
-a request to a server. To support this usecase, traces can also be loaded
-using [trace URIs](/docs/analysis/batch-trace-processor#trace-uris):
 ```python
 from perfetto.batch_trace_processor.api import BatchTraceProcessor
-from perfetto.batch_trace_processor.api import BatchTraceProcessorConfig
-from perfetto.trace_processor.api import TraceProcessorConfig
-from perfetto.trace_uri_resolver.registry import ResolverRegistry
-from perfetto.trace_uri_resolver.resolver import TraceUriResolver
+from perfetto.batch_trace_processor.inputs import TracesWithMetadata
 
-class FooResolver(TraceUriResolver):
-  # See "Trace URIs" section below for how to implement a URI resolver.
-
-config = BatchTraceProcessorConfig(
-  # See "Trace URIs" below
-)
-with BatchTraceProcessor('foo:bar=1,baz=abc', config=config) as btp:
-  btp.query('...')
+inputs = TracesWithMetadata([
+  ('traces/run-001.pftrace', {'build': 'AOSP', 'device': 'pixel-7'}),
+  ('traces/run-002.pftrace', {'build': 'AOSP', 'device': 'pixel-8'}),
+  ('traces/run-003.pftrace', {'build': 'GMS',  'device': 'pixel-7'}),
+])
+with BatchTraceProcessor(inputs) as btp:
+  df = btp.query_and_flatten('select count(*) as n from slice')
+  pixel7 = df[df['device'] == 'pixel-7']  # metadata is materialised as columns
 ```
 
-## Writing queries
-Writing queries with batch trace processor works very similarly to the
-[Python API](/docs/analysis/trace-processor-python.md).
+For URIs to remote sources (cloud storage, HTTP, etc.), see
+[Trace URIs](#trace-uris) below.
 
-For example, to get a count of the number of userspace slices:
+NOTE: if you are a Googler, see
+[go/perfetto-btp-load-internal](http://goto.corp.google.com/perfetto-btp-load-internal)
+for Google-internal sources.
+
+## Writing queries
+
+### `query` — one DataFrame per trace
+
 ```python
 >>> btp.query('select count(1) from slice')
 [  count(1)
@@ -76,12 +84,9 @@ For example, to get a count of the number of userspace slices:
 0   156071,   count(1)
 0   121431]
 ```
-The return value of `query` is a list of [Pandas](https://pandas.pydata.org/)
-dataframes, one for each trace loaded.
 
-A common requirement is for all of the traces to be flattened into a
-single dataframe instead of getting one dataframe per-trace. To support this,
-the `query_and_flatten` function can be used:
+### `query_and_flatten` — one merged DataFrame
+
 ```python
 >>> btp.query_and_flatten('select count(1) from slice')
   count(1)
@@ -90,19 +95,32 @@ the `query_and_flatten` function can be used:
 2   121431
 ```
 
-`query_and_flatten` also implicitly adds columns indicating the originating
-trace. The exact columns added depend on the resolver being used: consult your
-resolver's documentation for more information.
+`query_and_flatten` adds metadata columns automatically. With
+`TracesWithMetadata` above, `device` and `build` are part of the output.
 
-[Polars](https://pola.rs/) DataFrames are also supported as an alternative to
-Pandas. `query_polars` mirrors `query` and returns a list of Polars DataFrames
-(one per trace); `query_and_flatten_polars` mirrors `query_and_flatten` and
-concatenates them into a single DataFrame. Polars support requires an optional
-dependency:
+### `query_iter` — streaming
 
-```shell
-pip3 install perfetto[polars]
+For large corpora, `query_iter` yields `(metadata, df)` pairs in completion
+order. Peak memory is bounded by `max_loaded_traces` (or `memory_budget_mb`
+in cgroup mode) regardless of total trace count:
+
+```python
+for meta, df in btp.query_iter('select count(*) as n from slice'):
+  process(meta, df)
 ```
+
+### `query_to_parquet` — write per-trace parquet files
+
+```python
+out_dir = btp.query_to_parquet(
+    'select ts, dur, name from slice', out_dir='/tmp/results')
+# /tmp/results/000.parquet, 001.parquet, ...
+```
+
+### Polars
+
+`query_polars` and `query_and_flatten_polars` mirror their pandas
+counterparts and return Polars DataFrames.
 
 ```python
 >>> btp.query_polars('select count(1) from slice')
@@ -113,100 +131,260 @@ pip3 install perfetto[polars]
 │ i64      │
 ╞══════════╡
 │  2092592 │
-└──────────┘, shape: (1, 1)
-┌──────────┐
-│ count(1) │
-│ ---      │
-│ i64      │
-╞══════════╡
-│   156071 │
 └──────────┘, ...]
-
->>> btp.query_and_flatten_polars('select count(1) from slice')
-shape: (3, 1)
-┌──────────┐
-│ count(1) │
-│ ---      │
-│ i64      │
-╞══════════╡
-│  2092592 │
-│   156071 │
-│   121431 │
-└──────────┘
 ```
 
-## Trace URIs
-Trace URIs are a powerful feature of the batch trace processor. URIs decouple
-the notion of "paths" to traces from the filesystem. Instead, the URI
-describes *how* a trace should be fetched (i.e. by sending a HTTP request
-to a server, from cloud storage etc).
+## Memory budgeting
 
-The syntax of trace URIs are similar to web
-[URLs](https://en.wikipedia.org/wiki/URL). Formally a trace URI has the
-structure:
+Loading every trace into RAM at once does not scale beyond ~1k traces.
+BTP supports two complementary modes; they are off by default to preserve
+v1 behaviour.
+
+### Bounded LRU pool
+
+```python
+from perfetto.batch_trace_processor.api import (
+    BatchTraceProcessor, BatchTraceProcessorConfig)
+
+cfg = BatchTraceProcessorConfig(max_loaded_traces=8)
+with BatchTraceProcessor(huge_list, cfg) as btp:
+  for meta, df in btp.query_iter('...'):
+    ...
+```
+
+At most 8 traces are resident at any time. Traces evicted on access are
+re-spawned from their original file when next queried.
+
+### cgroup v2 freezer (default, no swap needed)
+
+The default mode when the host exposes cgroup v2 freezer (kernel ≥ 5.2,
+no sudo). Each trace processor lives in its own nested cgroup under
+the BTP's parent. On eviction in a bounded pool, the LRU's per-TP
+cgroup is **frozen** via `cgroup.freeze` — every task in it is
+suspended (SIGSTOP-equivalent but kernel-managed). State is preserved
+bit-perfectly: parsed trace, SQLite tables, prepared statements all
+survive. Reacquire is a single cgroup write — no respawn, no
+re-parse.
+
+```python
+cfg = BatchTraceProcessorConfig(
+    max_loaded_traces=8,
+    memory_budget_mb=8192,
+    freeze_on_evict=True,         # default
+    cgroup_enabled=True,          # default
+)
+```
+
+`btp.info()['pool_mode']` reports `'freeze'`. The pool tracks
+`freeze_evictions` and per-handle `freeze_count` for observability.
+
+### cgroup v2 + swap (kernel-managed paging, opt-in)
+
+When you explicitly want kernel-managed paging — e.g. on a host with
+zram and you'd rather thrash zram than re-parse on eviction — set
+`cgroup_swap_max_mb` to a non-zero value. The default is **0** so we
+don't blow up the system swap (it's a shared resource).
+
+```python
+cfg = BatchTraceProcessorConfig(
+    memory_budget_mb=8192,
+    cgroup_swap_max_mb=4096,      # opt-in; default is 0 (no system swap)
+    per_trace_rlimit_as_mb=2048,  # optional: hard kernel cap per shell
+)
+```
+
+| Knob | Maps to | Effect |
+|---|---|---|
+| `memory_budget_mb` | `memory.high` | soft limit; kernel reclaims to swap above it |
+| `cgroup_memory_max_mb` | `memory.max` | hard limit; offending TP gets OOM-killed (classified as `kind='oom_killed'`, never kills Python) |
+| `cgroup_swap_max_mb` | `memory.swap.max` | cap on swap usage by this BTP — **defaults to 0** |
+| `per_trace_rlimit_as_mb` | `setrlimit(RLIMIT_AS)` | per-shell VM ceiling; child dies cleanly with ENOMEM (`kind='rlimit'`) |
+
+Auto-defaults pick `memory_budget_mb = 0.5 × MemAvailable` and
+`query_workers = sched_getaffinity` when those config fields are `None`.
+
+## Failure observability
+
+Every per-trace failure is captured structurally rather than aborting the
+whole run.
+
+```python
+btp.print_failures()      # one line each, human-readable
+btp.failures()            # list of TraceFailure dataclasses
+btp.failures_df()         # pandas DataFrame, metadata flattened to columns
+```
+
+Each failure has `kind ∈ {load_timeout, load_failed, oom_killed, rlimit,
+tp_crash, query_timeout, query_error, unknown}`, plus `detail`,
+`exit_code`, and a 4 KB `stderr_tail` where applicable. Filter as you
+would any DataFrame:
+
+```python
+df = btp.failures_df()
+df[df['kind'] == 'oom_killed']
+df[df['device'] == 'pixel-7']
+```
+
+## Durable session cache
+
+```python
+cfg = BatchTraceProcessorConfig(session_dir='/tmp/my-session')
+with BatchTraceProcessor(files, cfg) as btp:
+  btp.query('select count(*) from slice')   # cold: spawns shells, fills cache
+# kill -9 here is survivable.
+with BatchTraceProcessor(files, cfg) as btp:
+  btp.query('select count(*) from slice')   # warm: streams from SQLite
+```
+
+Backed by `session_dir/btp.sqlite` (stdlib `sqlite3` in WAL mode).
+Cache key is
+`sha256(sql ‖ ⨁(path, mtime))` — order-independent. Inspect / replay /
+export:
+
+```python
+for q in btp.list_queries(): print(q.query_id, q.sql)
+df = btp.replay(query_id)               # pandas DataFrame
+btp.export(query_id, '/tmp/out.parquet')
+```
+
+On a 12-trace corpus we measure ≈ 100× speed-up on warm reruns of the
+same query because the shells never have to be spawned.
+
+## Watchdogs
+
+| Hazard | Watchdog |
+|---|---|
+| Per-query exceeds `query_timeout_s` (default 15 min) | `Future.result(timeout=…)` inline — nothing to die |
+| Trace processor crashes mid-query | `except (ConnectionError, OSError)` records `tp_crash` / `oom_killed` |
+| Trace processor wedges (no crash, no progress) | Inline timeout closes the wedge before it starves the next query |
+| Trace processor exceeds memory budget | Kernel OOM via `cgroup memory.max` |
+
+`_assert_healthy()` is called at every query entry; if the executor was
+shut down it refuses to dispatch rather than silently ignore the timeout.
+
+## HTTP/JSON server (agents and UIs)
+
+```python
+url = btp.serve(port=8080)   # returns 'http://127.0.0.1:8080'
+```
+
+Endpoints (CORS on; stdlib `ThreadingHTTPServer`):
+
+| Method + path | Returns |
+|---|---|
+| GET `/info` | instance metadata (trace count, mode, workers, etc.) |
+| GET `/traces` | input traces with metadata |
+| GET `/queries` | every query this session has seen |
+| GET `/query/<qid>` | one query's metadata |
+| GET `/results/<qid>` | rows; `?format=arrow` streams Apache Arrow IPC |
+| GET `/progress` | live progress snapshot for the running query |
+| GET `/failures` | structured failure log |
+| GET `/config` | current config (saveable) |
+| POST `/run` | `{sql}` → runs synchronously, returns `query_id` |
+| POST `/cancel` | cancels in-flight work |
+| POST `/config` | merge partial config |
+| POST `/shutdown` | stop the server thread |
+
+## Agentic flow
+
+The same surface drives chained analysis from a script:
+
+```python
+qid = btp.run_query("select tid from thread where name = 'RenderThread'")
+df = btp.replay(qid)
+follow_up = ' UNION ALL '.join(
+    f"select '{tid}' as tid, count(*) as n from slice where utid = "
+    f"(select utid from thread where tid = {int(tid)})"
+    for tid in df['tid'].unique())
+btp.run_query(follow_up)
+```
+
+`run_query` always writes to the durable cache; subsequent `replay` calls
+are zero-RTT.
+
+## Trace URIs
+
+(Unchanged from v1 — full description preserved for backwards compat.)
+
+URIs decouple "paths" to traces from the filesystem. Instead, the URI
+describes *how* a trace should be fetched (HTTP, GCS, etc.).
+
 ```
 Trace URI = protocol:key1=val1(;keyn=valn)*
 ```
 
-As an example:
+Example:
+
 ```
 gcs:bucket=foo;path=bar
 ```
-would indicate that traces should be fetched using the protocol `gcs`
-([Google Cloud Storage](https://cloud.google.com/storage)) with traces
-located at bucket `foo` and path `bar` in the bucket.
 
-NOTE: the `gcs` resolver is *not* actually included: it's simply given as its
-an easy to understand example.
+The `gcs` resolver is illustrative; actual ones must be implemented and
+registered as Python classes — see the
+[TraceUriResolver class](https://cs.android.com/android/platform/superproject/main/+/main:external/perfetto/python/perfetto/trace_uri_resolver/resolver.py;l=56?q=resolver.py).
 
-URIs are only a part of the puzzle: ultimately batch trace processor still needs
-the bytes of the traces to be able to parse and query them. The job of
-converting URIs to trace bytes is left to *resolvers* - Python
-classes associated to each *protocol* and use the key-value pairs in the URI
-to lookup the traces to be parsed.
+## ulimit and resource configuration
 
-By default, batch trace processor only ships with a single resolver which knows
-how to lookup filesystem paths: however, custom resolvers can be easily
-created and registered. See the documentation on the
-[TraceUriResolver class](https://cs.android.com/android/platform/superproject/main/+/main:external/perfetto/python/perfetto/trace_uri_resolver/resolver.py;l=56?q=resolver.py)
-for information on how to do this.
+BTP nudges via the logger if `RLIMIT_NOFILE` or `RLIMIT_NPROC` look tight
+for the trace count (no auto-bump — you may be in a hardened
+environment). It does not require sudo for any of the cgroup work — user
+delegation under `user.slice` is sufficient on every modern systemd
+distro.
 
-## Memory usage
-Memory usage is a very important thing to pay attention to working with batch
-trace processor. Every trace loaded lives fully in memory: this is magic behind
-making queries fast (<1s) even on hundreds of traces.
+`tools/btp_bench.py` reproduces the comparisons that motivated v2's
+design:
 
-This also means that the number of traces you can load is heavily limited by
-the amount of memory available available. As a rule of thumb, if your
-average trace size is S and you are trying to load N traces, you will have
-2 * S * N memory usage. Note that this can vary significantly based on the
-exact contents and sizes of your trace.
+```shell
+SHELL_PATH=$PWD/out/linux/trace_processor_shell \
+python3 python/tools/btp_bench.py --copies 30 --max-loaded 4
+```
 
-## Advanced features
-### Sharing computations between TP and BTP
-Sometimes it can be useful to parameterise code to work with either trace
-processor or batch trace processor. `execute` or `execute_and_flatten`
-can be used for this purpose:
+Expect `qps ≈ 350–400` concurrent on a modern host with the unbounded
+mode, and ≈ 100× speed-up on warm reruns once the durable cache is
+populated.
+
+## Sharing computations between TP and BTP
+
+`execute` and `execute_and_flatten` accept any callable that takes a
+`TraceProcessor` and returns whatever you want. They mirror `query` /
+`query_and_flatten`:
+
 ```python
 def some_complex_calculation(tp):
   res = tp.query('...').as_pandas_dataframe()
   # ... do some calculations with res
   return res
 
-# |some_complex_calculation| can be called with a [TraceProcessor] object:
+# Single trace:
 tp = TraceProcessor('/foo/bar.pftrace')
 some_complex_calculation(tp)
 
-# |some_complex_calculation| can also be passed to |execute| or
-# |execute_and_flatten|
+# Many traces:
 btp = BatchTraceProcessor(['...', '...', '...'])
-
-# Like |query|, |execute| returns one result per trace. Note that the returned
-# value *does not* have to be a Pandas dataframe.
 [a, b, c] = btp.execute(some_complex_calculation)
-
-# Like |query_and_flatten|, |execute_and_flatten| merges the Pandas dataframes
-# returned per trace into a single dataframe, adding any columns requested by
-# the resolver.
 flattened_res = btp.execute_and_flatten(some_complex_calculation)
 ```
+
+## Bigtrace UI integration
+
+The Bigtrace UI ships with a **BTP** page (`/btp` route) that
+consumes the same HTTP endpoints. Click *BTP (Python)* in the
+sidebar, paste your `btp.serve(...)` URL, and you get:
+
+- a connection panel (host:port + connect/disconnect),
+- a metadata-flattened table of every input trace,
+- a SQL editor + run button,
+- a live progress bar that polls `/progress` every 1.5 s while a
+  query is running,
+- a queries-history pane (click a row to load its results),
+- a results pane (first 200 rows, all columns),
+- a structured failures pane.
+
+The page makes no assumptions about the BTP host: anything that
+serves the v2 HTTP contract works.
+
+## Where to read more
+
+- Internal design + change-log: [BatchTraceProcessor v2 design](/docs/design/btp-rework.md)
+- Original v2 plan with the 38 captured requirements: [btp-v2-plan.md](/docs/design/btp-v2-plan.md)
+- Single-trace API: [Trace Processor (Python)](/docs/analysis/trace-processor-python.md)

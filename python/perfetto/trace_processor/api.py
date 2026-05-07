@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import subprocess
 import sys
 import signal
 import dataclasses as dc
@@ -83,7 +84,11 @@ class TraceProcessorConfig:
 
   # The timeout in seconds for the trace processor binary starting up. If the
   # binary does not start within this time, an exception will be raised.
-  load_timeout: int = 2
+  # Bumped from 2 -> 30: under heavy concurrent spawn (BatchTraceProcessor
+  # with hundreds of traces) the kernel + bind+listen routinely takes
+  # several seconds, and the previous default would kill processes that
+  # would otherwise have come up cleanly.
+  load_timeout: int = 30
 
   # Any extra flags to pass to the trace processor binary.
   # Warning: this is a low-level option and should be used with caution.
@@ -96,6 +101,11 @@ class TraceProcessorConfig:
   # `INCLUDE PERFETTO MODULE` PerfettoSQL statements.
   add_sql_packages: Optional[List[Union[str, SqlPackage]]] = None
 
+  # Function passed to subprocess.Popen(preexec_fn=...). Used by
+  # BatchTraceProcessor to set PR_SET_PDEATHSIG / RLIMIT_AS on each
+  # spawned shell. Ignored on Windows.
+  preexec_fn: Optional[Any] = None
+
   def __init__(
       self,
       bin_path: Optional[str] = None,
@@ -104,9 +114,10 @@ class TraceProcessorConfig:
       ingest_ftrace_in_raw: bool = False,
       enable_dev_features=False,
       resolver_registry: Optional[ResolverRegistry] = None,
-      load_timeout: int = 2,
+      load_timeout: int = 30,
       extra_flags: Optional[List[str]] = None,
       add_sql_packages: Optional[List[Union[str, SqlPackage]]] = None,
+      preexec_fn: Optional[Any] = None,
   ):
     self.bin_path = bin_path
     self.unique_port = unique_port
@@ -117,6 +128,7 @@ class TraceProcessorConfig:
     self.load_timeout = load_timeout
     self.extra_flags = extra_flags
     self.add_sql_packages = add_sql_packages
+    self.preexec_fn = preexec_fn
 
 
 class TraceProcessor:
@@ -302,6 +314,7 @@ class TraceProcessor:
         self.config.load_timeout,
         self.config.extra_flags,
         self.config.add_sql_packages,
+        preexec_fn=getattr(self.config, 'preexec_fn', None),
     )
     return TraceProcessorHttp(url, protos=self.protos)
 
@@ -335,26 +348,55 @@ class TraceProcessor:
     self.close()
     return False
 
-  def close(self):
-    if hasattr(self, 'subprocess') and self.subprocess:
-      # On Windows, we need to send a break signal to terminate the whole process group.
-      # On other platforms, killing the parent process is sufficient.
-      if sys.platform == 'win32':
-        self.subprocess.send_signal(signal.CTRL_BREAK_EVENT)
-      else:
-        self.subprocess.kill()
-      self.subprocess.wait()
-      # Set to None so __del__ doesn't call this again.
-      self.subprocess = None
-      if hasattr(self, '_tp_stdout') and self._tp_stdout:
-        self._tp_stdout.close()
-        self._tp_stdout = None
-      if hasattr(self, '_tp_stderr') and self._tp_stderr:
-        self._tp_stderr.close()
-        self._tp_stderr = None
+  # Time the shell is given to exit cleanly on SIGTERM before we SIGKILL.
+  _CLOSE_TERMINATE_TIMEOUT_S = 2.0
 
-    if hasattr(self, 'http'):
-      self.http.conn.close()
+  def close(self):
+    """Idempotent shutdown.
+
+    Order is intentional: tear down the HTTP connection first so an
+    in-flight `query()` on another thread fails fast instead of waiting
+    on a recv() against a peer we're about to kill. Then SIGTERM the
+    shell, give it `_CLOSE_TERMINATE_TIMEOUT_S` to flush stderr and
+    release its port, then SIGKILL as a fallback.
+    """
+    http = getattr(self, 'http', None)
+    if http is not None:
+      try:
+        http.close()
+      except Exception:
+        pass
+      self.http = None
+
+    sp = getattr(self, 'subprocess', None)
+    if sp is not None:
+      try:
+        if sys.platform == 'win32':
+          sp.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+          sp.terminate()
+        try:
+          sp.wait(timeout=self._CLOSE_TERMINATE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+          sp.kill()
+          sp.wait()
+      except Exception:
+        # We're best-effort here; subprocess could already be a zombie.
+        try:
+          sp.kill()
+          sp.wait()
+        except Exception:
+          pass
+      self.subprocess = None
+
+    for attr in ('_tp_stdout', '_tp_stderr'):
+      f = getattr(self, attr, None)
+      if f is not None:
+        try:
+          f.close()
+        except Exception:
+          pass
+        setattr(self, attr, None)
 
   def __del__(self):
     self.close()

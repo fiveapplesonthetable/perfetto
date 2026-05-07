@@ -14,36 +14,53 @@
 # limitations under the License.
 
 import http.client
+import threading
 from typing import List, Optional, Union
 
 from perfetto.trace_processor.protos import ProtoFactory
 
 
 class TraceProcessorHttp:
+  """Thin HTTP/1.1 client for `trace_processor_shell -D`.
+
+  `http.client.HTTPConnection` is not safe for concurrent use: the request
+  and response are stateful on the same socket. Every method serializes
+  through `_lock` so multiple threads can hand the same TP to the pool
+  without corrupting the wire protocol.
+  """
 
   def __init__(self, url: str, protos: ProtoFactory):
     self.protos = protos
     self.conn = http.client.HTTPConnection(url)
+    self._lock = threading.Lock()
+
+  def _post_proto(self, path: str, body: bytes) -> bytes:
+    with self._lock:
+      self.conn.request('POST', path, body=body)
+      with self.conn.getresponse() as f:
+        return f.read()
+
+  def _get(self, path: str) -> bytes:
+    with self._lock:
+      self.conn.request('GET', path)
+      with self.conn.getresponse() as f:
+        return f.read()
 
   def execute_query(self, query: str):
     args = self.protos.QueryArgs()
     args.sql_query = query
-    byte_data = args.SerializeToString()
-    self.conn.request('POST', '/query', body=byte_data)
-    with self.conn.getresponse() as f:
-      result = self.protos.QueryResult()
-      result.ParseFromString(f.read())
-      return result
+    payload = self._post_proto('/query', args.SerializeToString())
+    result = self.protos.QueryResult()
+    result.ParseFromString(payload)
+    return result
 
   def compute_metric(self, metrics: List[str]):
     args = self.protos.ComputeMetricArgs()
     args.metric_names.extend(metrics)
-    byte_data = args.SerializeToString()
-    self.conn.request('POST', '/compute_metric', body=byte_data)
-    with self.conn.getresponse() as f:
-      result = self.protos.ComputeMetricResult()
-      result.ParseFromString(f.read())
-      return result
+    payload = self._post_proto('/compute_metric', args.SerializeToString())
+    result = self.protos.ComputeMetricResult()
+    result.ParseFromString(payload)
+    return result
 
   def trace_summary(self,
                     specs: List[Union[str, bytes]],
@@ -51,12 +68,12 @@ class TraceProcessorHttp:
                     metadata_query_id: Optional[str] = None):
     args = self.protos.TraceSummaryArgs()
 
-    if (metric_ids is None):
+    if metric_ids is None:
       args.computation_spec.run_all_metrics = True
-    elif (len(metric_ids) > 0):
+    elif len(metric_ids) > 0:
       args.computation_spec.metric_ids.extend(metric_ids)
 
-    if (specs is not None and len(specs) > 0):
+    if specs:
       for spec in specs:
         if isinstance(spec, str):
           args.textproto_specs.append(spec)
@@ -65,44 +82,44 @@ class TraceProcessorHttp:
           proto_spec.ParseFromString(spec)
           args.proto_specs.append(proto_spec)
 
-    if (metadata_query_id is not None):
+    if metadata_query_id is not None:
       args.computation_spec.metadata_query_id = metadata_query_id
 
     args.output_format = self.protos.TraceSummaryArgs.Format.BINARY_PROTOBUF
-    byte_data = args.SerializeToString()
-    self.conn.request('POST', '/trace_summary', body=byte_data)
-    with self.conn.getresponse() as f:
-      result = self.protos.TraceSummaryResult()
-      result.ParseFromString(f.read())
-      return result
+    payload = self._post_proto('/trace_summary', args.SerializeToString())
+    result = self.protos.TraceSummaryResult()
+    result.ParseFromString(payload)
+    return result
 
   def parse(self, chunk: bytes):
-    self.conn.request('POST', '/parse', body=chunk)
-    with self.conn.getresponse() as f:
-      result = self.protos.AppendTraceDataResult()
-      result.ParseFromString(f.read())
-      return result
+    payload = self._post_proto('/parse', chunk)
+    result = self.protos.AppendTraceDataResult()
+    result.ParseFromString(payload)
+    return result
 
   def notify_eof(self):
-    self.conn.request('GET', '/notify_eof')
-    with self.conn.getresponse() as f:
-      return f.read()
+    return self._get('/notify_eof')
 
   def status(self):
-    self.conn.request('GET', '/status')
-    with self.conn.getresponse() as f:
-      result = self.protos.StatusResult()
-      result.ParseFromString(f.read())
-      return result
+    payload = self._get('/status')
+    result = self.protos.StatusResult()
+    result.ParseFromString(payload)
+    return result
 
   def enable_metatrace(self):
-    self.conn.request('GET', '/enable_metatrace')
-    with self.conn.getresponse() as f:
-      return f.read()
+    return self._get('/enable_metatrace')
 
   def disable_and_read_metatrace(self):
-    self.conn.request('GET', '/disable_and_read_metatrace')
-    with self.conn.getresponse() as f:
-      result = self.protos.DisableAndReadMetatraceResult()
-      result.ParseFromString(f.read())
-      return result
+    payload = self._get('/disable_and_read_metatrace')
+    result = self.protos.DisableAndReadMetatraceResult()
+    result.ParseFromString(payload)
+    return result
+
+  def close(self) -> None:
+    """Idempotent. Safe to call from another thread mid-request — the
+    in-flight request will surface as a ConnectionError to the caller."""
+    with self._lock:
+      try:
+        self.conn.close()
+      except Exception:
+        pass

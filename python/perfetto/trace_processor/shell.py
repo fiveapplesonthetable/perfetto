@@ -34,6 +34,32 @@ if TYPE_CHECKING:
 TP_PORT = 9001
 
 
+class LoadTimeoutError(PerfettoException):
+  """Raised by `load_shell` when /status didn't come up within
+  `load_timeout` seconds. The child was alive at the deadline and got
+  killed by us. BatchTraceProcessor classifies this as
+  `kind='load_timeout'`."""
+
+  def __init__(self, msg: str, stderr_tail: Optional[str] = None) -> None:
+    super().__init__(msg)
+    self.stderr_tail = stderr_tail
+
+
+class LoadFailedError(PerfettoException):
+  """Raised by `load_shell` when the child process exited before
+  /status came up — a real crash during startup, not a timeout.
+  Carries `exit_code` and a tail of the child's stderr so callers can
+  distinguish RLIMIT_AS / segfaults / config-rejection."""
+
+  def __init__(self,
+               msg: str,
+               exit_code: Optional[int] = None,
+               stderr_tail: Optional[str] = None) -> None:
+    super().__init__(msg)
+    self.exit_code = exit_code
+    self.stderr_tail = stderr_tail
+
+
 def load_shell(
     bin_path: Optional[str],
     unique_port: bool,
@@ -41,9 +67,10 @@ def load_shell(
     ingest_ftrace_in_raw: bool,
     enable_dev_features: bool,
     platform_delegate: PlatformDelegate,
-    load_timeout: int = 2,
+    load_timeout: int = 30,
     extra_flags: Optional[List[str]] = None,
     add_sql_packages: Optional[List[Union[str, 'SqlPackage']]] = None,
+    preexec_fn=None,
 ):
   addr, port = platform_delegate.get_bind_addr(
       port=0 if unique_port else TP_PORT)
@@ -90,32 +117,61 @@ def load_shell(
   if sys.platform == 'win32':
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
-  p = subprocess.Popen(
-      tp_exec + args,
+  popen_kwargs = dict(
       stdin=subprocess.DEVNULL,
       stdout=temp_stdout,
       stderr=None if verbose else temp_stderr,
-      creationflags=creationflags)
+      creationflags=creationflags,
+  )
+  # `preexec_fn` runs in the child after fork(), before exec(). Used
+  # by BatchTraceProcessor to set RLIMIT_AS as a hard kernel-level
+  # per-trace VM cap. Skipped on win32 since subprocess.Popen rejects
+  # it. (We deliberately don't use PR_SET_PDEATHSIG here — see
+  # batch_trace_processor.linux for the reasoning.)
+  if preexec_fn is not None and sys.platform != 'win32':
+    popen_kwargs['preexec_fn'] = preexec_fn
+  p = subprocess.Popen(tp_exec + args, **popen_kwargs)
 
+  # Poll /status with exponential backoff (50ms -> 1s) up to load_timeout
+  # seconds. The previous fixed 1-second sleep both burned wall-time on
+  # fast spawns and gave too few retries when many shells were starting
+  # concurrently.
   success = False
-  for _ in range(load_timeout + 1):
+  child_died = False
+  deadline = time.monotonic() + max(1, load_timeout)
+  delay = 0.05
+  while time.monotonic() < deadline:
+    if p.poll() is not None:
+      child_died = True
+      break
     try:
-      if p.poll() is None:
-        _ = request.urlretrieve(f'http://{url}/status')
-        success = True
+      _ = request.urlretrieve(f'http://{url}/status')
+      success = True
       break
     except (error.URLError, ConnectionError):
-      time.sleep(1)
+      time.sleep(delay)
+      delay = min(delay * 2, 1.0)
 
   if not success:
     p.kill()
+    exit_code = p.poll()
     temp_stdout.seek(0)
     stdout = temp_stdout.read().decode("utf-8")
     temp_stderr.seek(0)
     stderr = temp_stderr.read().decode("utf-8")
     temp_stdout.close()
     temp_stderr.close()
-    raise PerfettoException("Trace processor failed to start.\n"
-                            f"stdout: {stdout}\nstderr: {stderr}\n")
+    if child_died:
+      # Process exited before /status came up — a real crash, not a
+      # timeout. Caller can classify against rlimit / oom signals.
+      raise LoadFailedError(
+          f"Trace processor exited during startup (exit_code={exit_code}).\n"
+          f"stdout: {stdout}\nstderr: {stderr}\n",
+          exit_code=exit_code,
+          stderr_tail=stderr[-4096:])
+    raise LoadTimeoutError(
+        f"Trace processor failed to start within {load_timeout}s.\n"
+        f"stdout: {stdout}\nstderr: {stderr}\n",
+        stderr_tail=stderr[-4096:])
 
   return url, p, temp_stdout, temp_stderr
