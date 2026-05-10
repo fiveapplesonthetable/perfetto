@@ -31,6 +31,8 @@ import {
   shortClassName,
   BitmapImage,
   renderPath,
+  colHeader,
+  COL_INFO,
 } from '../components';
 import type {PathEntry} from '../types';
 import * as queries from '../queries';
@@ -42,6 +44,20 @@ const SUMMARY_SCHEMA: SchemaRegistry = {
     value: {title: 'Value', columnType: 'text'},
   },
 };
+
+// Composes a human-readable "Source" cell from the parcel-sender fields.
+// Returns null when the Bitmap was locally allocated (mSourceId == -1) so
+// the cell renders blank rather than "\u2014" or "null".
+function formatBitmapSource(r: BitmapListRow): string | null {
+  if (r.sourceId === null) return null;
+  const name = r.sourceProcessName ?? '?';
+  const pid = r.sourcePid ?? '?';
+  // Sender's own storage type is informative for parcel transfers \u2014 Path A
+  // (fd-shared ashmem) shows up as 'ashmem' on both sender and receiver,
+  // Path B (blob copy) typically shows 'heap' or 'ashmem' independently.
+  const storage = r.sourceStorageType ? `, ${r.sourceStorageType}` : '';
+  return `${name} (${pid}${storage})`;
+}
 
 function bitmapRowToRow(r: BitmapListRow): Row {
   let retained = 0;
@@ -65,6 +81,9 @@ function bitmapRowToRow(r: BitmapListRow): Row {
     reachable_count: r.row.reachableCount,
     heap: r.row.heap,
     buffer_hash: r.bufferHash,
+    storage: r.storageType,
+    bitmap_id: r.bitmapId === null ? null : r.bitmapId.toString(),
+    source: formatBitmapSource(r),
   };
 }
 
@@ -149,6 +168,36 @@ function makeBitmapListSchema(navigate: NavFn): SchemaRegistry {
       pixel_count: {
         title: 'Pixels',
         columnType: 'quantitative',
+      },
+      storage: {
+        title: colHeader('Storage', COL_INFO.bitmapStorage),
+        columnType: 'text',
+        cellRenderer: (value: SqlValue) =>
+          m(
+            'span',
+            {class: 'ah-mono'},
+            value === null || value === undefined ? '' : String(value),
+          ),
+      },
+      bitmap_id: {
+        title: colHeader('Bitmap ID', COL_INFO.bitmapId),
+        columnType: 'text',
+        cellRenderer: (value: SqlValue) =>
+          m(
+            'span',
+            {class: 'ah-mono'},
+            value === null || value === undefined ? '' : String(value),
+          ),
+      },
+      source: {
+        title: colHeader('Source', COL_INFO.bitmapSource),
+        columnType: 'text',
+        cellRenderer: (value: SqlValue) =>
+          m(
+            'span',
+            {class: 'ah-mono'},
+            value === null || value === undefined ? '' : String(value),
+          ),
       },
     },
   };
@@ -270,6 +319,16 @@ function BitmapCard(): m.Component<BitmapCardAttrs> {
               {class: 'ah-bitmap-card__secondary'},
               fmtSize(row.row.retainedTotal),
             ),
+            row.storageType !== null
+              ? m('span', {class: 'ah-bitmap-card__secondary'}, row.storageType)
+              : null,
+            row.sourceId !== null
+              ? m(
+                  'span',
+                  {class: 'ah-bitmap-card__secondary'},
+                  `from ${formatBitmapSource(row) ?? ''}`,
+                )
+              : null,
           ),
           m(
             'button',
@@ -421,6 +480,8 @@ function BitmapGalleryView(): m.Component<BitmapGalleryViewAttrs> {
         {id: 'id', field: 'id'},
         {id: 'cls', field: 'cls'},
         {id: 'dimensions', field: 'dimensions'},
+        {id: 'storage', field: 'storage'},
+        {id: 'source', field: 'source'},
         {id: 'self_size', field: 'self_size'},
         {id: 'native_size', field: 'native_size'},
         {id: 'retained', field: 'retained'},
@@ -430,6 +491,7 @@ function BitmapGalleryView(): m.Component<BitmapGalleryViewAttrs> {
         {id: 'reachable_native', field: 'reachable_native'},
         {id: 'reachable_count', field: 'reachable_count'},
         {id: 'buffer_hash', field: 'buffer_hash'},
+        {id: 'bitmap_id', field: 'bitmap_id'},
       ];
       const onFiltersChanged = (f: readonly Filter[]) => {
         filters = [...f];
