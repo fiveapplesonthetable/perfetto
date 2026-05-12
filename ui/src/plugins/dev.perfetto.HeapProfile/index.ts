@@ -264,32 +264,32 @@ export default class HeapProfilePlugin implements PerfettoPlugin {
   }
 
   private async selectHeapProfile(ctx: Trace) {
+    // Heap-graph dumps are surfaced through the HeapDumpExplorer rather
+    // than as a timeline selection, so exclude them here. Auto-selecting
+    // a heap dump would also kick off a flamegraph query in the details
+    // panel that competes with HDE's own load.
     const result = await ctx.engine.query(`
         SELECT
-          id,
           upid,
           type
         FROM ${EVENT_TABLE_NAME}
+        WHERE type != 'java_heap_graph'
         ORDER BY type, ts
         LIMIT 1
       `);
 
-    const iter = result.maybeFirstRow({id: NUM, upid: NUM, type: STR});
+    const iter = result.maybeFirstRow({upid: NUM, type: STR});
     if (!iter) return;
 
     const uri = trackUri(iter.upid, iter.type);
     const track = this.trackMap.get(uri);
     if (!track) return;
 
-    if (profileDescriptor(iter.type).type === ProfileType.JAVA_HEAP_GRAPH) {
-      ctx.selection.selectTrackEvent(track.uri, iter.id);
-    } else {
-      ctx.selection.selectArea({
-        start: ctx.traceInfo.start,
-        end: ctx.traceInfo.end,
-        trackUris: [uri],
-      });
-    }
+    ctx.selection.selectArea({
+      start: ctx.traceInfo.start,
+      end: ctx.traceInfo.end,
+      trackUris: [uri],
+    });
   }
 
   private heapProfileSelectionHandler(
