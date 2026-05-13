@@ -264,12 +264,26 @@ export default class HeapProfilePlugin implements PerfettoPlugin {
   }
 
   private async selectHeapProfile(ctx: Trace) {
+    // The Heap Dump Explorer auto-opens for traces with no timeline data
+    // and renders Java heap graphs itself. When that is going to happen,
+    // skip java_heap_graph here so the timeline selection does not race
+    // HDE's queries on the same engine. Otherwise (the user stays on the
+    // timeline) keep it in the selection so the first dump is visible.
+    const hdeWillOpen = await ctx.engine.query(`
+        SELECT NOT (
+          EXISTS(SELECT 1 FROM slice) OR EXISTS(SELECT 1 FROM sched)
+        ) AS res
+      `);
+    const javaHeapGraphFilter = hdeWillOpen.firstRow({res: NUM}).res
+      ? `WHERE type != 'java_heap_graph'`
+      : '';
     const result = await ctx.engine.query(`
         SELECT
           id,
           upid,
           type
         FROM ${EVENT_TABLE_NAME}
+        ${javaHeapGraphFilter}
         ORDER BY type, ts
         LIMIT 1
       `);
