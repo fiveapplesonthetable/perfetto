@@ -228,20 +228,15 @@ export const COL_INFO = {
   bitmapStorage:
     'Pixel-storage backing decoded from Bitmap.mId. ' +
     "'heap' = malloc'd in this process — each duplicate is real RAM cost. " +
-    "'ashmem' = shared kernel memory — duplicates with the same source_id " +
+    "'ashmem' = shared kernel memory — duplicates from the same source " +
     'are kernel-shared (PSS-attributed), no real RAM cost. ' +
     "'hardware' = AHardwareBuffer — duplicates may share GPU memory if " +
     'they wrap the same buffer handle.',
-  bitmapId:
-    'Encoded Bitmap.mId — process-monotonic instance counter (' +
-    'pid·10⁷ + storage_type·10⁶ + counter). Stable identifier within one ' +
-    "process; it's never a dedup key (every Bitmap allocation gets a " +
-    'fresh value).',
   bitmapSource:
     'Parcel sender derived from Bitmap.mSourceId. Blank when this Bitmap ' +
     "was allocated locally. When present, it's the sender's process name " +
     'and pid at writeToParcel time. Multiple Bitmaps with the same ' +
-    'source_id and same content_hash are kernel-shared, NOT duplicated.',
+    'sender and same content_hash are kernel-shared, NOT duplicated.',
 } as const;
 
 // Label + info icon for DataGrid column titles.

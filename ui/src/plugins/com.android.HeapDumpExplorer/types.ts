@@ -156,14 +156,7 @@ export interface BitmapListRow {
    * 'hardware' = AHardwareBuffer (GPU memory).
    */
   storageType: string | null;
-  /** Encoded `Bitmap.mId`. */
-  bitmapId: bigint | null;
-  /**
-   * Encoded `Bitmap.mSourceId` for parcel-received Bitmaps; null when the
-   * Bitmap was locally allocated (raw -1 sentinel canonicalised).
-   */
-  sourceId: bigint | null;
-  /** Sender pid decoded from sourceId. Null when sourceId is null. */
+  /** Sender pid decoded from `Bitmap.mSourceId`. Null when locally allocated. */
   sourcePid: number | null;
   /** Sender's pixel storage type at writeToParcel time. */
   sourceStorageType: string | null;

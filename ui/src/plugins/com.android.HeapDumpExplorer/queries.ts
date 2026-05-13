@@ -1815,9 +1815,7 @@ export async function getBitmapList(
       cast_int!(b.height) AS height,
       cast_int!(b.density) AS density,
       MAX(CASE WHEN f.field_name GLOB '*mNativePtr' THEN f.long_value END) AS native_ptr,
-      b.bitmap_id,
       b.bitmap_storage_type,
-      b.source_id,
       cast_int!(b.source_pid) AS source_pid,
       b.source_storage_type,
       b.source_process_name
@@ -1844,9 +1842,7 @@ export async function getBitmapList(
     hasPixelData: boolean;
     density: number;
     nativePtr: bigint | null;
-    bitmapId: bigint | null;
     storageType: string | null;
-    sourceId: bigint | null;
     sourcePid: number | null;
     sourceStorageType: string | null;
     sourceProcessName: string | null;
@@ -1870,9 +1866,7 @@ export async function getBitmapList(
       height: NUM_NULL,
       density: NUM_NULL,
       native_ptr: LONG_NULL,
-      bitmap_id: LONG_NULL,
       bitmap_storage_type: STR_NULL,
-      source_id: LONG_NULL,
       source_pid: NUM_NULL,
       source_storage_type: STR_NULL,
       source_process_name: STR_NULL,
@@ -1896,9 +1890,7 @@ export async function getBitmapList(
       hasPixelData,
       density: it.density ?? 0,
       nativePtr: it.native_ptr,
-      bitmapId: it.bitmap_id,
       storageType: it.bitmap_storage_type,
-      sourceId: it.source_id,
       sourcePid: it.source_pid,
       sourceStorageType: it.source_storage_type,
       sourceProcessName: it.source_process_name,
@@ -1920,8 +1912,6 @@ export async function getBitmapList(
     density: r.density,
     bufferHash: hashes.get(r.row.id) ?? null,
     storageType: r.storageType,
-    bitmapId: r.bitmapId,
-    sourceId: r.sourceId,
     sourcePid: r.sourcePid,
     sourceStorageType: r.sourceStorageType,
     sourceProcessName: r.sourceProcessName,

@@ -68,8 +68,6 @@ function bitmapRowToRow(r: BitmapListRow): Row {
     heap: r.row.heap,
     buffer_hash: r.bufferHash,
     storage: r.storageType,
-    bitmap_id: r.bitmapId === null ? null : r.bitmapId.toString(),
-    source_id: r.sourceId === null ? null : r.sourceId.toString(),
     source_process_name: r.sourceProcessName,
     source_pid: r.sourcePid,
     source_storage: r.sourceStorageType,
@@ -160,18 +158,6 @@ function makeBitmapListSchema(navigate: NavFn): SchemaRegistry {
       },
       storage: {
         title: colHeader('Storage', COL_INFO.bitmapStorage),
-        columnType: 'text',
-        cellRenderer: (value: SqlValue) =>
-          m('span', {class: 'pf-hde-mono'}, String(value ?? '')),
-      },
-      bitmap_id: {
-        title: colHeader('Bitmap ID', COL_INFO.bitmapId),
-        columnType: 'text',
-        cellRenderer: (value: SqlValue) =>
-          m('span', {class: 'pf-hde-mono'}, String(value ?? '')),
-      },
-      source_id: {
-        title: colHeader('Source ID', COL_INFO.bitmapSource),
         columnType: 'text',
         cellRenderer: (value: SqlValue) =>
           m('span', {class: 'pf-hde-mono'}, String(value ?? '')),
@@ -325,11 +311,11 @@ function BitmapCard(): m.Component<BitmapCardAttrs> {
                   row.storageType,
                 )
               : null,
-            row.sourceId !== null
+            row.sourcePid !== null
               ? m(
                   'span',
                   {class: 'pf-hde-bitmap-card__secondary'},
-                  `from ${row.sourceProcessName ?? '?'} (${row.sourcePid ?? '?'})`,
+                  `from ${row.sourceProcessName ?? '?'} (${row.sourcePid})`,
                 )
               : null,
           ),
@@ -495,8 +481,6 @@ function BitmapGalleryView(): m.Component<BitmapGalleryViewAttrs> {
         {id: 'reachable_size', field: 'reachable_size'},
         {id: 'reachable_native', field: 'reachable_native'},
         {id: 'reachable_count', field: 'reachable_count'},
-        {id: 'bitmap_id', field: 'bitmap_id'},
-        {id: 'source_id', field: 'source_id'},
         {id: 'buffer_hash', field: 'buffer_hash'},
       ];
       const onFiltersChanged = (f: readonly Filter[]) => {
