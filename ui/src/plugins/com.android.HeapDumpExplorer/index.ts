@@ -20,7 +20,11 @@ import {NUM} from '../../trace_processor/query_result';
 import HeapProfilePlugin, {
   traceHasTimelineData,
 } from '../dev.perfetto.HeapProfile';
-import {HeapDumpPage} from './heap_dump_page';
+import {
+  HeapDumpPage,
+  resetCachedOverview,
+  disposeBaseline,
+} from './heap_dump_page';
 import {HeapDumpExplorerSession} from './session';
 
 export default class implements PerfettoPlugin {
@@ -48,6 +52,9 @@ export default class implements PerfettoPlugin {
       hideDefaultChangedHint,
     );
     await session.loadDumps();
+
+    resetCachedOverview();
+    disposeBaseline();
 
     ctx.pages.registerPage({
       route: '/heapdump',
