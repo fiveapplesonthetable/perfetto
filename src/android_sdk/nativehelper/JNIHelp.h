@@ -398,6 +398,19 @@ end:
 }
 }  // namespace android::jnihelp
 
+#if !defined(__ANDROID__) && !defined(_WIN32)
+// Host (Ravenwood) build: route every native-method registration through
+// libnativehelper's wrap hook so the Ravenwood runtime can substitute
+// libffi trampolines for @CriticalNative methods. Pass-through when no
+// hook is installed. See libnativehelper/JNIHelp.{c,h} and
+// frameworks/base/ravenwood/runtime-jni/critical_native_trampoline.cpp.
+extern "C" void* jniHostMaybeWrapNative(JNIEnv* env,
+                                        jclass clazz,
+                                        const char* methodName,
+                                        const char* signature,
+                                        void* fnPtr);
+#endif
+
 /*
  * Register one or more native methods with a particular class.  "className"
  * looks like "java/lang/String". Aborts on failure, returns 0 on success.
@@ -415,7 +428,32 @@ end:
         "Native registration unable to find class '%s'; aborting...",
         className);
   }
+#if !defined(__ANDROID__) && !defined(_WIN32)
+  // Apply the Ravenwood wrap hook so @CriticalNative natives end up
+  // registered as libffi trampolines that satisfy HotSpot's standard JNI
+  // ABI. jniHostMaybeWrapNative is a no-op (returns fnPtr unchanged) when
+  // no hook is installed.
+  JNINativeMethod stackBuf[32];
+  JNINativeMethod* wrapped =
+      (numMethods <= 32)
+          ? stackBuf
+          : (JNINativeMethod*)malloc(sizeof(JNINativeMethod) *
+                                     static_cast<size_t>(numMethods));
+  const JNINativeMethod* finalMethods = methods;
+  if (wrapped != NULL) {
+    for (int i = 0; i < numMethods; ++i) {
+      wrapped[i] = methods[i];
+      wrapped[i].fnPtr = jniHostMaybeWrapNative(
+          env, clazz, methods[i].name, methods[i].signature, methods[i].fnPtr);
+    }
+    finalMethods = wrapped;
+  }
+  int result = env->RegisterNatives(clazz, finalMethods, numMethods);
+  if (wrapped != NULL && wrapped != stackBuf)
+    free(wrapped);
+#else
   int result = env->RegisterNatives(clazz, methods, numMethods);
+#endif
   env->DeleteLocalRef(clazz);
   if (result == 0) {
     return 0;
