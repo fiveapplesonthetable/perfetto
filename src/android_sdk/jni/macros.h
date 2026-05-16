@@ -16,7 +16,33 @@
 
 #ifndef SRC_ANDROID_SDK_JNI_MACROS_H_
 #define SRC_ANDROID_SDK_JNI_MACROS_H_
+#include <jni.h>
 #include <string_view>
+
+#include "perfetto/base/build_config.h"
+
+// JNI parameter shim for natives that are declared @CriticalNative on the
+// Java side. On Android device, ART recognises the annotation and calls
+// the function with no JNIEnv*/jclass prefix; on every other JVM (notably
+// HotSpot under Ravenwood, where the perfetto SDK also runs) the
+// annotation is invisible and the standard JNI ABI is used. The host
+// build of the SDK is paired with a Java-source preprocessor that strips
+// @CriticalNative entirely (see perfetto_trace_lib_java_srcs_stripped in
+// Android.bp), so on host every method binds as a plain native and this
+// macro adds the env+clazz prefix to keep the C signatures matching.
+//
+//   static jlong foo(PERFETTO_JNI_HOST_PARAMS) { ... }
+//   static void  bar(PERFETTO_JNI_HOST_PARAMS_COMMA jlong x) { ... }
+//
+// Expands to nothing on device (so the on-wire binary is unchanged) and
+// to JNIEnv*,jclass[,] everywhere else.
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+#define PERFETTO_JNI_HOST_PARAMS
+#define PERFETTO_JNI_HOST_PARAMS_COMMA
+#else
+#define PERFETTO_JNI_HOST_PARAMS JNIEnv*, jclass
+#define PERFETTO_JNI_HOST_PARAMS_COMMA JNIEnv*, jclass,
+#endif
 
 // This is a very basic check to make sure we get the
 // 'PERFETTO_JNI_JARJAR_PREFIX' in the form of 'com/android/internal/'.
