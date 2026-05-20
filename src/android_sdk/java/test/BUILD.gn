@@ -7,6 +7,13 @@ perfetto_android_library("perfetto_trace_test_lib") {
   sources = [
     "dev/perfetto/sdk/InternPoolTest.java",
     "dev/perfetto/sdk/ProtoWriterTest.java",
+
+    # EXPERIMENTAL (throwaway branch): body-encoding A/B. Delete with the branch.
+    "dev/perfetto/sdk/test/DirectProtoWriter.java",
+    "dev/perfetto/sdk/test/EncodeAbBenchmarkTest.java",
+    "dev/perfetto/sdk/test/EncodeAbBodies.java",
+    "dev/perfetto/sdk/test/UnsafeProtoWriter.java",
+
     "dev/perfetto/sdk/test/PerfettoDataSourceTest.java",
     "dev/perfetto/sdk/test/PerfettoEventEmitTest.java",
     "dev/perfetto/sdk/test/PerfettoTraceTest.java",
