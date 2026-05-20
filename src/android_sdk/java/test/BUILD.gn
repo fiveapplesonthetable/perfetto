@@ -6,6 +6,8 @@ assert(enable_perfetto_android_java_sdk)
 perfetto_android_library("perfetto_trace_test_lib") {
   sources = [
     "dev/perfetto/sdk/ProtoWriterTest.java",
+    # THROWAWAY (not for check-in): on-device HL-vs-LL emit benchmark.
+    "dev/perfetto/sdk/test/PerfettoDeviceBenchmark.java",
     "dev/perfetto/sdk/test/PerfettoEventEmitTest.java",
     "dev/perfetto/sdk/test/PerfettoTraceTest.java",
   ]
