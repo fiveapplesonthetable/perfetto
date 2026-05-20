@@ -31,6 +31,7 @@ import dev.perfetto.sdk.PerfettoTrackEventExtra.FieldContainer;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.FieldNested;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.Flow;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.NamedTrack;
+import dev.perfetto.sdk.PerfettoTrackEventExtra.NestedTracks;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.PerfettoPointer;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.Proto;
 
@@ -80,11 +81,13 @@ public final class PerfettoTrackEventBuilder {
 
   private static final class ObjectsCache {
     public final RingBuffer<NamedTrack> mNamedTrackCache;
+    public final RingBuffer<NestedTracks> mNestedTrackCache;
     public final RingBuffer<CounterTrack> mCounterTrackCache;
     public final RingBuffer<Arg> mArgCache;
 
     public ObjectsCache(int capacity) {
       mNamedTrackCache = new RingBuffer<>(capacity);
+      mNestedTrackCache = new RingBuffer<>(capacity);
       mCounterTrackCache = new RingBuffer<>(capacity);
       mArgCache = new RingBuffer<>(capacity);
     }
@@ -359,6 +362,30 @@ public final class PerfettoTrackEventBuilder {
   }
 
   /** Adds the events to a named track instead of the thread track where the event occurred. */
+  /**
+   * Emits this event on {@code track}, a (possibly nested) named track. The
+   * descriptor for each level of the chain is emitted once per sequence. The
+   * native side derives the per-level uuids; nothing is hardcoded here. The
+   * {@link NestedTracks} wrapper is cached per {@link PerfettoTrack}, so this is
+   * allocation-free after the first use of a given track.
+   */
+  public PerfettoTrackEventBuilder usingTrack(PerfettoTrack track) {
+    if (!mIsCategoryEnabled) {
+      return this;
+    }
+    if (mIsDebug) {
+      checkNotBuildingProto();
+    }
+
+    NestedTracks nested = mObjectsCache.mNestedTrackCache.get(track.mCacheKey);
+    if (nested == null || nested.getSource() != track) {
+      nested = new NestedTracks(track, mNativeMemoryCleaner);
+      mObjectsCache.mNestedTrackCache.put(track.mCacheKey, nested);
+    }
+    addPerfettoPointerToExtra(nested);
+    return this;
+  }
+
   public PerfettoTrackEventBuilder usingNamedTrack(
           long id, @CompileTimeConstant String name, long parentUuid) {
       return usingNamedTrack(id, name, parentUuid, /* isNameStatic = */ true);

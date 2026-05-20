@@ -180,6 +180,35 @@ class NamedTrack {
 };
 
 /**
+ * @brief A nested chain of named tracks (the HL NESTED_TRACKS extra).
+ *
+ * The chain is, outermost first: an optional root (process or thread; global
+ * roots have none) followed by one named level per name. The native HL path
+ * derives the per-level uuids and emits a descriptor for each level.
+ */
+class NestedTracks {
+ public:
+  // root_type: 0 = global, 1 = process, 2 = thread (matches PerfettoTrack).
+  NestedTracks(int root_type,
+               const std::vector<std::string>& names,
+               const std::vector<uint64_t>& ids);
+
+  static void delete_track(NestedTracks* track);
+
+  const PerfettoTeHlExtraNestedTracks* get() const { return &extra_; }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(NestedTracks);
+  // Owns the names; the entries below point into these. None of these vectors
+  // are mutated after construction, so the pointers stay valid.
+  std::vector<std::string> names_;
+  PerfettoTeHlNestedTrack root_;
+  std::vector<PerfettoTeHlNestedTrackNamed> named_;
+  std::vector<PerfettoTeHlNestedTrack*> ptrs_;
+  PerfettoTeHlExtraNestedTracks extra_;
+};
+
+/**
  * @brief Represents a registered track.
  */
 class RegisteredTrack {

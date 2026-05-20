@@ -158,6 +158,43 @@ final class PerfettoTrackEventExtra {
     private static native long native_get_extra_ptr(long ptr);
   }
 
+  /**
+   * A nested chain of named tracks emitted via the HL {@code NESTED_TRACKS} extra.
+   * Built once per {@link PerfettoTrack} (cached by the builder) so the emit path
+   * stays allocation-free; the native side derives the per-level uuids and emits a
+   * {@code TrackDescriptor} for each level once per sequence.
+   */
+  static final class NestedTracks implements PerfettoPointer {
+    private final long mPtr;
+    private final long mExtraPtr;
+    private final PerfettoTrack mSource;
+
+    NestedTracks(PerfettoTrack track, PerfettoNativeMemoryCleaner memoryCleaner) {
+      mPtr = native_init(track.mRootType, track.mNames, track.mIds);
+      mExtraPtr = native_get_extra_ptr(mPtr);
+      mSource = track;
+      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
+    }
+
+    @Override
+    public long getPtr() {
+      return mExtraPtr;
+    }
+
+    PerfettoTrack getSource() {
+      return mSource;
+    }
+
+    @FastNative
+    private static native long native_init(int rootType, String[] names, long[] ids);
+
+    @CriticalNative
+    private static native long native_delete();
+
+    @CriticalNative
+    private static native long native_get_extra_ptr(long ptr);
+  }
+
   static final class CounterTrack implements PerfettoPointer {
     private final long mPtr;
     private final long mExtraPtr;
