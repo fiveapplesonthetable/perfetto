@@ -152,28 +152,30 @@ public final class ProtoWriter {
    */
   public void writeString(int fieldId, String value) {
     int len = value.length();
-    boolean ascii = true;
+    // tag + length varint + the bytes, ensured in one shot. ASCII is the
+    // overwhelmingly common case (event names, categories, arg keys), where the
+    // byte length equals the char length: write that length, then check-and-copy
+    // each char in a SINGLE pass (the previous code did one pass to verify ASCII
+    // and a second to copy). There is no alloc-free bulk String->byte[] copy on
+    // ART -- libcore's String.getBytes is itself a charAt loop, and
+    // getBytes(charset) allocates -- so one combined pass over the chars is the
+    // floor. A non-ASCII char rewinds and re-encodes the whole field as UTF-8.
+    ensureCapacity(MAX_TAG_LEN + MAX_VARINT_LEN + len);
+    int start = mPos;
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_DELIMITED));
+    putVarIntNoCheck(len);
+    byte[] buf = mBuf;
+    int pos = mPos;
     for (int i = 0; i < len; i++) {
-      if (value.charAt(i) > 0x7F) {
-        ascii = false;
-        break;
+      char c = value.charAt(i);
+      if (c > 0x7F) {
+        mPos = start; // discard the optimistic tag/len/bytes; redo as UTF-8.
+        writeStringUtf8(fieldId, value);
+        return;
       }
+      buf[pos++] = (byte) c;
     }
-
-    if (ascii) {
-      // tag + length varint + the ASCII bytes, ensured in one shot.
-      ensureCapacity(MAX_TAG_LEN + MAX_VARINT_LEN + len);
-      putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_DELIMITED));
-      putVarIntNoCheck(len);
-      byte[] buf = mBuf;
-      int pos = mPos;
-      for (int i = 0; i < len; i++) {
-        buf[pos++] = (byte) value.charAt(i);
-      }
-      mPos = pos;
-    } else {
-      writeStringUtf8(fieldId, value);
-    }
+    mPos = pos;
   }
 
   /** Writes a bytes field from a slice of {@code value}. */
