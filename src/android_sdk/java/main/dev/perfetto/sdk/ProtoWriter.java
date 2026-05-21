@@ -23,6 +23,12 @@ package dev.perfetto.sdk;
  * Designed for encoding Perfetto trace packets on the frame-rendering hot path,
  * where allocation and GC pressure are unacceptable.
  *
+ * <p>Each public {@code write*} call does exactly one {@link #ensureCapacity}
+ * (sized for tag + worst-case payload) and then writes the tag and payload via
+ * {@code *NoCheck} helpers that hoist {@link #mBuf}/{@link #mPos} into locals.
+ * This keeps the per-field cost to a single bounds/grow check and one field
+ * write-back, which matters on runtimes that don't inline aggressively.
+ *
  * <p>Nested messages use a 4-byte redundant varint for the length prefix,
  * matching protozero's single-pass strategy: the length is reserved before the
  * submessage body is written and back-filled on {@link #endNested}, so sizes
@@ -40,6 +46,10 @@ public final class ProtoWriter {
   private static final int WIRE_TYPE_FIXED64 = 1;
   private static final int WIRE_TYPE_DELIMITED = 2;
   private static final int WIRE_TYPE_FIXED32 = 5;
+
+  // Worst-case encoded sizes, used to size a single ensureCapacity per field.
+  private static final int MAX_VARINT_LEN = 10; // a 64-bit varint
+  private static final int MAX_TAG_LEN = 5; // a field tag varint (field nums to 2^28)
 
   // Matches PROTOZERO_MESSAGE_LENGTH_FIELD_SIZE in pb_msg.h. A nested message
   // can therefore be up to 0x0FFFFFFF bytes (256MB), the protozero limit.
@@ -86,8 +96,9 @@ public final class ProtoWriter {
 
   /** Writes a uint32/uint64/int32/int64/enum field. */
   public void writeVarInt(int fieldId, long value) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_VARINT));
-    writeRawVarInt(value);
+    ensureCapacity(MAX_TAG_LEN + MAX_VARINT_LEN);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_VARINT));
+    putVarIntNoCheck(value);
   }
 
   /** Writes a sint32/sint64 field (zigzag encoded). */
@@ -97,8 +108,8 @@ public final class ProtoWriter {
 
   /** Writes a bool field. */
   public void writeBool(int fieldId, boolean value) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_VARINT));
-    ensureCapacity(1);
+    ensureCapacity(MAX_TAG_LEN + 1);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_VARINT));
     mBuf[mPos++] = (byte) (value ? 1 : 0);
   }
 
@@ -108,14 +119,16 @@ public final class ProtoWriter {
 
   /** Writes a fixed64/sfixed64 field. */
   public void writeFixed64(int fieldId, long value) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_FIXED64));
-    putLongLE(value);
+    ensureCapacity(MAX_TAG_LEN + 8);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_FIXED64));
+    putLongLeNoCheck(value);
   }
 
   /** Writes a fixed32/sfixed32 field. */
   public void writeFixed32(int fieldId, int value) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_FIXED32));
-    putIntLE(value);
+    ensureCapacity(MAX_TAG_LEN + 4);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_FIXED32));
+    putIntLeNoCheck(value);
   }
 
   /** Writes a double field. */
@@ -138,9 +151,7 @@ public final class ProtoWriter {
    * back to UTF-8 encoding otherwise.
    */
   public void writeString(int fieldId, String value) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_DELIMITED));
     int len = value.length();
-
     boolean ascii = true;
     for (int i = 0; i < len; i++) {
       if (value.charAt(i) > 0x7F) {
@@ -150,21 +161,26 @@ public final class ProtoWriter {
     }
 
     if (ascii) {
-      writeRawVarInt(len);
-      ensureCapacity(len);
+      // tag + length varint + the ASCII bytes, ensured in one shot.
+      ensureCapacity(MAX_TAG_LEN + MAX_VARINT_LEN + len);
+      putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_DELIMITED));
+      putVarIntNoCheck(len);
+      byte[] buf = mBuf;
+      int pos = mPos;
       for (int i = 0; i < len; i++) {
-        mBuf[mPos++] = (byte) value.charAt(i);
+        buf[pos++] = (byte) value.charAt(i);
       }
+      mPos = pos;
     } else {
-      writeStringUtf8(value);
+      writeStringUtf8(fieldId, value);
     }
   }
 
   /** Writes a bytes field from a slice of {@code value}. */
   public void writeBytes(int fieldId, byte[] value, int offset, int length) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_DELIMITED));
-    writeRawVarInt(length);
-    ensureCapacity(length);
+    ensureCapacity(MAX_TAG_LEN + MAX_VARINT_LEN + length);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_DELIMITED));
+    putVarIntNoCheck(length);
     System.arraycopy(value, offset, mBuf, mPos, length);
     mPos += length;
   }
@@ -184,8 +200,8 @@ public final class ProtoWriter {
    * that must be passed to the matching {@link #endNested}.
    */
   public int beginNested(int fieldId) {
-    writeRawVarInt(makeTag(fieldId, WIRE_TYPE_DELIMITED));
-    ensureCapacity(NESTED_LENGTH_FIELD_SIZE);
+    ensureCapacity(MAX_TAG_LEN + NESTED_LENGTH_FIELD_SIZE);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_DELIMITED));
     int bookmark = mPos;
     mPos += NESTED_LENGTH_FIELD_SIZE;
     mNestingStack[mNestingDepth++] = bookmark;
@@ -202,10 +218,11 @@ public final class ProtoWriter {
     mNestingDepth--;
     int bookmark = mNestingStack[token];
     int size = mPos - bookmark - NESTED_LENGTH_FIELD_SIZE;
-    mBuf[bookmark] = (byte) ((size & 0x7F) | 0x80);
-    mBuf[bookmark + 1] = (byte) (((size >> 7) & 0x7F) | 0x80);
-    mBuf[bookmark + 2] = (byte) (((size >> 14) & 0x7F) | 0x80);
-    mBuf[bookmark + 3] = (byte) ((size >> 21) & 0x7F);
+    byte[] buf = mBuf;
+    buf[bookmark] = (byte) ((size & 0x7F) | 0x80);
+    buf[bookmark + 1] = (byte) (((size >> 7) & 0x7F) | 0x80);
+    buf[bookmark + 2] = (byte) (((size >> 14) & 0x7F) | 0x80);
+    buf[bookmark + 3] = (byte) ((size >> 21) & 0x7F);
   }
 
   // ==========================================================================
@@ -220,40 +237,47 @@ public final class ProtoWriter {
   }
 
   // ==========================================================================
-  // Internal helpers
+  // Internal helpers. The *NoCheck writers assume the caller has already
+  // ensured capacity for the bytes they write; they hoist mBuf/mPos to locals.
   // ==========================================================================
 
   private static long makeTag(int fieldId, int wireType) {
     return ((long) fieldId << 3) | wireType;
   }
 
-  private void writeRawVarInt(long value) {
-    ensureCapacity(10);
+  private void putVarIntNoCheck(long value) {
+    byte[] buf = mBuf;
+    int pos = mPos;
     while ((value & ~0x7FL) != 0) {
-      mBuf[mPos++] = (byte) ((value & 0x7F) | 0x80);
+      buf[pos++] = (byte) ((value & 0x7F) | 0x80);
       value >>>= 7;
     }
-    mBuf[mPos++] = (byte) value;
+    buf[pos++] = (byte) value;
+    mPos = pos;
   }
 
-  private void putLongLE(long value) {
-    ensureCapacity(8);
-    mBuf[mPos++] = (byte) value;
-    mBuf[mPos++] = (byte) (value >> 8);
-    mBuf[mPos++] = (byte) (value >> 16);
-    mBuf[mPos++] = (byte) (value >> 24);
-    mBuf[mPos++] = (byte) (value >> 32);
-    mBuf[mPos++] = (byte) (value >> 40);
-    mBuf[mPos++] = (byte) (value >> 48);
-    mBuf[mPos++] = (byte) (value >> 56);
+  private void putLongLeNoCheck(long value) {
+    byte[] buf = mBuf;
+    int pos = mPos;
+    buf[pos] = (byte) value;
+    buf[pos + 1] = (byte) (value >> 8);
+    buf[pos + 2] = (byte) (value >> 16);
+    buf[pos + 3] = (byte) (value >> 24);
+    buf[pos + 4] = (byte) (value >> 32);
+    buf[pos + 5] = (byte) (value >> 40);
+    buf[pos + 6] = (byte) (value >> 48);
+    buf[pos + 7] = (byte) (value >> 56);
+    mPos = pos + 8;
   }
 
-  private void putIntLE(int value) {
-    ensureCapacity(4);
-    mBuf[mPos++] = (byte) value;
-    mBuf[mPos++] = (byte) (value >> 8);
-    mBuf[mPos++] = (byte) (value >> 16);
-    mBuf[mPos++] = (byte) (value >> 24);
+  private void putIntLeNoCheck(int value) {
+    byte[] buf = mBuf;
+    int pos = mPos;
+    buf[pos] = (byte) value;
+    buf[pos + 1] = (byte) (value >> 8);
+    buf[pos + 2] = (byte) (value >> 16);
+    buf[pos + 3] = (byte) (value >> 24);
+    mPos = pos + 4;
   }
 
   private void ensureCapacity(int needed) {
@@ -266,22 +290,23 @@ public final class ProtoWriter {
     mBuf = newBuf;
   }
 
-  private void writeStringUtf8(String s) {
+  private void writeStringUtf8(int fieldId, String s) {
     int utf8Len = encodeUtf8(s, mUtf8Scratch);
+    byte[] src;
+    int srcLen;
     if (utf8Len >= 0) {
-      writeRawVarInt(utf8Len);
-      ensureCapacity(utf8Len);
-      System.arraycopy(mUtf8Scratch, 0, mBuf, mPos, utf8Len);
-      mPos += utf8Len;
+      src = mUtf8Scratch;
+      srcLen = utf8Len;
     } else {
       // Scratch too small (long non-ASCII string). Rare; allocate exactly once.
-      byte[] big = new byte[-utf8Len];
-      int actualLen = encodeUtf8(s, big);
-      writeRawVarInt(actualLen);
-      ensureCapacity(actualLen);
-      System.arraycopy(big, 0, mBuf, mPos, actualLen);
-      mPos += actualLen;
+      src = new byte[-utf8Len];
+      srcLen = encodeUtf8(s, src);
     }
+    ensureCapacity(MAX_TAG_LEN + MAX_VARINT_LEN + srcLen);
+    putVarIntNoCheck(makeTag(fieldId, WIRE_TYPE_DELIMITED));
+    putVarIntNoCheck(srcLen);
+    System.arraycopy(src, 0, mBuf, mPos, srcLen);
+    mPos += srcLen;
   }
 
   /**
