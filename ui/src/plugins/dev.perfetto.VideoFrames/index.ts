@@ -66,6 +66,7 @@ export default class implements PerfettoPlugin {
           'Frame ' || frame_number AS name
         FROM android_video_frames
         WHERE COALESCE(track_id, 0) = ${stream.trackId}
+          AND COALESCE(is_config, 0) = 0
       `);
 
       const player = new VideoFramePlayer(ctx, uri, stream.trackId);

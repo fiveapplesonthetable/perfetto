@@ -14912,14 +14912,48 @@ message SourceLocation {
 // A captured video frame from the device display.
 // Carried as a sub-field of TrackEvent. The track association (name, identity)
 // comes from the TrackDescriptor, not from fields in this message.
+//
+// Two encodings are supported on the same message and timeline model:
+//   * v1 - one self-contained still per change: set jpg_image or webp_image.
+//   * v2 - a hardware video elementary stream: set codec + au_data per change,
+//     with one codec_config-only message emitted first per stream. v2 removes
+//     the per-frame software image encode and the GPU->CPU readback and adds
+//     inter-frame compression; see VIDEO_FRAMES_DESIGN.md.
+// Every message is still a single TYPE_INSTANT TrackEvent stamped with the
+// boot-time instant the screen changed, so timeline alignment is identical
+// regardless of encoding.
 message VideoFrame {
   // Sequential frame number within the capture session.
   optional uint64 frame_number = 1;
 
-  // Image data in one of the supported formats. If both are set, jpg_image
-  // takes precedence.
+  // v1 still image. If both are set, jpg_image takes precedence.
   optional bytes jpg_image = 2;
   optional bytes webp_image = 3;
+
+  // v2 hardware video. Codec used for au_data / codec_config.
+  enum Codec {
+    CODEC_UNSPECIFIED = 0;
+    CODEC_H264 = 1;  // AVC; codec_config carries avcC (SPS/PPS).
+    CODEC_HEVC = 2;  // HEVC; codec_config carries hvcC (VPS/SPS/PPS).
+  }
+
+  // Out-of-band decoder configuration (avcC / hvcC), emitted once per stream
+  // in its own VideoFrame before any au_data. Required to decode au_data.
+  optional bytes codec_config = 4;
+
+  // One coded access unit (a single encoded frame) for this instant.
+  optional bytes au_data = 5;
+
+  // True if au_data is a key frame (IDR) and can be decoded standalone.
+  optional bool is_key_frame = 6;
+
+  // Codec presentation timestamp (microseconds) of au_data, for ordering and
+  // seeking within the elementary stream. Distinct from the TracePacket
+  // timestamp, which is the boot-time instant used for timeline placement.
+  optional uint64 pts_us = 7;
+
+  // Which codec au_data / codec_config are encoded with.
+  optional Codec codec = 8;
 }
 
 // End of protos/perfetto/trace/android/video_frame.proto

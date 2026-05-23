@@ -20,6 +20,10 @@ export interface FrameInfo {
   id: number;
   ts: bigint;
   frameNumber: number;
+  // v2 (hardware video) fields. codec is undefined for v1 still images.
+  codec?: number;
+  isKey?: boolean;
+  ptsUs?: number;
 }
 
 export const FPS_OPTIONS = [1, 5, 10, 15, 30, 60, 120, 240];
@@ -51,6 +55,12 @@ export class VideoFramePlayer {
   private framesLoaded = false;
   private playbackStartIdx = 0;
 
+  // v2 hardware-video decode state (lazy).
+  private isVideo = false;
+  private codecConfigId?: number; // row id of the codec_config-only frame
+  private codecString?: string; // e.g. avc1.42c00b, derived from the SPS
+  private codecConfig?: Uint8Array; // Annex-B SPS/PPS, prepended to key frames
+
   constructor(trace: Trace, trackUri: string, trackId: number) {
     this.trace = trace;
     this.trackUri = trackUri;
@@ -68,15 +78,42 @@ export class VideoFramePlayer {
   async ensureFramesLoaded(): Promise<void> {
     if (this.framesLoaded) return;
     const res = await this.trace.engine.query(`
-      SELECT id, ts, frame_number AS frameNumber
+      SELECT id, ts, frame_number AS frameNumber,
+             COALESCE(codec, 0) AS codec,
+             COALESCE(is_key_frame, 0) AS isKey,
+             COALESCE(pts_us, 0) AS ptsUs,
+             COALESCE(is_config, 0) AS isConfig
       FROM android_video_frames
       WHERE COALESCE(track_id, 0) = ${this.trackId}
       ORDER BY ts
     `);
-    const it = res.iter({id: NUM, ts: LONG, frameNumber: NUM});
+    const it = res.iter({
+      id: NUM,
+      ts: LONG,
+      frameNumber: NUM,
+      codec: NUM,
+      isKey: NUM,
+      ptsUs: LONG,
+      isConfig: NUM,
+    });
     this.frames = [];
     for (; it.valid(); it.next()) {
-      this.frames.push({id: it.id, ts: it.ts, frameNumber: it.frameNumber});
+      if (it.isConfig) {
+        // Decoder setup, not a displayable frame: remember it for v2 decode.
+        this.codecConfigId = it.id;
+        this.isVideo = true;
+        continue;
+      }
+      const codec = it.codec || undefined;
+      if (codec !== undefined) this.isVideo = true;
+      this.frames.push({
+        id: it.id,
+        ts: it.ts,
+        frameNumber: it.frameNumber,
+        codec,
+        isKey: it.isKey !== 0,
+        ptsUs: Number(it.ptsUs),
+      });
     }
     this.framesLoaded = true;
   }
@@ -97,6 +134,12 @@ export class VideoFramePlayer {
       this.imageUrl = undefined;
     }
 
+    if (this.isVideo && this.frames[idx].codec !== undefined) {
+      await this.decodeVideoFrame(idx);
+      m.redraw();
+      return;
+    }
+
     const id = this.frames[idx].id;
     const res = await this.trace.engine.query(
       `SELECT video_frame_image(${id}) AS img`,
@@ -107,6 +150,95 @@ export class VideoFramePlayer {
       this.imageUrl = URL.createObjectURL(blob);
     }
     m.redraw();
+  }
+
+  // --- v2: decode an H.264/HEVC frame with WebCodecs ---
+
+  private async fetchBytes(id: number): Promise<Uint8Array> {
+    const res = await this.trace.engine.query(
+      `SELECT video_frame_image(${id}) AS img`,
+    );
+    return res.firstRow({img: BLOB}).img;
+  }
+
+  private async ensureCodecConfig(): Promise<boolean> {
+    if (this.codecConfig) return true;
+    if (this.codecConfigId === undefined) return false;
+    this.codecConfig = await this.fetchBytes(this.codecConfigId);
+    this.codecString = avcCodecStringFromAnnexB(this.codecConfig);
+    return this.codecConfig.length > 0 && this.codecString !== undefined;
+  }
+
+  // Decode from the nearest preceding key frame up to `idx` and paint the
+  // target frame to a canvas, reusing the existing <img> rendering path.
+  private async decodeVideoFrame(idx: number): Promise<void> {
+    const VD = (self as unknown as {VideoDecoder?: unknown}).VideoDecoder as
+      | (new (init: object) => VideoDecoderLike)
+      | undefined;
+    if (VD === undefined) {
+      console.warn('VideoFrames: WebCodecs VideoDecoder unavailable');
+      return;
+    }
+    if (!(await this.ensureCodecConfig())) return;
+
+    // nearest key frame at or before idx
+    let k = idx;
+    while (k > 0 && !this.frames[k].isKey) k--;
+
+    const ids = this.frames.slice(k, idx + 1).map((f) => f.id);
+    const datas = await Promise.all(ids.map((id) => this.fetchBytes(id)));
+
+    const outputs: VideoFrameLike[] = [];
+    let decodeErr: unknown;
+    const decoder = new VD({
+      output: (frame: VideoFrameLike) => outputs.push(frame),
+      error: (e: unknown) => {
+        decodeErr = e;
+      },
+    });
+    decoder.configure({
+      codec: this.codecString!,
+      optimizeForLatency: true,
+      hardwareAcceleration: 'prefer-software',
+    });
+
+    for (let i = 0; i < datas.length; i++) {
+      const f = this.frames[k + i];
+      // The Annex-B AUs carry no in-band SPS/PPS; prepend the codec config to
+      // the (key) chunk that seeds the decode.
+      const data = i === 0 ? concatBytes(this.codecConfig!, datas[i]) : datas[i];
+      decoder.decode(
+        new (self as unknown as {EncodedVideoChunk: new (i: object) => unknown})
+          .EncodedVideoChunk({
+          type: f.isKey ? 'key' : 'delta',
+          timestamp: f.ptsUs ?? 0,
+          data,
+        }),
+      );
+    }
+    try {
+      await decoder.flush();
+    } catch (e) {
+      decodeErr = e;
+    }
+    decoder.close();
+    if (decodeErr) console.warn('VideoFrames: decode error', decodeErr);
+
+    // baseline H.264 has no reordering: decode order == display order.
+    const target = outputs[idx - k] ?? outputs[outputs.length - 1];
+    if (target) {
+      const w = target.displayWidth || target.codedWidth;
+      const h = target.displayHeight || target.codedHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(target as unknown as CanvasImageSource, 0, 0);
+        this.imageUrl = canvas.toDataURL('image/png');
+      }
+    }
+    for (const f of outputs) f.close();
   }
 
   togglePlay(): void {
@@ -169,4 +301,44 @@ export class VideoFramePlayer {
       this.play();
     }
   }
+}
+
+// Minimal structural types so this compiles without DOM WebCodecs lib types.
+interface VideoFrameLike {
+  displayWidth: number;
+  displayHeight: number;
+  codedWidth: number;
+  codedHeight: number;
+  close(): void;
+}
+interface VideoDecoderLike {
+  configure(config: object): void;
+  decode(chunk: unknown): void;
+  flush(): Promise<void>;
+  close(): void;
+}
+
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+// Build the WebCodecs codec string (avc1.PPCCLL) from an Annex-B buffer that
+// contains an SPS NAL (type 7): the three bytes after the NAL header are
+// profile_idc, constraint flags, level_idc.
+function avcCodecStringFromAnnexB(buf: Uint8Array): string | undefined {
+  for (let i = 0; i + 4 < buf.length; i++) {
+    const sc3 = buf[i] === 0 && buf[i + 1] === 0 && buf[i + 2] === 1;
+    const sc4 =
+      buf[i] === 0 && buf[i + 1] === 0 && buf[i + 2] === 0 && buf[i + 3] === 1;
+    if (!sc3 && !sc4) continue;
+    const p = sc4 ? i + 4 : i + 3;
+    if ((buf[p] & 0x1f) === 7 && p + 3 < buf.length) {
+      const hex = (n: number) => n.toString(16).padStart(2, '0');
+      return `avc1.${hex(buf[p + 1])}${hex(buf[p + 2])}${hex(buf[p + 3])}`;
+    }
+  }
+  return undefined;
 }

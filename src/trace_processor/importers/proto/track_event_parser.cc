@@ -513,24 +513,37 @@ void TrackEventParser::MaybeExtractVideoFrame(int64_t ts,
       frame.has_frame_number() ? static_cast<int64_t>(frame.frame_number()) : 0;
   row.track_id = track_id;
 
+  // Resolve the payload bytes and the encoding kind. v1 stills (jpg/webp) leave
+  // codec NULL; v2 video sets codec and carries either a codec_config (decoder
+  // setup, is_config=1) or one access unit (au_data, with is_key_frame/pts_us).
+  protozero::ConstBytes payload = {};
+  if (frame.has_jpg_image()) {
+    payload = frame.jpg_image();
+  } else if (frame.has_webp_image()) {
+    payload = frame.webp_image();
+  } else if (frame.has_au_data()) {
+    payload = frame.au_data();
+    row.codec = frame.has_codec() ? static_cast<int32_t>(frame.codec()) : 0;
+    row.is_key_frame = frame.is_key_frame() ? 1 : 0;
+    if (frame.has_pts_us())
+      row.pts_us = static_cast<int64_t>(frame.pts_us());
+  } else if (frame.has_codec_config()) {
+    payload = frame.codec_config();
+    row.codec = frame.has_codec() ? static_cast<int32_t>(frame.codec()) : 0;
+    row.is_config = 1;
+  }
+
   auto* table = context_->storage->mutable_video_frames_table();
   uint32_t row_idx = table->Insert(row).row;
 
-  // Store image data — prefer JPEG, fall back to WebP.
-  protozero::ConstBytes img = {};
-  if (frame.has_jpg_image()) {
-    img = frame.jpg_image();
-  } else if (frame.has_webp_image()) {
-    img = frame.webp_image();
-  }
-  if (img.size > 0) {
-    auto blob_alloc = TraceBlob::Allocate(img.size);
-    memcpy(blob_alloc.data(), img.data, img.size);
+  if (payload.size > 0) {
+    auto blob_alloc = TraceBlob::Allocate(payload.size);
+    memcpy(blob_alloc.data(), payload.data, payload.size);
     auto* blob_vec = context_->storage->mutable_video_frame_data();
     if (blob_vec->size() <= row_idx) {
       blob_vec->resize(row_idx + 1);
     }
-    (*blob_vec)[row_idx] = TraceBlobView(std::move(blob_alloc), 0, img.size);
+    (*blob_vec)[row_idx] = TraceBlobView(std::move(blob_alloc), 0, payload.size);
   }
 }
 
