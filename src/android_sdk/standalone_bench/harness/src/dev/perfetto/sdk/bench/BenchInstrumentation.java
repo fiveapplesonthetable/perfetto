@@ -25,11 +25,18 @@ import android.os.Bundle;
 import android.os.Process;
 import android.util.Base64;
 import android.util.Log;
+import dev.perfetto.sdk.PerfettoEvent;
 import dev.perfetto.sdk.PerfettoTrace;
 import dev.perfetto.sdk.PerfettoTrace.Category;
 import dev.perfetto.sdk.PerfettoTrackEventBuilder;
+import dev.perfetto.sdk.ProtoWriter;
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.lang.reflect.Field;
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import sun.misc.Unsafe;
 
 public final class BenchInstrumentation extends Instrumentation {
   private static final String TAG = "PERFBENCH";
@@ -78,7 +85,13 @@ public final class BenchInstrumentation extends Instrumentation {
       PerfettoTrace.Session session =
           new PerfettoTrace.Session(/* isBackendInProcess= */ true, BenchConfig.bytes());
 
-      runScenarios(c);
+      if ("1".equals(arg(argsBundle, "writebench", "0"))) {
+        runWriteBench();
+      } else if ("hy".equals(impl)) {
+        runHybridScenarios(c);
+      } else {
+        runScenarios(c);
+      }
 
       session.close();
       Log.i(TAG, "PERFBENCH_DONE impl=" + impl);
@@ -169,6 +182,120 @@ public final class BenchInstrumentation extends Instrumentation {
               b.addField(i + 1, (long) i);
             }
             b.endProto().emit();
+          });
+    }
+  }
+
+  // P0 substrate microbench for the SMB-direct design: how fast can Java write
+  // a small packet (~5 longs = 40 bytes) into NATIVE memory? Compares
+  // Unsafe.putLong(addr) vs a reused DirectByteBuffer absolute putLong vs a
+  // byte[] baseline. Decides the Java->SMB writer substrate. Logs PERFWRITE.
+  private void runWriteBench() {
+    final int LONGS = 5;
+    final int iters = 30_000_000;
+    final int trials = 5;
+
+    Unsafe u = acquireUnsafe();
+    long mem = u.allocateMemory(64);
+    ByteBuffer dbb = ByteBuffer.allocateDirect(64).order(ByteOrder.LITTLE_ENDIAN);
+    byte[] arr = new byte[64];
+
+    // unsafe putLong to a raw native address
+    Op unsafeOp = () -> {
+      for (int j = 0; j < LONGS; j++) {
+        u.putLong(mem + (j << 3), 0x0102030405060708L + j);
+      }
+    };
+    // reused DirectByteBuffer, absolute putLong (no per-op alloc)
+    Op dbbOp = () -> {
+      for (int j = 0; j < LONGS; j++) {
+        dbb.putLong(j << 3, 0x0102030405060708L + j);
+      }
+    };
+    // byte[] baseline (what ProtoWriter does today)
+    Op arrOp = () -> {
+      for (int j = 0; j < LONGS; j++) {
+        long v = 0x0102030405060708L + j;
+        int p = j << 3;
+        arr[p] = (byte) v; arr[p + 1] = (byte) (v >>> 8); arr[p + 2] = (byte) (v >>> 16);
+        arr[p + 3] = (byte) (v >>> 24); arr[p + 4] = (byte) (v >>> 32); arr[p + 5] = (byte) (v >>> 40);
+        arr[p + 6] = (byte) (v >>> 48); arr[p + 7] = (byte) (v >>> 56);
+      }
+    };
+
+    writeMeasure("unsafe_putLong_native", unsafeOp, iters, trials);
+    writeMeasure("directbytebuffer_putLong", dbbOp, iters, trials);
+    writeMeasure("bytearray_baseline", arrOp, iters, trials);
+    u.freeMemory(mem);
+  }
+
+  private void writeMeasure(String name, Op op, int iters, int trials) {
+    for (int i = 0; i < 1_000_000; i++) {
+      op.run();
+    }
+    double best = Double.MAX_VALUE;
+    for (int t = 0; t < trials; t++) {
+      long s = System.nanoTime();
+      for (int i = 0; i < iters; i++) {
+        op.run();
+      }
+      best = Math.min(best, (double) (System.nanoTime() - s) / iters);
+    }
+    Log.i(TAG, String.format("PERFWRITE %s %.2f", name, best));
+  }
+
+  private static Unsafe acquireUnsafe() {
+    try {
+      Field f = Unsafe.class.getDeclaredField("theUnsafe");
+      f.setAccessible(true);
+      return (Unsafe) f.get(null);
+    } catch (ReflectiveOperationException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  // Hybrid path: HL framing + the body (debug args / proto fields) batch-encoded
+  // in Java and handed to HL as one verbatim raw proto field. Mirrors the LL
+  // body wire format (debug_annotations field 4: {name=10, int_value=4}) so the
+  // trace is identical; only the transport differs.
+  private void runHybridScenarios(Category c) {
+    final String[] argNames = argNames();
+    final ProtoWriter body = new ProtoWriter();
+    final long catPtr = c.getPtr();
+    final int INSTANT = 3;
+    final int TE_DEBUG_ANNOTATIONS = 4, DA_NAME = 10, DA_INT_VALUE = 4;
+
+    bench(
+        "instant",
+        () -> {
+          body.reset();
+          PerfettoEvent.native_emit_hybrid(INSTANT, catPtr, "e", body.buffer(), body.position());
+        });
+    for (int n : new int[] {1, 2, 4, 8, 16}) {
+      final int count = n;
+      bench(
+          "instant_int_args/" + n,
+          () -> {
+            body.reset();
+            for (int i = 0; i < count; i++) {
+              int da = body.beginNested(TE_DEBUG_ANNOTATIONS);
+              body.writeString(DA_NAME, argNames[i]);
+              body.writeVarInt(DA_INT_VALUE, i);
+              body.endNested(da);
+            }
+            PerfettoEvent.native_emit_hybrid(INSTANT, catPtr, "e", body.buffer(), body.position());
+          });
+    }
+    for (int n : new int[] {1, 4}) {
+      final int count = n;
+      bench(
+          "instant_proto_fields/" + n,
+          () -> {
+            body.reset();
+            for (int i = 0; i < count; i++) {
+              body.writeVarInt(i + 1, i);
+            }
+            PerfettoEvent.native_emit_hybrid(INSTANT, catPtr, "e", body.buffer(), body.position());
           });
     }
   }

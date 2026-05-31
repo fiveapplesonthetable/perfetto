@@ -20,8 +20,10 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "perfetto/base/build_config.h"
+#include "perfetto/public/abi/track_event_hl_abi.h"
 #include "src/android_sdk/jni/macros.h"
 #include "src/android_sdk/nativehelper/JNIHelp.h"
 #include "src/android_sdk/perfetto_sdk_for_jni/tracing_sdk.h"
@@ -150,6 +152,48 @@ static void dev_perfetto_sdk_PerfettoEvent_native_emit(JNIEnv*,
 }
 #endif
 
+// Hybrid emit: keep the High Level path (it owns packet/SMB framing, category +
+// name interning, tracks -- already fast for small events), but hand the
+// variable body (debug args / proto fields), which Java batch-serialized into a
+// single protobuf blob, to HL as ONE verbatim "raw" proto field. This removes
+// HL's per-arg back-and-forth without any of the Low Level frame/off-heap/cache
+// machinery. The body bytes are copied once into a per-thread scratch (valid for
+// the synchronous emit).
+static void dev_perfetto_sdk_PerfettoEvent_native_emit_hybrid(JNIEnv* env,
+                                                              jclass,
+                                                              jint type,
+                                                              jlong cat_ptr,
+                                                              jstring name,
+                                                              jbyteArray body,
+                                                              jint body_len) {
+  auto* category = toPointer<sdk_for_jni::Category>(cat_ptr);
+  static thread_local std::vector<uint8_t> scratch;
+  const void* buf = nullptr;
+  if (body_len > 0) {
+    if (static_cast<jint>(scratch.size()) < body_len) {
+      scratch.resize(static_cast<size_t>(body_len));
+    }
+    env->GetByteArrayRegion(body, 0, body_len,
+                            reinterpret_cast<jbyte*>(scratch.data()));
+    buf = scratch.data();
+  }
+
+  struct PerfettoTeHlProtoFieldRaw raw;
+  raw.header.type = PERFETTO_TE_HL_PROTO_TYPE_RAW;
+  raw.header.id = 0;
+  raw.buf = buf;
+  raw.len = static_cast<size_t>(body_len > 0 ? body_len : 0);
+  struct PerfettoTeHlProtoField* fields[] = {&raw.header, nullptr};
+  struct PerfettoTeHlExtraProtoFields proto_fields;
+  proto_fields.header.type = PERFETTO_TE_HL_EXTRA_TYPE_PROTO_FIELDS;
+  proto_fields.fields = fields;
+  struct PerfettoTeHlExtra* extras[] = {&proto_fields.header, nullptr};
+
+  const char* cname = env->GetStringUTFChars(name, nullptr);
+  PerfettoTeHlEmitImpl(category->get()->impl, type, cname, extras);
+  env->ReleaseStringUTFChars(name, cname);
+}
+
 // Returns the stable native address of a direct ByteBuffer. Called once per
 // buffer (and on growth), never on the hot path, so a normal @FastNative is
 // fine.
@@ -163,6 +207,8 @@ static jlong dev_perfetto_sdk_EmitBuffer_nativeAddress(JNIEnv* env,
 static const JNINativeMethod gEventMethods[] = {
     {"native_emit", "(IJJII)V",
      (void*)dev_perfetto_sdk_PerfettoEvent_native_emit},
+    {"native_emit_hybrid", "(IJLjava/lang/String;[BI)V",
+     (void*)dev_perfetto_sdk_PerfettoEvent_native_emit_hybrid},
 };
 
 static const JNINativeMethod gBufferMethods[] = {

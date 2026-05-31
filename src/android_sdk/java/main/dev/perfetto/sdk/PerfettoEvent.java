@@ -309,4 +309,11 @@ public final class PerfettoEvent {
   @CriticalNative
   static native void native_emit(
       int type, long categoryPtr, long addr, int bodyLen, int frameLen);
+
+  // Hybrid path: HL framing (interning, tracks, SMB) + the Java-batched body
+  // (debug args / proto fields) appended verbatim as one raw proto field. Lets
+  // the SDK drop the LL frame/off-heap/cache machinery. Body is a heap byte[]
+  // (the caller's ProtoWriter buffer); native copies it once for the emit.
+  public static native void native_emit_hybrid(
+      int type, long categoryPtr, String name, byte[] body, int bodyLen);
 }
