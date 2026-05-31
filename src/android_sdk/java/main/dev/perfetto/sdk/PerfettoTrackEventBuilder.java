@@ -573,30 +573,6 @@ public final class PerfettoTrackEventBuilder {
     mArgCount = 0;
   }
 
-  // Encodes the buffered args into the Java event body (PerfettoEvent).
-  private void writeArgs() {
-    for (int i = 0; i < mArgCount; i++) {
-      String name = mArgNames[i];
-      switch (mArgKinds[i]) {
-        case ARG_KIND_LONG:
-          PerfettoEvent.addArg(mBody, name, mArgLongs[i]);
-          break;
-        case ARG_KIND_BOOL:
-          PerfettoEvent.addArg(mBody, name, mArgLongs[i] != 0);
-          break;
-        case ARG_KIND_DOUBLE:
-          PerfettoEvent.addArg(mBody, name, mArgDoubles[i]);
-          break;
-        case ARG_KIND_STRING:
-          PerfettoEvent.addArg(mBody, name, mArgStrings[i]);
-          break;
-        default: // unreachable
-      }
-      mArgNames[i] = null;
-      mArgStrings[i] = null;
-    }
-  }
-
   /** Deprecated: use {@link #addFlow} */
   public PerfettoTrackEventBuilder setFlow(long id) {
     return addFlow(id);
@@ -661,16 +637,6 @@ public final class PerfettoTrackEventBuilder {
       flow.setProcessFlow(id);
     }
     addPerfettoPointerToExtra(flow);
-  }
-
-  private void writeFlows() {
-    for (int i = 0; i < mFlowCount; i++) {
-      if (mFlowTerminating[i]) {
-        PerfettoEvent.addTerminatingFlow(mBody, mFlowIds[i]);
-      } else {
-        PerfettoEvent.addFlow(mBody, mFlowIds[i]);
-      }
-    }
   }
 
   private void flushFlowsToHl() {

@@ -55,21 +55,8 @@ final class EmitBuffer {
   ByteBuffer buf;
   long addr;
 
-  // Heap staging array for the body-less standalone emit path (PerfettoEvent
-  // .emit), which has no ProtoWriter body to append the frame to. The builder
-  // hot path appends the frame into the body's own array instead. Reused.
-  private byte[] stage;
-
   EmitBuffer() {
     allocate(DEFAULT_CAPACITY);
-  }
-
-  /** Returns a reusable heap staging array holding at least {@code cap} bytes. */
-  byte[] stageFor(int cap) {
-    if (stage == null || stage.length < cap) {
-      stage = new byte[Math.max(cap, DEFAULT_CAPACITY)];
-    }
-    return stage;
   }
 
   private void allocate(int capacity) {
