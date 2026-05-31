@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.perfetto.sdk.test">
+    <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="34" />
+    <!-- self-instrumenting: the test apk targets itself, so the benchmark runs
+         in this apk's process with ITS bundled SDK classes + libperfetto_jni.so -->
+    <instrumentation
+        android:name="dev.perfetto.sdk.bench.BenchInstrumentation"
+        android:targetPackage="dev.perfetto.sdk.test"
+        android:label="Perfetto SDK emit benchmark" />
+    <application android:debuggable="false" android:hasCode="true" />
+</manifest>
