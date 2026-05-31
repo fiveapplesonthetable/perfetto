@@ -81,6 +81,13 @@ void AppendHlProtoFields(TrackEventIncrementalState* incr,
         msg->AppendBytes(field->header.id, field->buf, field->len);
         break;
       }
+      case PERFETTO_TE_HL_PROTO_TYPE_RAW: {
+        // Pre-serialized fields appended verbatim (no field-id wrapper), so a
+        // caller can batch-encode the body itself and hand it over as one blob.
+        auto field = reinterpret_cast<PerfettoTeHlProtoFieldRaw*>(*p);
+        msg->AppendRawProtoBytes(field->buf, field->len);
+        break;
+      }
       case PERFETTO_TE_HL_PROTO_TYPE_NESTED: {
         auto field = reinterpret_cast<PerfettoTeHlProtoFieldNested*>(*p);
         auto* nested =

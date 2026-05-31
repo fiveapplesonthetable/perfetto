@@ -22,7 +22,12 @@
 #include <mutex>
 
 #include "perfetto/public/abi/producer_abi.h"
+#include "perfetto/public/data_source.h"
+#include "perfetto/public/pb_msg.h"
 #include "perfetto/public/producer.h"
+#include "perfetto/public/protos/trace/trace_packet.pzc.h"
+#include "perfetto/public/protos/trace/track_event/track_descriptor.pzc.h"
+#include "perfetto/public/protos/trace/track_event/track_event.pzc.h"
 #include "perfetto/public/te_macros.h"
 #include "perfetto/public/track_event.h"
 
@@ -52,6 +57,156 @@ void trace_event(int type,
                          type == PERFETTO_TE_TYPE_COUNTER ? nullptr : name,
                          extra->get());
     extra->clear_extras();
+  }
+}
+
+// Max interned-string proto fields per event (matches the Java-side cap).
+static constexpr int kMaxInternedFields = 16;
+
+// Emits TrackDescriptor packets for any track levels not yet seen on this
+// instance's sequence. Each level's parent is the level above it (the first
+// level's parent is the root uuid the Java side derived the chain from).
+static void emit_unseen_track_descriptors(struct PerfettoTeLlIterator* ctx,
+                                          int32_t track_count,
+                                          const uint64_t* track_uuids,
+                                          const uint64_t* track_parent_uuids,
+                                          const char* const* track_names,
+                                          bool track_name_static,
+                                          bool track_is_counter) {
+  for (int32_t i = 0; i < track_count; i++) {
+    if (PerfettoTeLlTrackSeen(ctx->impl.incr, track_uuids[i])) {
+      continue;
+    }
+    struct PerfettoDsRootTracePacket desc_packet;
+    PerfettoTeLlPacketBegin(ctx, &desc_packet);
+    perfetto_protos_TracePacket_set_sequence_flags(
+        &desc_packet.msg,
+        perfetto_protos_TracePacket_SEQ_NEEDS_INCREMENTAL_STATE);
+    struct perfetto_protos_TrackDescriptor desc;
+    perfetto_protos_TracePacket_begin_track_descriptor(&desc_packet.msg, &desc);
+    // The leaf is a counter track when requested; ancestors are always named.
+    if (track_is_counter && i == track_count - 1) {
+      PerfettoTeCounterTrackFillDesc(&desc, track_names[i],
+                                     track_parent_uuids[i], track_uuids[i],
+                                     track_name_static);
+    } else {
+      PerfettoTeNamedTrackFillDesc(&desc, track_names[i], /*id=*/0,
+                                   track_parent_uuids[i], track_uuids[i],
+                                   track_name_static);
+    }
+    perfetto_protos_TracePacket_end_track_descriptor(&desc_packet.msg, &desc);
+    PerfettoTeLlPacketEnd(ctx, &desc_packet);
+  }
+}
+
+void emit_track_event(const PerfettoTeCategory* cat,
+                      int32_t type,
+                      const char* name,
+                      const void* body,
+                      size_t body_size,
+                      bool set_track_uuid,
+                      uint64_t leaf_track_uuid,
+                      int32_t track_count,
+                      const uint64_t* track_uuids,
+                      const uint64_t* track_parent_uuids,
+                      const char* const* track_names,
+                      bool track_name_static,
+                      bool track_is_counter,
+                      int32_t interned_count,
+                      const int32_t* interned_field_ids,
+                      const int32_t* interned_type_ids,
+                      const char* const* interned_strs) {
+  bool enabled = PERFETTO_UNLIKELY(PERFETTO_ATOMIC_LOAD_EXPLICIT(
+      cat->enabled, PERFETTO_MEMORY_ORDER_RELAXED));
+  if (!enabled) {
+    return;
+  }
+
+  // SLICE_END and COUNTER events carry no name, matching the HL path.
+  const char* event_name =
+      (type == PERFETTO_TE_TYPE_SLICE_END || type == PERFETTO_TE_TYPE_COUNTER)
+          ? nullptr
+          : name;
+
+  // The LL ABI takes a non-const category; it only reads `impl`/`enabled`.
+  PerfettoTeCategory* mut_cat = const_cast<PerfettoTeCategory*>(cat);
+  struct PerfettoTeTimestamp timestamp = PerfettoTeGetTimestamp();
+
+  for (struct PerfettoTeLlIterator ctx =
+           PerfettoTeLlBeginSlowPath(mut_cat, timestamp);
+       ctx.impl.ds.tracer != nullptr;
+       PerfettoTeLlNext(mut_cat, timestamp, &ctx)) {
+    if (track_count > 0) {
+      emit_unseen_track_descriptors(&ctx, track_count, track_uuids,
+                                    track_parent_uuids, track_names,
+                                    track_name_static, track_is_counter);
+    }
+
+    struct PerfettoDsRootTracePacket trace_packet;
+    PerfettoTeLlPacketBegin(&ctx, &trace_packet);
+    PerfettoTeLlWriteTimestamp(&trace_packet.msg, &timestamp);
+    perfetto_protos_TracePacket_set_sequence_flags(
+        &trace_packet.msg,
+        perfetto_protos_TracePacket_SEQ_NEEDS_INCREMENTAL_STATE);
+
+    // Interned-string proto fields (addFieldWithInterning): intern per instance
+    // and remember the iids to reference from the track_event below. Interned
+    // strings use the standard { iid = 1, name = 2 } entry layout.
+    uint64_t name_iid = 0;
+    uint64_t interned_iids[kMaxInternedFields];
+    {
+      struct PerfettoTeLlInternContext intern_ctx;
+      PerfettoTeLlInternContextInit(&intern_ctx, ctx.impl.incr,
+                                    &trace_packet.msg);
+      PerfettoTeLlInternRegisteredCat(&intern_ctx, mut_cat);
+      if (event_name) {
+        name_iid = PerfettoTeLlInternEventName(&intern_ctx, event_name);
+      }
+      for (int32_t i = 0; i < interned_count; i++) {
+        const char* str = interned_strs[i];
+        bool seen;
+        interned_iids[i] = PerfettoTeLlIntern(ctx.impl.incr, interned_type_ids[i],
+                                              str, strlen(str), &seen);
+        if (!seen) {
+          PerfettoTeLlInternContextStartIfNeeded(&intern_ctx);
+          struct PerfettoPbMsg entry;
+          PerfettoPbMsgBeginNested(&intern_ctx.interned.msg, &entry,
+                                   interned_type_ids[i]);
+          PerfettoPbMsgAppendType0Field(&entry, /*iid=*/1, interned_iids[i]);
+          PerfettoPbMsgAppendCStrField(&entry, /*name=*/2, str);
+          PerfettoPbMsgEndNested(&intern_ctx.interned.msg);
+        }
+      }
+      PerfettoTeLlInternContextDestroy(&intern_ctx);
+    }
+
+    {
+      struct perfetto_protos_TrackEvent te_msg;
+      perfetto_protos_TracePacket_begin_track_event(&trace_packet.msg, &te_msg);
+      perfetto_protos_TrackEvent_set_type(
+          &te_msg, static_cast<enum perfetto_protos_TrackEvent_Type>(type));
+      PerfettoTeLlWriteRegisteredCat(&te_msg, mut_cat);
+      if (event_name) {
+        PerfettoTeLlWriteInternedEventName(&te_msg, name_iid);
+      }
+      if (set_track_uuid) {
+        perfetto_protos_TrackEvent_set_track_uuid(&te_msg, leaf_track_uuid);
+      }
+      // Append the Java-encoded TrackEvent body (debug args, non-interned proto
+      // fields, ...) verbatim into the track_event submessage.
+      if (body_size) {
+        PerfettoPbMsgAppendBytes(&te_msg.msg,
+                                 static_cast<const uint8_t*>(body), body_size);
+      }
+      // Reference the interned strings by iid (top-level track_event fields).
+      for (int32_t i = 0; i < interned_count; i++) {
+        PerfettoPbMsgAppendType0Field(&te_msg.msg, interned_field_ids[i],
+                                      interned_iids[i]);
+      }
+      perfetto_protos_TracePacket_end_track_event(&trace_packet.msg, &te_msg);
+    }
+
+    PerfettoTeLlPacketEnd(&ctx, &trace_packet);
   }
 }
 

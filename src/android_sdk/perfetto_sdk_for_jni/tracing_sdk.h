@@ -81,6 +81,66 @@ void trace_event(int type,
                  Extra* extra);
 
 /**
+ * @brief Emits a track event through the Low Level track event ABI.
+ *
+ * Unlike trace_event(), which marshals a list of PerfettoTeHlExtra structs built
+ * up on the Java side, this drives the public LL ABI (PerfettoTeLl*): it walks
+ * the active data source instances and serializes the TrackEvent with protozero.
+ * The LL ABI keeps ownership of the parts that must stay native -- category and
+ * event-name interning, incremental-state resets (sequence defaults, clock
+ * snapshot, thread/process descriptors) and per-instance fan-out.
+ *
+ * `body`/`body_size`, when non-empty, is an opaque, already-encoded sequence of
+ * TrackEvent proto fields (debug annotations, track_uuid, proto fields, ...)
+ * produced on the Java side with ProtoWriter; it is appended verbatim into the
+ * `track_event` submessage. Bare events pass an empty body.
+ *
+ * The event can be placed on a nested track. The track chain is passed
+ * pre-resolved (uuids computed on the Java side): `track_uuids[i]` /
+ * `track_parent_uuids[i]` / `track_names[i]` describe each named level from the
+ * root down, `leaf_track_uuid` is the uuid the event is attached to. For each
+ * level not yet seen on a sequence (PerfettoTeLlTrackSeen), its TrackDescriptor
+ * is emitted once. `track_count == 0` means the event uses the default track.
+ *
+ * @param cat The (registered) category of the event.
+ * @param type The PerfettoTeType of the event (slice begin/end, instant, ...).
+ * @param name The event name. Ignored for SLICE_END and COUNTER events.
+ * @param body Encoded TrackEvent field bytes to append, or nullptr.
+ * @param body_size Size of `body` in bytes, or 0.
+ * @param set_track_uuid Whether to attach the event to `leaf_track_uuid`
+ *     (false leaves it on the sequence default track). True for any usingTrack.
+ * @param leaf_track_uuid The uuid the event is attached to.
+ * @param track_count Number of named track levels whose descriptors may need
+ *     emitting (0 for a root track that already has a descriptor, e.g. process).
+ * @param track_uuids Per-level track uuids (length track_count).
+ * @param track_parent_uuids Per-level parent uuids (length track_count).
+ * @param track_names Per-level names (length track_count).
+ * @param track_name_static Whether track names are compile-time constants.
+ * @param track_is_counter Whether the leaf level is a counter track.
+ * @param interned_count Number of interned-string proto fields, or 0.
+ * @param interned_field_ids Per-field track_event field ids (length count).
+ * @param interned_type_ids Per-field InternedData type ids (length count).
+ * @param interned_strs Per-field strings to intern (length count).
+ */
+void emit_track_event(const PerfettoTeCategory* cat,
+                      int32_t type,
+                      const char* name,
+                      const void* body,
+                      size_t body_size,
+                      bool set_track_uuid,
+                      uint64_t leaf_track_uuid,
+                      int32_t track_count,
+                      const uint64_t* track_uuids,
+                      const uint64_t* track_parent_uuids,
+                      const char* const* track_names,
+                      bool track_name_static,
+                      bool track_is_counter,
+                      int32_t interned_count,
+                      const int32_t* interned_field_ids,
+                      const int32_t* interned_type_ids,
+                      const char* const* interned_strs);
+
+/**
  * @brief Gets the process track UUID.
  */
 uint64_t get_process_track_uuid();
@@ -295,6 +355,39 @@ class Proto {
   // PerfettoTeHlProtoFieldNested. Those objects are individually managed by
   // Java.
   std::vector<PerfettoTeHlProtoField*> fields_;
+};
+
+// A High Level extra that appends a pre-serialized track_event body (debug args
+// / proto fields, batch-encoded on the Java side) verbatim, as one RAW proto
+// field. Reused across events: the builder updates the body pointer per emit via
+// set_body(). The bytes live in the caller's reused off-heap buffer.
+class RawBody {
+ public:
+  RawBody() {
+    raw_.header.type = PERFETTO_TE_HL_PROTO_TYPE_RAW;
+    raw_.header.id = 0;
+    raw_.buf = nullptr;
+    raw_.len = 0;
+    fields_[0] = &raw_.header;
+    fields_[1] = nullptr;
+    proto_.header.type = PERFETTO_TE_HL_EXTRA_TYPE_PROTO_FIELDS;
+    proto_.fields = fields_;
+  }
+
+  void set_body(const void* buf, size_t len) {
+    raw_.buf = buf;
+    raw_.len = len;
+  }
+
+  static void delete_raw_body(RawBody* raw_body) { delete raw_body; }
+
+  const PerfettoTeHlExtraProtoFields* get() const { return &proto_; }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(RawBody);
+  PerfettoTeHlExtraProtoFields proto_;
+  PerfettoTeHlProtoFieldRaw raw_;
+  PerfettoTeHlProtoField* fields_[2];
 };
 
 class Session {
