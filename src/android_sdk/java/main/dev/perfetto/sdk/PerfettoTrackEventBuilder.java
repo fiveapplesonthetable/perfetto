@@ -48,6 +48,14 @@ public final class PerfettoTrackEventBuilder {
   private static volatile boolean sUseJavaEmit =
       Boolean.getBoolean("perfetto.use_java_emit");
 
+  // When true, args / flows / proto fields are batch-encoded into the body
+  // (like the Java emit path) but the event is emitted through the High Level
+  // path with the body handed over as ONE verbatim raw proto field, and tracks
+  // / counters as their existing HL extras. Best of both: HL framing speed on
+  // small events, batched-body speed on large ones, no LL frame/off-heap/cache.
+  private static volatile boolean sUseHlHybrid =
+      Boolean.getBoolean("perfetto.use_hl_hybrid");
+
   private PerfettoTrackEventExtra mExtra;
 
   private int mTraceType = -1;
@@ -136,6 +144,10 @@ public final class PerfettoTrackEventBuilder {
   private static final int ARG_KIND_DOUBLE = 2;
   private static final int ARG_KIND_STRING = 3;
   private static final int MAX_BUFFERED_ARGS = 32;
+  // At or below this many args (and no proto body), the hybrid path keeps args
+  // as cached HL extras rather than encoding a body + off-heap copy -- measured
+  // crossover on a Pixel 4 XL (HL wins at 1-2 args, batching wins from 3 up).
+  private static final int HYBRID_ARG_BATCH_MIN = 2;
   private String[] mArgNames;
   private int[] mArgKinds;
   private long[] mArgLongs;
@@ -203,6 +215,10 @@ public final class PerfettoTrackEventBuilder {
   // root builder. See EmitBuffer and PerfettoEvent's frame layout.
   private EmitBuffer mXfer;
 
+  // Reused HL extra carrying the batch-encoded body for the hybrid emit path.
+  // The body is copied into mXfer (off-heap) and this points at it per emit.
+  private PerfettoTrackEventExtra.RawBody mRawBody;
+
   private final Supplier<PerfettoTrackEventBuilder> perfettoTrackEventBuilderSupplier =
       () -> new PerfettoTrackEventBuilder(true, this);
   private final Supplier<FieldNested> fieldNestedSupplier =
@@ -258,6 +274,7 @@ public final class PerfettoTrackEventBuilder {
       mInternedStrings = new String[MAX_INTERNED_FIELDS];
       mBody = new ProtoWriter();
       mXfer = new EmitBuffer();
+      mRawBody = new PerfettoTrackEventExtra.RawBody(mNativeMemoryCleaner);
     } else {
       // We are create a child builder for proto fields, read all cache fields from the parent.
       mParent = parent;
@@ -278,6 +295,35 @@ public final class PerfettoTrackEventBuilder {
     }
 
     mIsBuilt = true;
+    // Hybrid path: batch-encode the body (args / flows / proto fields) and hand
+    // it to the High Level emit as ONE verbatim raw proto field; tracks and
+    // counters ride their existing HL extras. HL owns framing / interning / SMB.
+    if (sUseHlHybrid && !mArgsSpilled && mPendingPointers.isEmpty()
+        && mInternedFieldCount == 0) {
+      // Args + proto fields are already in the body (written directly, no
+      // buffering). Flows / counters / tracks ride their existing HL extras.
+      int bodyLen = mBody.position();
+      if (bodyLen > 0) {
+        mXfer.ensureCapacity(bodyLen);
+        ByteBuffer b = mXfer.buf;
+        b.clear();
+        b.put(mBody.buffer(), 0, bodyLen);
+        mRawBody.setBody(mXfer.addr, bodyLen);
+        addPerfettoPointerToExtra(mRawBody);
+      }
+      if (mFlowCount > 0) {
+        flushFlowsToHl();
+      }
+      if (mHasCounter) {
+        flushCounterToHl();
+      }
+      if (mHasTrack) {
+        flushTrackToHl();
+      }
+      PerfettoTrackEventExtra.native_emit(
+          mTraceType, mCategory.getPtr(), mEventName, mExtra.getPtr());
+      return;
+    }
     // Java-side path: taken when the flag is on and the event carries only
     // migrated extras (debug args and tracks, both held off mPendingPointers).
     // Any not-yet-migrated extra (flow, counter, proto) lands in mPendingPointers
@@ -450,7 +496,9 @@ public final class PerfettoTrackEventBuilder {
     if (mIsDebug) {
       checkNotBuildingProto();
     }
-    if (stashArg(name, ARG_KIND_LONG)) {
+    if (sUseHlHybrid) {
+      PerfettoEvent.addArg(mBody, name, val);
+    } else if (stashArg(name, ARG_KIND_LONG)) {
       mArgLongs[mArgCount - 1] = val;
     } else {
       addArgHl(name).setValueInt64(val);
@@ -466,7 +514,9 @@ public final class PerfettoTrackEventBuilder {
     if (mIsDebug) {
       checkNotBuildingProto();
     }
-    if (stashArg(name, ARG_KIND_BOOL)) {
+    if (sUseHlHybrid) {
+      PerfettoEvent.addArg(mBody, name, val);
+    } else if (stashArg(name, ARG_KIND_BOOL)) {
       mArgLongs[mArgCount - 1] = val ? 1 : 0;
     } else {
       addArgHl(name).setValueBool(val);
@@ -482,7 +532,9 @@ public final class PerfettoTrackEventBuilder {
     if (mIsDebug) {
       checkNotBuildingProto();
     }
-    if (stashArg(name, ARG_KIND_DOUBLE)) {
+    if (sUseHlHybrid) {
+      PerfettoEvent.addArg(mBody, name, val);
+    } else if (stashArg(name, ARG_KIND_DOUBLE)) {
       mArgDoubles[mArgCount - 1] = val;
     } else {
       addArgHl(name).setValueDouble(val);
@@ -498,7 +550,9 @@ public final class PerfettoTrackEventBuilder {
     if (mIsDebug) {
       checkNotBuildingProto();
     }
-    if (stashArg(name, ARG_KIND_STRING)) {
+    if (sUseHlHybrid) {
+      PerfettoEvent.addArg(mBody, name, val);
+    } else if (stashArg(name, ARG_KIND_STRING)) {
       mArgStrings[mArgCount - 1] = val;
     } else {
       addArgHl(name).setValueString(val);

@@ -372,6 +372,37 @@ static void dev_perfetto_sdk_PerfettoTrackEventExtraProto_clear_fields(
   proto->clear_fields();
 }
 
+static jlong dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_init(
+    PERFETTO_JNI_HOST_PARAMS) {
+  return toJLong(new sdk_for_jni::RawBody());
+}
+
+static jlong dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_delete(
+    PERFETTO_JNI_HOST_PARAMS) {
+  return toJLong(&sdk_for_jni::RawBody::delete_raw_body);
+}
+
+static jlong dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_get_extra_ptr(
+    PERFETTO_JNI_HOST_PARAMS_COMMA jlong ptr) {
+  return toJLong(toPointer<sdk_for_jni::RawBody>(ptr)->get());
+}
+
+static void dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_set_body(
+    PERFETTO_JNI_HOST_PARAMS_COMMA jlong ptr, jlong addr, jint len) {
+  toPointer<sdk_for_jni::RawBody>(ptr)->set_body(
+      toPointer<const void>(addr), static_cast<size_t>(len));
+}
+
+static const JNINativeMethod gRawBodyMethods[] = {
+    {"native_init", "()J",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_init},
+    {"native_delete", "()J",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_delete},
+    {"native_get_extra_ptr", "(J)J",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_get_extra_ptr},
+    {"native_set_body", "(JJI)V",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraRawBody_set_body}};
+
 static const JNINativeMethod gExtraMethods[] = {
     {"native_init", "()J",
      (void*)dev_perfetto_sdk_PerfettoTrackEventExtra_init},
@@ -522,6 +553,13 @@ int register_dev_perfetto_sdk_PerfettoTrackEventExtra(JNIEnv* env) {
           "dev/perfetto/sdk/PerfettoTrackEventExtra$Proto"),
       gProtoMethods, NELEM(gProtoMethods));
   LOG_ALWAYS_FATAL_IF(res < 0, "Unable to register proto native methods.");
+
+  res = jniRegisterNativeMethods(
+      env,
+      TO_MAYBE_JAR_JAR_CLASS_NAME(
+          "dev/perfetto/sdk/PerfettoTrackEventExtra$RawBody"),
+      gRawBodyMethods, NELEM(gRawBodyMethods));
+  LOG_ALWAYS_FATAL_IF(res < 0, "Unable to register raw body native methods.");
 
   res = jniRegisterNativeMethods(
       env,

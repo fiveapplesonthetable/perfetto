@@ -357,6 +357,39 @@ class Proto {
   std::vector<PerfettoTeHlProtoField*> fields_;
 };
 
+// A High Level extra that appends a pre-serialized track_event body (debug args
+// / proto fields, batch-encoded on the Java side) verbatim, as one RAW proto
+// field. Reused across events: the builder updates the body pointer per emit via
+// set_body(). The bytes live in the caller's reused off-heap buffer.
+class RawBody {
+ public:
+  RawBody() {
+    raw_.header.type = PERFETTO_TE_HL_PROTO_TYPE_RAW;
+    raw_.header.id = 0;
+    raw_.buf = nullptr;
+    raw_.len = 0;
+    fields_[0] = &raw_.header;
+    fields_[1] = nullptr;
+    proto_.header.type = PERFETTO_TE_HL_EXTRA_TYPE_PROTO_FIELDS;
+    proto_.fields = fields_;
+  }
+
+  void set_body(const void* buf, size_t len) {
+    raw_.buf = buf;
+    raw_.len = len;
+  }
+
+  static void delete_raw_body(RawBody* raw_body) { delete raw_body; }
+
+  const PerfettoTeHlExtraProtoFields* get() const { return &proto_; }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(RawBody);
+  PerfettoTeHlExtraProtoFields proto_;
+  PerfettoTeHlProtoFieldRaw raw_;
+  PerfettoTeHlProtoField* fields_[2];
+};
+
 class Session {
  public:
   Session(bool is_backend_in_process, void* buf, size_t len);

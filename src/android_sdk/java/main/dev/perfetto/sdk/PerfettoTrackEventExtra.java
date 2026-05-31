@@ -344,6 +344,45 @@ final class PerfettoTrackEventExtra {
     private static native void native_clear_fields(long ptr);
   }
 
+  /**
+   * A High Level extra that appends a pre-serialized track_event body (debug
+   * args / proto fields, batch-encoded on the Java side via {@link ProtoWriter})
+   * verbatim as one raw proto field. Reused across events; the builder points it
+   * at the body for each emit via {@link #setBody}.
+   */
+  static final class RawBody implements PerfettoPointer {
+    private final long mPtr;
+    private final long mExtraPtr;
+
+    RawBody(PerfettoNativeMemoryCleaner memoryCleaner) {
+      mPtr = native_init();
+      mExtraPtr = native_get_extra_ptr(mPtr);
+      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
+    }
+
+    @Override
+    public long getPtr() {
+      return mExtraPtr;
+    }
+
+    /** Points the body at {@code len} bytes of off-heap memory at {@code addr}. */
+    void setBody(long addr, int len) {
+      native_set_body(mPtr, addr, len);
+    }
+
+    @CriticalNative
+    private static native long native_init();
+
+    @CriticalNative
+    private static native long native_delete();
+
+    @CriticalNative
+    private static native long native_get_extra_ptr(long ptr);
+
+    @CriticalNative
+    private static native void native_set_body(long ptr, long addr, int len);
+  }
+
   static final class Field implements PerfettoPointer {
     // Private pointer holding Perfetto object with metadata
     private final long mPtr;
