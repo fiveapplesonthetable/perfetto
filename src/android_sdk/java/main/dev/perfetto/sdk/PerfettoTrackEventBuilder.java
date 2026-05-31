@@ -324,26 +324,6 @@ public final class PerfettoTrackEventBuilder {
           mTraceType, mCategory.getPtr(), mEventName, mExtra.getPtr());
       return;
     }
-    // Java-side path: taken when the flag is on and the event carries only
-    // migrated extras (debug args and tracks, both held off mPendingPointers).
-    // Any not-yet-migrated extra (flow, counter, proto) lands in mPendingPointers
-    // and forces the High Level path; buffered args and the track are then
-    // replayed as HL extras so nothing is lost.
-    if (sUseJavaEmit && !mArgsSpilled && mPendingPointers.isEmpty()) {
-      // Body was reset at newEvent; proto fields are already in it. Append the
-      // buffered args / flows / counter, then emit.
-      writeArgs();
-      writeFlows();
-      if (mHasCounter) {
-        if (mCounterIsDouble) {
-          PerfettoEvent.setCounter(mBody, mCounterDouble);
-        } else {
-          PerfettoEvent.setCounter(mBody, mCounterLong);
-        }
-      }
-      emitJava();
-      return;
-    }
     if (mArgCount > 0) {
       flushArgsToHl();
     }
@@ -364,30 +344,6 @@ public final class PerfettoTrackEventBuilder {
   // frame), then emits it with a single primitive-only native call. The body is
   // bulk-copied once; the frame (name, track chain, interned fields) is encoded
   // straight into the buffer. See PerfettoEvent for the frame layout.
-  private void emitJava() {
-    int bodyLen = mBody.position();
-    int frameCap =
-        PerfettoEvent.frameSize(
-            mEventName, mTrackCount, mTrackNames, mInternedFieldCount,
-            mInternedStrings);
-    // Append the frame right after the body in the body's own array, so the
-    // whole event (body + frame) reaches the off-heap buffer in a single put.
-    byte[] buf = mBody.reserveTail(frameCap);
-    int frameLen =
-        PerfettoEvent.encodeFrame(
-            buf, bodyLen, mEventName, mHasTrack, mTrackLeafUuid, mTrackCount,
-            mTrackUuids, mTrackParentUuids, mTrackNames, mTrackNameStatic,
-            mTrackIsCounter, mInternedFieldCount, mInternedFieldIds,
-            mInternedTypeIds, mInternedStrings);
-    int total = bodyLen + frameLen;
-    mXfer.ensureCapacity(total);
-    ByteBuffer b = mXfer.buf;
-    b.clear();
-    b.put(buf, 0, total);
-    PerfettoEvent.native_emit(
-        mTraceType, mCategory.getPtr(), mXfer.addr, bodyLen, frameLen);
-  }
-
   /**
    * Enables or disables routing extra-free events through the Java-side Low
    * Level emit path. Visible for tests and benchmarks; production code controls
