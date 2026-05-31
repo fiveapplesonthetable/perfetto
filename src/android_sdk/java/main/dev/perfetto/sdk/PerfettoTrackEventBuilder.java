@@ -320,20 +320,24 @@ public final class PerfettoTrackEventBuilder {
   // straight into the buffer. See PerfettoEvent for the frame layout.
   private void emitJava() {
     int bodyLen = mBody.position();
-    int needed = bodyLen
-        + PerfettoEvent.frameSize(
+    int frameCap =
+        PerfettoEvent.frameSize(
             mEventName, mTrackCount, mTrackNames, mInternedFieldCount,
             mInternedStrings);
-    mXfer.ensureCapacity(needed);
-    ByteBuffer b = mXfer.buf;
-    b.clear();
-    b.put(mBody.buffer(), 0, bodyLen);
+    // Append the frame right after the body in the body's own array, so the
+    // whole event (body + frame) reaches the off-heap buffer in a single put.
+    byte[] buf = mBody.reserveTail(frameCap);
     int frameLen =
         PerfettoEvent.encodeFrame(
-            b, mEventName, mHasTrack, mTrackLeafUuid, mTrackCount, mTrackUuids,
-            mTrackParentUuids, mTrackNames, mTrackNameStatic, mTrackIsCounter,
-            mInternedFieldCount, mInternedFieldIds, mInternedTypeIds,
-            mInternedStrings);
+            buf, bodyLen, mEventName, mHasTrack, mTrackLeafUuid, mTrackCount,
+            mTrackUuids, mTrackParentUuids, mTrackNames, mTrackNameStatic,
+            mTrackIsCounter, mInternedFieldCount, mInternedFieldIds,
+            mInternedTypeIds, mInternedStrings);
+    int total = bodyLen + frameLen;
+    mXfer.ensureCapacity(total);
+    ByteBuffer b = mXfer.buf;
+    b.clear();
+    b.put(buf, 0, total);
     PerfettoEvent.native_emit(
         mTraceType, mCategory.getPtr(), mXfer.addr, bodyLen, frameLen);
   }

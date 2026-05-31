@@ -189,9 +189,16 @@ public final class PerfettoEvent {
     return n;
   }
 
-  /** Encodes the frame at {@code b}'s current position; returns its length. */
+  // Encodes the frame into {@code d} starting at {@code off}; returns its
+  // length. Writes little-endian fixed-width fields with plain byte[] stores --
+  // no per-field java.nio.ByteBuffer virtual dispatch -- in small helpers that
+  // ART reliably compiles. The caller appends this right after the protobuf
+  // body in one array so the whole event reaches off-heap in a single put. The
+  // native side reads the same bytes back with memcpy, so the wire format is
+  // unchanged.
   static int encodeFrame(
-      ByteBuffer b,
+      byte[] d,
+      int off,
       String name,
       boolean setTrackUuid,
       long leafTrackUuid,
@@ -205,38 +212,59 @@ public final class PerfettoEvent {
       int[] internedFieldIds,
       int[] internedTypeIds,
       String[] internedStrs) {
-    int start = b.position();
-    putCStr(b, name);
+    int p = putCStr(d, off, name);
     int flags = (setTrackUuid ? 1 : 0) | (trackIsCounter ? 2 : 0)
         | (trackNameStatic ? 4 : 0);
-    b.put((byte) flags);
-    b.putLong(leafTrackUuid);
-    b.putInt(trackCount);
+    d[p++] = (byte) flags;
+    p = putLongLE(d, p, leafTrackUuid);
+    p = putIntLE(d, p, trackCount);
     for (int i = 0; i < trackCount; i++) {
-      b.putLong(trackUuids[i]);
-      b.putLong(trackParentUuids[i]);
-      putCStr(b, trackNames[i]);
+      p = putLongLE(d, p, trackUuids[i]);
+      p = putLongLE(d, p, trackParentUuids[i]);
+      p = putCStr(d, p, trackNames[i]);
     }
-    b.putInt(internedCount);
+    p = putIntLE(d, p, internedCount);
     for (int i = 0; i < internedCount; i++) {
-      b.putInt(internedFieldIds[i]);
-      b.putInt(internedTypeIds[i]);
-      putCStr(b, internedStrs[i]);
+      p = putIntLE(d, p, internedFieldIds[i]);
+      p = putIntLE(d, p, internedTypeIds[i]);
+      p = putCStr(d, p, internedStrs[i]);
     }
-    return b.position() - start;
+    return p - off;
   }
 
-  // Writes `s` as { len, ASCII bytes, NUL }. Chars above 0x7F fold to '?', the
-  // same conversion the JNI string path used, so track uuids (derived in Java
-  // with the same fold) and descriptor names stay consistent.
-  private static void putCStr(ByteBuffer b, String s) {
+  private static int putIntLE(byte[] d, int p, int v) {
+    d[p] = (byte) v;
+    d[p + 1] = (byte) (v >>> 8);
+    d[p + 2] = (byte) (v >>> 16);
+    d[p + 3] = (byte) (v >>> 24);
+    return p + 4;
+  }
+
+  private static int putLongLE(byte[] d, int p, long v) {
+    d[p] = (byte) v;
+    d[p + 1] = (byte) (v >>> 8);
+    d[p + 2] = (byte) (v >>> 16);
+    d[p + 3] = (byte) (v >>> 24);
+    d[p + 4] = (byte) (v >>> 32);
+    d[p + 5] = (byte) (v >>> 40);
+    d[p + 6] = (byte) (v >>> 48);
+    d[p + 7] = (byte) (v >>> 56);
+    return p + 8;
+  }
+
+  // Writes `s` as { len, ASCII bytes, NUL } and returns the new position. Chars
+  // above 0x7F fold to '?', the same conversion the JNI string path used, so
+  // track uuids (derived in Java with the same fold) and descriptor names stay
+  // consistent.
+  private static int putCStr(byte[] d, int p, String s) {
     int len = (s == null) ? 0 : s.length();
-    b.putInt(len);
+    p = putIntLE(d, p, len);
     for (int i = 0; i < len; i++) {
       char c = s.charAt(i);
-      b.put((byte) (c <= 0x7F ? c : '?'));
+      d[p++] = (byte) (c <= 0x7F ? c : '?');
     }
-    b.put((byte) 0);
+    d[p++] = 0;
+    return p;
   }
 
   private static int cstrSize(String s) {
@@ -257,13 +285,15 @@ public final class PerfettoEvent {
       return;
     }
     EmitBuffer x = sStandaloneBuffer.get();
-    x.ensureCapacity(frameSize(name, 0, null, 0, null));
+    byte[] stage = x.stageFor(frameSize(name, 0, null, 0, null));
+    int frameLen = encodeFrame(
+        stage, /*off=*/0, name, /*setTrackUuid=*/false, /*leafTrackUuid=*/0,
+        /*trackCount=*/0, null, null, null, /*trackNameStatic=*/false,
+        /*trackIsCounter=*/false, /*internedCount=*/0, null, null, null);
+    x.ensureCapacity(frameLen);
     ByteBuffer b = x.buf;
     b.clear();
-    int frameLen = encodeFrame(
-        b, name, /*setTrackUuid=*/false, /*leafTrackUuid=*/0, /*trackCount=*/0,
-        null, null, null, /*trackNameStatic=*/false, /*trackIsCounter=*/false,
-        /*internedCount=*/0, null, null, null);
+    b.put(stage, 0, frameLen);
     native_emit(type, category.getPtr(), x.addr, /*bodyLen=*/0, frameLen);
   }
 

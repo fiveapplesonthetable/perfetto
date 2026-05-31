@@ -90,6 +90,17 @@ public final class ProtoWriter {
     return mBuf;
   }
 
+  /**
+   * Ensures the backing buffer can hold {@code extra} bytes beyond the current
+   * position (growing if needed) and returns it. Does not advance the position.
+   * Used to append the emit frame right after the protobuf body so the whole
+   * event is copied to the off-heap buffer in a single bulk put.
+   */
+  byte[] reserveTail(int extra) {
+    ensureCapacity(extra);
+    return mBuf;
+  }
+
   // ==========================================================================
   // Varint fields (wire type 0)
   // ==========================================================================
