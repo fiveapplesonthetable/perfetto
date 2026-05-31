@@ -30,6 +30,11 @@ import dev.perfetto.sdk.PerfettoTrace.Category;
 import dev.perfetto.sdk.PerfettoTrackEventBuilder;
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.lang.reflect.Field;
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import sun.misc.Unsafe;
 
 public final class BenchInstrumentation extends Instrumentation {
   private static final String TAG = "PERFBENCH";
@@ -78,7 +83,11 @@ public final class BenchInstrumentation extends Instrumentation {
       PerfettoTrace.Session session =
           new PerfettoTrace.Session(/* isBackendInProcess= */ true, BenchConfig.bytes());
 
-      runScenarios(c);
+      if ("1".equals(arg(argsBundle, "writebench", "0"))) {
+        runWriteBench();
+      } else {
+        runScenarios(c);
+      }
 
       session.close();
       Log.i(TAG, "PERFBENCH_DONE impl=" + impl);
@@ -170,6 +179,74 @@ public final class BenchInstrumentation extends Instrumentation {
             }
             b.endProto().emit();
           });
+    }
+  }
+
+  // P0 substrate microbench for the SMB-direct design: how fast can Java write
+  // a small packet (~5 longs = 40 bytes) into NATIVE memory? Compares
+  // Unsafe.putLong(addr) vs a reused DirectByteBuffer absolute putLong vs a
+  // byte[] baseline. Decides the Java->SMB writer substrate. Logs PERFWRITE.
+  private void runWriteBench() {
+    final int LONGS = 5;
+    final int iters = 30_000_000;
+    final int trials = 5;
+
+    Unsafe u = acquireUnsafe();
+    long mem = u.allocateMemory(64);
+    ByteBuffer dbb = ByteBuffer.allocateDirect(64).order(ByteOrder.LITTLE_ENDIAN);
+    byte[] arr = new byte[64];
+
+    // unsafe putLong to a raw native address
+    Op unsafeOp = () -> {
+      for (int j = 0; j < LONGS; j++) {
+        u.putLong(mem + (j << 3), 0x0102030405060708L + j);
+      }
+    };
+    // reused DirectByteBuffer, absolute putLong (no per-op alloc)
+    Op dbbOp = () -> {
+      for (int j = 0; j < LONGS; j++) {
+        dbb.putLong(j << 3, 0x0102030405060708L + j);
+      }
+    };
+    // byte[] baseline (what ProtoWriter does today)
+    Op arrOp = () -> {
+      for (int j = 0; j < LONGS; j++) {
+        long v = 0x0102030405060708L + j;
+        int p = j << 3;
+        arr[p] = (byte) v; arr[p + 1] = (byte) (v >>> 8); arr[p + 2] = (byte) (v >>> 16);
+        arr[p + 3] = (byte) (v >>> 24); arr[p + 4] = (byte) (v >>> 32); arr[p + 5] = (byte) (v >>> 40);
+        arr[p + 6] = (byte) (v >>> 48); arr[p + 7] = (byte) (v >>> 56);
+      }
+    };
+
+    writeMeasure("unsafe_putLong_native", unsafeOp, iters, trials);
+    writeMeasure("directbytebuffer_putLong", dbbOp, iters, trials);
+    writeMeasure("bytearray_baseline", arrOp, iters, trials);
+    u.freeMemory(mem);
+  }
+
+  private void writeMeasure(String name, Op op, int iters, int trials) {
+    for (int i = 0; i < 1_000_000; i++) {
+      op.run();
+    }
+    double best = Double.MAX_VALUE;
+    for (int t = 0; t < trials; t++) {
+      long s = System.nanoTime();
+      for (int i = 0; i < iters; i++) {
+        op.run();
+      }
+      best = Math.min(best, (double) (System.nanoTime() - s) / iters);
+    }
+    Log.i(TAG, String.format("PERFWRITE %s %.2f", name, best));
+  }
+
+  private static Unsafe acquireUnsafe() {
+    try {
+      Field f = Unsafe.class.getDeclaredField("theUnsafe");
+      f.setAccessible(true);
+      return (Unsafe) f.get(null);
+    } catch (ReflectiveOperationException e) {
+      throw new RuntimeException(e);
     }
   }
 

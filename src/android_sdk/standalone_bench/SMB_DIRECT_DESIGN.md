@@ -112,8 +112,41 @@ chunk-level reused `DirectByteBuffer`, decide the writer substrate, then build
 - **P3 (generalize):** multi-instance loop, chunk-rotation/patch-list, and decide
   whether name interning moves to Java.
 
-## Status
+## P0 RESULT — and why this investigation stops here
 
-Branch created with this design + a native scaffold of the `smb_begin`/
-`smb_commit` entry points (next file). P0's substrate microbench is the gating
-decision and should run on-device before the mechanism is wired end-to-end.
+The gating substrate microbench was run on the Pixel 4 XL (arm64, AOT speed),
+writing a ~40-byte packet (5 longs) per op:
+
+| substrate | ns/op | vs byte[] |
+|---|---|---|
+| `byte[]` (today's ProtoWriter) | **31.6** | 1.00× |
+| `DirectByteBuffer.putLong` (into native) | 46.5 | 1.47× slower |
+| `Unsafe.putLong` (into native addr) | 55.3 | 1.75× slower |
+
+(Harness: `BenchInstrumentation.runWriteBench`, `-e writebench 1`.)
+
+**This inverts the premise.** Writing *into native memory* (the SMB) from Java
+is ~1.5–1.75× slower than writing into a Java `byte[]`, because ART intrinsifies
+managed-array stores but not native-memory writes — and crucially this is true
+even for `putLong`, not just the already-known-bad `putByte`. So serializing the
+TrackEvent straight into the SMB would make **serialization itself ~1.5× slower**
+to avoid a copy that, for a small packet, is a **nearly-free `memcpy`** (~40
+bytes). The extra ~15 ns/packet of native-write cost dwarfs the few ns of memcpy
+it saves.
+
+Net: SMB-direct is **negative for small events** (the exact case we wanted to
+fix) and only the cost it removes — the per-byte copy — matters for *large*
+packets, which is where LL already wins decisively. So it would help where we
+don't need it and hurt where we do.
+
+**Conclusion:** the current design — serialize into a Java `byte[]` (fast,
+intrinsified) then hand it to native with a single bulk copy — is already
+near-optimal on ART. The empty-event gap vs HL is genuinely the floor for a
+"serialize-in-Java" architecture; closing it would require either a faster
+Java→native-memory primitive than ART currently provides, or moving the whole
+chunk-ownership/commit protocol into Java (porting `TraceWriter`), whose fixed
+overhead would almost certainly exceed what's left to gain. Not worth it.
+
+This branch stands as the measured record of why. The two landed Java-side CLs
+(single-copy frame encode, track-uuid caching) on `java-protowriter-opt` remain
+the right, shippable outcome.
