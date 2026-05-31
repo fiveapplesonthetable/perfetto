@@ -19,197 +19,23 @@
 #include <jni.h>
 
 #include <cstdint>
-#include <cstring>
-#include <vector>
 
 #include "perfetto/base/build_config.h"
-#include "perfetto/public/abi/track_event_hl_abi.h"
 #include "src/android_sdk/jni/macros.h"
 #include "src/android_sdk/nativehelper/JNIHelp.h"
-#include "src/android_sdk/perfetto_sdk_for_jni/tracing_sdk.h"
 
 namespace perfetto {
 namespace jni {
 
-// Deepest track hierarchy / most interned fields handled in one emit. Deeper
-// inputs are clamped (pathological; real events use a handful).
-static constexpr int32_t kMaxTrackLevels = 16;
-static constexpr int32_t kMaxInternedFields = 16;
-
-template <typename T>
-inline static T* toPointer(jlong ptr) {
-  return reinterpret_cast<T*>(static_cast<uintptr_t>(ptr));
-}
-
-// The frame is little-endian and only read on little-endian targets (every host
-// JVM and Android ABI), so a plain memcpy reproduces the Java-written value.
-static int32_t ReadI32(const uint8_t** p) {
-  int32_t v;
-  memcpy(&v, *p, sizeof(v));
-  *p += sizeof(v);
-  return v;
-}
-
-static uint64_t ReadU64(const uint8_t** p) {
-  uint64_t v;
-  memcpy(&v, *p, sizeof(v));
-  *p += sizeof(v);
-  return v;
-}
-
-// Reads a { len, bytes, NUL } string and returns a pointer to the bytes, which
-// are NUL-terminated in place so they can be used directly as a C string. The
-// cursor is advanced past the terminator.
-static const char* ReadCStr(const uint8_t** p) {
-  int32_t len = ReadI32(p);
-  const char* s = reinterpret_cast<const char*>(*p);
-  *p += len + 1;
-  return s;
-}
-
-// Parses the off-heap buffer (protobuf body in [0, body_len), then the frame)
-// and drives the LL emit. Touches no JVM state, so it is shared by the host and
-// ART (@CriticalNative) entry points below.
-static void EmitFromBuffer(jint type,
-                           jlong cat_ptr,
-                           jlong addr,
-                           jint body_len,
-                           jint /*frame_len*/) {
-  auto* category = toPointer<sdk_for_jni::Category>(cat_ptr);
-  const uint8_t* base = toPointer<const uint8_t>(addr);
-  const void* body = base;
-  size_t body_size = body_len > 0 ? static_cast<size_t>(body_len) : 0;
-
-  const uint8_t* p = base + body_len;
-  const char* name = ReadCStr(&p);
-  uint8_t flags = *p++;
-  bool set_track_uuid = flags & 1;
-  bool track_is_counter = flags & 2;
-  bool track_name_static = flags & 4;
-  uint64_t leaf_track_uuid = ReadU64(&p);
-
-  uint64_t uuids[kMaxTrackLevels];
-  uint64_t parent_uuids[kMaxTrackLevels];
-  const char* names[kMaxTrackLevels];
-  int32_t track_count = ReadI32(&p);
-  int32_t stored_tracks = 0;
-  for (int32_t i = 0; i < track_count; i++) {
-    uint64_t uuid = ReadU64(&p);
-    uint64_t parent = ReadU64(&p);
-    const char* tname = ReadCStr(&p);
-    if (i < kMaxTrackLevels) {
-      uuids[i] = uuid;
-      parent_uuids[i] = parent;
-      names[i] = tname;
-      stored_tracks++;
-    }
-  }
-
-  int32_t ifield_ids[kMaxInternedFields];
-  int32_t itype_ids[kMaxInternedFields];
-  const char* istrs[kMaxInternedFields];
-  int32_t interned_count = ReadI32(&p);
-  int32_t stored_interned = 0;
-  for (int32_t i = 0; i < interned_count; i++) {
-    int32_t fid = ReadI32(&p);
-    int32_t tid = ReadI32(&p);
-    const char* s = ReadCStr(&p);
-    if (i < kMaxInternedFields) {
-      ifield_ids[i] = fid;
-      itype_ids[i] = tid;
-      istrs[i] = s;
-      stored_interned++;
-    }
-  }
-
-  sdk_for_jni::emit_track_event(
-      category->get(), type, name, body, body_size, set_track_uuid,
-      leaf_track_uuid, stored_tracks, uuids, parent_uuids, names,
-      track_name_static, track_is_counter, stored_interned, ifield_ids,
-      itype_ids, istrs);
-}
-
-// native_emit is @CriticalNative on ART (no JNIEnv/jclass, primitives only).
-// Host JVMs ignore the annotation and call it with the standard JNI signature,
-// so the function ABI differs by platform; both forward to EmitFromBuffer.
-#if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
-static void dev_perfetto_sdk_PerfettoEvent_native_emit(jint type,
-                                                       jlong cat_ptr,
-                                                       jlong addr,
-                                                       jint body_len,
-                                                       jint frame_len) {
-  EmitFromBuffer(type, cat_ptr, addr, body_len, frame_len);
-}
-#else
-static void dev_perfetto_sdk_PerfettoEvent_native_emit(JNIEnv*,
-                                                       jclass,
-                                                       jint type,
-                                                       jlong cat_ptr,
-                                                       jlong addr,
-                                                       jint body_len,
-                                                       jint frame_len) {
-  EmitFromBuffer(type, cat_ptr, addr, body_len, frame_len);
-}
-#endif
-
-// Hybrid emit: keep the High Level path (it owns packet/SMB framing, category +
-// name interning, tracks -- already fast for small events), but hand the
-// variable body (debug args / proto fields), which Java batch-serialized into a
-// single protobuf blob, to HL as ONE verbatim "raw" proto field. This removes
-// HL's per-arg back-and-forth without any of the Low Level frame/off-heap/cache
-// machinery. The body bytes are copied once into a per-thread scratch (valid for
-// the synchronous emit).
-static void dev_perfetto_sdk_PerfettoEvent_native_emit_hybrid(JNIEnv* env,
-                                                              jclass,
-                                                              jint type,
-                                                              jlong cat_ptr,
-                                                              jstring name,
-                                                              jbyteArray body,
-                                                              jint body_len) {
-  auto* category = toPointer<sdk_for_jni::Category>(cat_ptr);
-  static thread_local std::vector<uint8_t> scratch;
-  const void* buf = nullptr;
-  if (body_len > 0) {
-    if (static_cast<jint>(scratch.size()) < body_len) {
-      scratch.resize(static_cast<size_t>(body_len));
-    }
-    env->GetByteArrayRegion(body, 0, body_len,
-                            reinterpret_cast<jbyte*>(scratch.data()));
-    buf = scratch.data();
-  }
-
-  struct PerfettoTeHlProtoFieldRaw raw;
-  raw.header.type = PERFETTO_TE_HL_PROTO_TYPE_RAW;
-  raw.header.id = 0;
-  raw.buf = buf;
-  raw.len = static_cast<size_t>(body_len > 0 ? body_len : 0);
-  struct PerfettoTeHlProtoField* fields[] = {&raw.header, nullptr};
-  struct PerfettoTeHlExtraProtoFields proto_fields;
-  proto_fields.header.type = PERFETTO_TE_HL_EXTRA_TYPE_PROTO_FIELDS;
-  proto_fields.fields = fields;
-  struct PerfettoTeHlExtra* extras[] = {&proto_fields.header, nullptr};
-
-  const char* cname = env->GetStringUTFChars(name, nullptr);
-  PerfettoTeHlEmitImpl(category->get()->impl, type, cname, extras);
-  env->ReleaseStringUTFChars(name, cname);
-}
-
 // Returns the stable native address of a direct ByteBuffer. Called once per
 // buffer (and on growth), never on the hot path, so a normal @FastNative is
-// fine.
+// fine. The buffer backs the hybrid emit's off-heap body staging.
 static jlong dev_perfetto_sdk_EmitBuffer_nativeAddress(JNIEnv* env,
                                                        jclass,
                                                        jobject buffer) {
   return static_cast<jlong>(reinterpret_cast<uintptr_t>(
       env->GetDirectBufferAddress(buffer)));
 }
-
-static const JNINativeMethod gEventMethods[] = {
-    {"native_emit", "(IJJII)V",
-     (void*)dev_perfetto_sdk_PerfettoEvent_native_emit},
-    {"native_emit_hybrid", "(IJLjava/lang/String;[BI)V",
-     (void*)dev_perfetto_sdk_PerfettoEvent_native_emit_hybrid},
-};
 
 static const JNINativeMethod gBufferMethods[] = {
     {"nativeAddress", "(Ljava/nio/ByteBuffer;)J",
@@ -218,11 +44,6 @@ static const JNINativeMethod gBufferMethods[] = {
 
 int register_dev_perfetto_sdk_PerfettoEvent(JNIEnv* env) {
   int res = jniRegisterNativeMethods(
-      env, TO_MAYBE_JAR_JAR_CLASS_NAME("dev/perfetto/sdk/PerfettoEvent"),
-      gEventMethods, NELEM(gEventMethods));
-  LOG_ALWAYS_FATAL_IF(res < 0,
-                      "Unable to register PerfettoEvent native methods.");
-  res = jniRegisterNativeMethods(
       env, TO_MAYBE_JAR_JAR_CLASS_NAME("dev/perfetto/sdk/EmitBuffer"),
       gBufferMethods, NELEM(gBufferMethods));
   LOG_ALWAYS_FATAL_IF(res < 0,

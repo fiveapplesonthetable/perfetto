@@ -65,7 +65,9 @@ public final class BenchInstrumentation extends Instrumentation {
     warmup = Integer.parseInt(arg(args, "warmup", "100000"));
     iters = Integer.parseInt(arg(args, "iters", "1000000"));
     trials = Integer.parseInt(arg(args, "trials", "5"));
-    System.setProperty("perfetto.use_java_emit", String.valueOf("ll".equals(impl)));
+    boolean hb = "hb".equals(impl); // builder-integrated hybrid (HL + raw body)
+    System.setProperty("perfetto.use_java_emit", String.valueOf("ll".equals(impl) || hb));
+    System.setProperty("perfetto.use_hl_hybrid", String.valueOf(hb));
     super.onCreate(args);
     start(); // spawns the instrumentation worker thread -> onStart()
   }
@@ -87,8 +89,6 @@ public final class BenchInstrumentation extends Instrumentation {
 
       if ("1".equals(arg(argsBundle, "writebench", "0"))) {
         runWriteBench();
-      } else if ("hy".equals(impl)) {
-        runHybridScenarios(c);
       } else {
         runScenarios(c);
       }
@@ -254,51 +254,6 @@ public final class BenchInstrumentation extends Instrumentation {
     }
   }
 
-  // Hybrid path: HL framing + the body (debug args / proto fields) batch-encoded
-  // in Java and handed to HL as one verbatim raw proto field. Mirrors the LL
-  // body wire format (debug_annotations field 4: {name=10, int_value=4}) so the
-  // trace is identical; only the transport differs.
-  private void runHybridScenarios(Category c) {
-    final String[] argNames = argNames();
-    final ProtoWriter body = new ProtoWriter();
-    final long catPtr = c.getPtr();
-    final int INSTANT = 3;
-    final int TE_DEBUG_ANNOTATIONS = 4, DA_NAME = 10, DA_INT_VALUE = 4;
-
-    bench(
-        "instant",
-        () -> {
-          body.reset();
-          PerfettoEvent.native_emit_hybrid(INSTANT, catPtr, "e", body.buffer(), body.position());
-        });
-    for (int n : new int[] {1, 2, 4, 8, 16}) {
-      final int count = n;
-      bench(
-          "instant_int_args/" + n,
-          () -> {
-            body.reset();
-            for (int i = 0; i < count; i++) {
-              int da = body.beginNested(TE_DEBUG_ANNOTATIONS);
-              body.writeString(DA_NAME, argNames[i]);
-              body.writeVarInt(DA_INT_VALUE, i);
-              body.endNested(da);
-            }
-            PerfettoEvent.native_emit_hybrid(INSTANT, catPtr, "e", body.buffer(), body.position());
-          });
-    }
-    for (int n : new int[] {1, 4}) {
-      final int count = n;
-      bench(
-          "instant_proto_fields/" + n,
-          () -> {
-            body.reset();
-            for (int i = 0; i < count; i++) {
-              body.writeVarInt(i + 1, i);
-            }
-            PerfettoEvent.native_emit_hybrid(INSTANT, catPtr, "e", body.buffer(), body.position());
-          });
-    }
-  }
 
   private void bench(String scenario, Op op) {
     if (!scenarioFilter.isEmpty() && !scenario.equals(scenarioFilter)) {
