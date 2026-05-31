@@ -292,14 +292,34 @@ public final class PerfettoTrace {
     return 0;
   }
 
+  // The process/thread track uuids are constant for the life of the process
+  // (resp. a thread), but each lookup crossed into native. On the emit hot path
+  // every event targeting a process/thread track re-fetched it, so the crossing
+  // showed up per-emit in profiles. Cache: the process uuid in a static, the
+  // thread uuid per calling thread (keyed by the last tid it asked for).
+  private static volatile boolean sHasProcessTrackUuid;
+  private static volatile long sProcessTrackUuid;
+
+  private static final ThreadLocal<long[]> sThreadTrackUuidCache =
+      ThreadLocal.withInitial(() -> new long[] {Long.MIN_VALUE, 0});
+
   /** Returns the process track uuid that can be used as a parent track uuid. */
   public static long getProcessTrackUuid() {
-    return native_get_process_track_uuid();
+    if (!sHasProcessTrackUuid) {
+      sProcessTrackUuid = native_get_process_track_uuid();
+      sHasProcessTrackUuid = true;
+    }
+    return sProcessTrackUuid;
   }
 
   /** Given a thread tid, returns the thread track uuid that can be used as a parent track uuid. */
   public static long getThreadTrackUuid(long tid) {
-    return native_get_thread_track_uuid(tid);
+    long[] cache = sThreadTrackUuidCache.get();
+    if (cache[0] != tid) {
+      cache[1] = native_get_thread_track_uuid(tid);
+      cache[0] = tid;
+    }
+    return cache[1];
   }
 
   /** Activates a trigger by name {@code triggerName} with expiry in {@code ttlMs}. */
