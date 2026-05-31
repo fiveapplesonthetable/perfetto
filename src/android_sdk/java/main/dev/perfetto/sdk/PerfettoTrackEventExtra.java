@@ -61,7 +61,8 @@ final class PerfettoTrackEventExtra {
   private static native void native_clear_args(long ptr);
 
   @FastNative
-  public static native void native_emit(int type, long tag, String name, long ptr);
+  public static native void native_emit(
+      int type, long tag, String name, long ptr, long rawBodyPtr, byte[] body, int bodyLen);
 
   /** Represents a native pointer to a Perfetto C SDK struct. E.g. PerfettoTeHlExtra. */
   interface PerfettoPointer {
@@ -69,69 +70,24 @@ final class PerfettoTrackEventExtra {
     long getPtr();
   }
 
-  /** Container for {@link Field} instances. */
-  interface FieldContainer {
-    /** Add {@link Field} to the container. */
-    void addField(PerfettoPointer field);
-  }
-
-  static final class Flow implements PerfettoPointer {
+  /**
+   * A (possibly nested) chain of named tracks emitted via the HL {@code
+   * NESTED_TRACKS} extra. Built once per {@link PerfettoTrack} (cached by the
+   * builder) so the emit path stays allocation-free; the native side derives the
+   * per-level uuids and emits a {@code TrackDescriptor} for each level once per
+   * sequence. A flat named track is just a one-level chain, so this single
+   * primitive subsumes the old single-named-track path.
+   */
+  static final class NestedTracks implements PerfettoPointer {
     private final long mPtr;
     private final long mExtraPtr;
+    private final PerfettoTrack mSource;
 
-    Flow(PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init();
+    NestedTracks(PerfettoTrack track, PerfettoNativeMemoryCleaner memoryCleaner) {
+      mPtr = native_init(track.mRootType, track.mTid, track.mNames, track.mIds,
+          track.mIsNameStatic, track.mIsCounter);
       mExtraPtr = native_get_extra_ptr(mPtr);
-      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
-    }
-
-    public void setProcessFlow(long type) {
-      native_set_process_flow(mPtr, type);
-    }
-
-    public void setProcessTerminatingFlow(long id) {
-      native_set_process_terminating_flow(mPtr, id);
-    }
-
-    @Override
-    public long getPtr() {
-      return mExtraPtr;
-    }
-
-    @CriticalNative
-    private static native long native_init();
-
-    @CriticalNative
-    private static native long native_delete();
-
-    @CriticalNative
-    private static native void native_set_process_flow(long ptr, long type);
-
-    @CriticalNative
-    private static native void native_set_process_terminating_flow(long ptr, long id);
-
-    @CriticalNative
-    private static native long native_get_extra_ptr(long ptr);
-  }
-
-  static final class NamedTrack implements PerfettoPointer {
-    private final long mPtr;
-    private final long mExtraPtr;
-    private final String mName;
-    private final long mId;
-    private final boolean mIsNameStatic;
-
-    NamedTrack(
-        long id,
-        String name,
-        long parentUuid,
-        boolean isNameStatic,
-        PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init(id, name, parentUuid, isNameStatic);
-      mExtraPtr = native_get_extra_ptr(mPtr);
-      mName = name;
-      mId = id;
-      mIsNameStatic = isNameStatic;
+      mSource = track;
       memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
     }
 
@@ -140,57 +96,14 @@ final class PerfettoTrackEventExtra {
       return mExtraPtr;
     }
 
-    public String getName() {
-      return mName;
-    }
-
-    public boolean isNameStatic() {
-      return mIsNameStatic;
+    PerfettoTrack getSource() {
+      return mSource;
     }
 
     @FastNative
-    private static native long native_init(long id, String name, long parentUuid, boolean isNameStatic);
-
-    @CriticalNative
-    private static native long native_delete();
-
-    @CriticalNative
-    private static native long native_get_extra_ptr(long ptr);
-  }
-
-  static final class CounterTrack implements PerfettoPointer {
-    private final long mPtr;
-    private final long mExtraPtr;
-    private final String mName;
-    private final boolean mIsNameStatic;
-
-    CounterTrack(
-        String name,
-        long parentUuid,
-        boolean isNameStatic,
-        PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init(name, parentUuid, isNameStatic);
-      mExtraPtr = native_get_extra_ptr(mPtr);
-      mName = name;
-      mIsNameStatic = isNameStatic;
-      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
-    }
-
-    @Override
-    public long getPtr() {
-      return mExtraPtr;
-    }
-
-    public String getName() {
-      return mName;
-    }
-
-    public boolean isNameStatic() {
-      return mIsNameStatic;
-    }
-
-    @FastNative
-    private static native long native_init(String name, long parentUuid, boolean isNameStatic);
+    private static native long native_init(
+        int rootType, long tid, String[] names, long[] ids, boolean[] isNameStatic,
+        boolean[] isCounter);
 
     @CriticalNative
     private static native long native_delete();
@@ -238,77 +151,18 @@ final class PerfettoTrackEventExtra {
     private static native long native_get_extra_ptr(long ptr);
   }
 
-  static final class Arg implements PerfettoPointer {
-    // Private pointer holding Perfetto object with metadata
+  /**
+   * The extra that carries everything encoded on the Java side: the track_event
+   * body (debug args, flows and plain proto fields, written via {@link
+   * ProtoWriter}) spliced in as one raw proto field, plus any interned string
+   * fields added via {@link #addInterned}. Reused across events; the body is
+   * copied into native and emitted in a single {@code native_emit} crossing.
+   */
+  static final class RawBody implements PerfettoPointer {
     private final long mPtr;
-
-    // Public pointer to Perfetto object itself
     private final long mExtraPtr;
 
-    private final String mName;
-
-    Arg(String name, PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init(name);
-      mExtraPtr = native_get_extra_ptr(mPtr);
-      mName = name;
-      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
-    }
-
-    @Override
-    public long getPtr() {
-      return mExtraPtr;
-    }
-
-    public String getName() {
-      return mName;
-    }
-
-    public void setValueInt64(long val) {
-      native_set_value_int64(mPtr, val);
-    }
-
-    public void setValueBool(boolean val) {
-      native_set_value_bool(mPtr, val);
-    }
-
-    public void setValueDouble(double val) {
-      native_set_value_double(mPtr, val);
-    }
-
-    public void setValueString(String val) {
-      native_set_value_string(mPtr, val);
-    }
-
-    @FastNative
-    private static native long native_init(String name);
-
-    @CriticalNative
-    private static native long native_delete();
-
-    @CriticalNative
-    private static native long native_get_extra_ptr(long ptr);
-
-    @CriticalNative
-    private static native void native_set_value_int64(long ptr, long val);
-
-    @CriticalNative
-    private static native void native_set_value_bool(long ptr, boolean val);
-
-    @CriticalNative
-    private static native void native_set_value_double(long ptr, double val);
-
-    @FastNative
-    private static native void native_set_value_string(long ptr, String val);
-  }
-
-  static final class Proto implements PerfettoPointer, FieldContainer {
-    // Private pointer holding Perfetto object with metadata
-    private final long mPtr;
-
-    // Public pointer to Perfetto object itself
-    private final long mExtraPtr;
-
-    Proto(PerfettoNativeMemoryCleaner memoryCleaner) {
+    RawBody(PerfettoNativeMemoryCleaner memoryCleaner) {
       mPtr = native_init();
       mExtraPtr = native_get_extra_ptr(mPtr);
       memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
@@ -319,128 +173,36 @@ final class PerfettoTrackEventExtra {
       return mExtraPtr;
     }
 
-    @Override
-    public void addField(PerfettoPointer field) {
-      native_add_field(mPtr, field.getPtr());
+    /**
+     * Native RawBody pointer. The body bytes are copied into this object's
+     * buffer inside the {@code native_emit} call (one JNI crossing for copy and
+     * emit together), so there is no separate set-body crossing.
+     */
+    long bodyPtr() {
+      return mPtr;
     }
 
-    public void clearFields() {
-      native_clear_fields(mPtr);
-    }
-
-    @CriticalNative
-    private static native long native_init();
-
-    @CriticalNative
-    private static native long native_delete();
-
-    @CriticalNative
-    private static native long native_get_extra_ptr(long ptr);
-
-    @CriticalNative
-    private static native void native_add_field(long ptr, long extraPtr);
-
-    @CriticalNative
-    private static native void native_clear_fields(long ptr);
-  }
-
-  static final class Field implements PerfettoPointer {
-    // Private pointer holding Perfetto object with metadata
-    private final long mPtr;
-
-    // Public pointer to Perfetto object itself
-    private final long mFieldPtr;
-
-    Field(PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init();
-      mFieldPtr = native_get_extra_ptr(mPtr);
-      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
-    }
-
-    @Override
-    public long getPtr() {
-      return mFieldPtr;
-    }
-
-    public void setValueInt64(long id, long val) {
-      native_set_value_int64(mPtr, id, val);
-    }
-
-    public void setValueDouble(long id, double val) {
-      native_set_value_double(mPtr, id, val);
-    }
-
-    public void setValueString(long id, String val) {
-      native_set_value_string(mPtr, id, val);
-    }
-
-    public void setValueWithInterning(long id, String val, long internedTypeId) {
-      native_set_value_with_interning(mPtr, id, val, internedTypeId);
+    /**
+     * Adds an interned string proto field that rides alongside the body and is
+     * interned natively at emit time (its iid is per-sequence native state the
+     * verbatim body can't carry).
+     */
+    void addInterned(long id, String val, long internedTypeId) {
+      native_add_interned(mPtr, id, val, internedTypeId);
     }
 
     @CriticalNative
     private static native long native_init();
 
-    @CriticalNative
-    private static native long native_delete();
-
-    @CriticalNative
-    private static native long native_get_extra_ptr(long ptr);
-
-    @CriticalNative
-    private static native void native_set_value_int64(long ptr, long id, long val);
-
-    @CriticalNative
-    private static native void native_set_value_double(long ptr, long id, double val);
-
     @FastNative
-    private static native void native_set_value_string(long ptr, long id, String val);
-
-    @FastNative
-    private static native void native_set_value_with_interning(
+    private static native void native_add_interned(
         long ptr, long id, String val, long internedTypeId);
-  }
-
-  static final class FieldNested implements PerfettoPointer, FieldContainer {
-    // Private pointer holding Perfetto object with metadata
-    private final long mPtr;
-
-    // Public pointer to Perfetto object itself
-    private final long mFieldPtr;
-
-    FieldNested(PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init();
-      mFieldPtr = native_get_extra_ptr(mPtr);
-      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
-    }
-
-    @Override
-    public long getPtr() {
-      return mFieldPtr;
-    }
-
-    @Override
-    public void addField(PerfettoPointer field) {
-      native_add_field(mPtr, field.getPtr());
-    }
-
-    public void setId(long id) {
-      native_set_id(mPtr, id);
-    }
-
-    @CriticalNative
-    private static native long native_init();
 
     @CriticalNative
     private static native long native_delete();
 
     @CriticalNative
     private static native long native_get_extra_ptr(long ptr);
-
-    @CriticalNative
-    private static native void native_add_field(long ptr, long extraPtr);
-
-    @CriticalNative
-    private static native void native_set_id(long ptr, long id);
   }
+
 }

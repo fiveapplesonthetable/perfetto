@@ -16,6 +16,7 @@
 
 #include "perfetto/public/abi/track_event_hl_abi.h"
 
+#include "perfetto/public/track_event.h"  // For PerfettoTeCounterTrackUuid.
 #include "perfetto/tracing/internal/track_event_internal.h"
 #include "src/shared_lib/track_event/ds.h"
 #include "src/shared_lib/track_event/serialization.h"
@@ -79,6 +80,13 @@ void AppendHlProtoFields(TrackEventIncrementalState* incr,
       case PERFETTO_TE_HL_PROTO_TYPE_BYTES: {
         auto field = reinterpret_cast<PerfettoTeHlProtoFieldBytes*>(*p);
         msg->AppendBytes(field->header.id, field->buf, field->len);
+        break;
+      }
+      case PERFETTO_TE_HL_PROTO_TYPE_RAW: {
+        // Pre-serialized fields appended verbatim (no field-id wrapper), so a
+        // caller can batch-encode the body itself and hand it over as one blob.
+        auto field = reinterpret_cast<PerfettoTeHlProtoFieldRaw*>(*p);
+        msg->AppendRawProtoBytes(field->buf, field->len);
         break;
       }
       case PERFETTO_TE_HL_PROTO_TYPE_NESTED: {
@@ -282,11 +290,19 @@ uint64_t EmitNamedTrack(uint64_t parent_uuid,
                         const char* name,
                         uint64_t id,
                         bool is_name_static,
+                        bool is_counter,
                         perfetto::shlib::TrackEventIncrementalState* incr_state,
                         perfetto::TraceWriterBase* trace_writer) {
-  uint64_t uuid = parent_uuid;
-  uuid ^= PerfettoFnv1a(name, strlen(name));
-  uuid ^= id;
+  uint64_t uuid;
+  if (is_counter) {
+    // Counter tracks derive their uuid with the counter magic (and ignore `id`),
+    // matching PerfettoTeCounterTrackUuid().
+    uuid = PerfettoTeCounterTrackUuid(name, parent_uuid);
+  } else {
+    uuid = parent_uuid;
+    uuid ^= PerfettoFnv1a(name, strlen(name));
+    uuid ^= id;
+  }
   if (incr_state->seen_track_uuids.insert(uuid).second) {
     auto packet = trace_writer->NewTracePacket();
     auto* track_descriptor = packet->set_track_descriptor();
@@ -298,6 +314,11 @@ uint64_t EmitNamedTrack(uint64_t parent_uuid,
       track_descriptor->set_static_name(name);
     } else {
       track_descriptor->set_name(name);
+    }
+    if (is_counter) {
+      // An empty CounterDescriptor marks the track as a counter, mirroring
+      // PerfettoTeCounterTrackFillDesc().
+      track_descriptor->set_counter();
     }
   }
   return uuid;
@@ -466,7 +487,7 @@ void InstanceOp(internal::DataSourceType* ds,
     auto* named_track = std::get<const PerfettoTeHlExtraNamedTrack*>(track);
     track_uuid = EmitNamedTrack(named_track->parent_uuid, named_track->name,
                                 named_track->id, named_track->is_name_static,
-                                incr_state, trace_writer);
+                                /*is_counter=*/false, incr_state, trace_writer);
   } else if (std::holds_alternative<const PerfettoTeHlExtraProtoTrack*>(
                  track)) {
     auto* proto_track = std::get<const PerfettoTeHlExtraProtoTrack*>(track);
@@ -487,17 +508,22 @@ void InstanceOp(internal::DataSourceType* ds,
         case PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED: {
           auto* named_track =
               reinterpret_cast<PerfettoTeHlNestedTrackNamed*>(*tp);
-          // Currently static names for nested tracks is not supported.
           uuid = EmitNamedTrack(uuid, named_track->name, named_track->id,
-                                /*is_name_static_=*/false, incr_state,
+                                named_track->is_name_static,
+                                named_track->is_counter, incr_state,
                                 trace_writer);
         } break;
         case PERFETTO_TE_HL_NESTED_TRACK_TYPE_PROCESS: {
           uuid = perfetto_te_process_track_uuid;
         } break;
         case PERFETTO_TE_HL_NESTED_TRACK_TYPE_THREAD: {
-          uuid = perfetto_te_process_track_uuid ^
-                 static_cast<uint64_t>(perfetto::base::GetThreadId());
+          auto* thread_track =
+              reinterpret_cast<PerfettoTeHlNestedTrackThread*>(*tp);
+          uint64_t tid = thread_track->tid != 0
+                             ? thread_track->tid
+                             : static_cast<uint64_t>(
+                                   perfetto::base::GetThreadId());
+          uuid = perfetto_te_process_track_uuid ^ tid;
         } break;
         case PERFETTO_TE_HL_NESTED_TRACK_TYPE_PROTO: {
           auto* proto_track =

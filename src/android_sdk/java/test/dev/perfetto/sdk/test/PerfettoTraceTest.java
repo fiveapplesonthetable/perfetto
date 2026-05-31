@@ -25,11 +25,13 @@ import android.os.Process;
 import android.util.ArraySet;
 import android.util.Log;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
-import dev.perfetto.sdk.PerfettoNativeMemoryCleaner.AllocationStats;
 import dev.perfetto.sdk.PerfettoTrace;
+import dev.perfetto.sdk.PerfettoTrack;
 import dev.perfetto.sdk.PerfettoTrackEventBuilder;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.Before;
 import org.junit.Test;
@@ -81,48 +83,10 @@ public class PerfettoTraceTest {
     // 'var unused' suppress error-prone warning
     var unused = FOO_CATEGORY.register();
 
-    PerfettoTrackEventBuilder.getNativeAllocationStats().reset();
-
     mCategoryNames.clear();
     mEventNames.clear();
     mDebugAnnotationNames.clear();
     mTrackNames.clear();
-  }
-
-  @Test
-  public void testFreeNativeMemoryWhenJavaObjectGCed() {
-    TraceConfig traceConfig = getTraceConfig(FOO);
-    PerfettoTrace.Session session = new PerfettoTrace.Session(true, traceConfig.toByteArray());
-    for (int i = 0; i < 600_000; i++) {
-      String eventName = "event_" + i;
-      String nativeStringArgKey = "string_key_" + i;
-      String nativeStringValue = "string_value_" + i;
-      // Create a large amount of 'ArgString' objects in heap to trigger GC, no need to emit them.
-      PerfettoTrace.instant(FOO_CATEGORY, eventName).addArg(nativeStringArgKey, nativeStringValue);
-    }
-
-    // Manually trigger GC if creating 600_000 objects was not enough.
-    for (int i = 0; i < 10; i++) {
-      System.runFinalization();
-      System.gc();
-    }
-
-    // We ignore the trace content.
-    byte[] traceBytes = session.close();
-    assertThat(traceBytes).isNotEmpty();
-
-    // We test that the GC triggers 'free native memory' function when the corresponding java
-    // objects are garbage collected.
-    AllocationStats allocationStats = PerfettoTrackEventBuilder.getNativeAllocationStats();
-    String argClsName = "dev.perfetto.sdk.PerfettoTrackEventExtra$Arg";
-    assertThat(allocationStats.getAllocCountForTarget(argClsName)).isEqualTo(600_000);
-    // Assert that the native memory was freed at least once.
-    // In practice the counter is usually greater than 300_000 if not manually trigger GC,
-    // and 599_995 (600_000 - dev.perfetto.sdk.PerfettoTrackEventBuilder#DEFAULT_EXTRA_CACHE_SIZE)
-    // if do manually trigger.
-    assertThat(allocationStats.getFreeCountForTarget(argClsName)).isGreaterThan(0);
-    String allocDebugStats = allocationStats.reportStats();
-    Log.d(TAG, "Memory cleaner allocation stats: " + allocDebugStats);
   }
 
   @Test
@@ -221,11 +185,11 @@ public class PerfettoTraceTest {
     PerfettoTrace.Session session = new PerfettoTrace.Session(true, traceConfig.toByteArray());
 
     PerfettoTrace.begin(FOO_CATEGORY, "event")
-        .usingNamedTrack(123, FOO, PerfettoTrace.getProcessTrackUuid())
+        .usingProcessNamedTrack(123, FOO)
         .emit();
 
     PerfettoTrace.end(FOO_CATEGORY)
-        .usingNamedTrack(456, "bar", PerfettoTrace.getThreadTrackUuid(Process.myTid()))
+        .usingThreadNamedTrack(456, "bar", Process.myTid())
         .emit();
 
     Trace trace = Trace.parseFrom(session.close());
@@ -256,6 +220,90 @@ public class PerfettoTraceTest {
     assertThat(mCategoryNames).contains(FOO);
     assertThat(mTrackNames).contains(FOO);
     assertThat(mTrackNames).contains("bar");
+  }
+
+  @Test
+  public void testNestedTrack() throws Exception {
+    TraceConfig traceConfig = getTraceConfig(FOO);
+
+    PerfettoTrace.Session session = new PerfettoTrace.Session(true, traceConfig.toByteArray());
+
+    PerfettoTrack parent = PerfettoTrack.process("parent_track");
+    PerfettoTrack child = parent.child("child_track");
+    PerfettoTrace.instant(FOO_CATEGORY, "event").usingTrack(child).emit();
+
+    Trace trace = Trace.parseFrom(session.close());
+
+    // Index every track descriptor by its uuid and capture the event's track.
+    Map<Long, TrackDescriptor> descriptorsByUuid = new HashMap<>();
+    long eventTrackUuid = 0;
+    for (TracePacket packet : trace.getPacketList()) {
+      if (packet.hasTrackDescriptor()) {
+        TrackDescriptor td = packet.getTrackDescriptor();
+        descriptorsByUuid.put(td.getUuid(), td);
+      }
+      if (packet.hasTrackEvent()
+          && TrackEvent.Type.TYPE_INSTANT.equals(packet.getTrackEvent().getType())
+          && packet.getTrackEvent().hasTrackUuid()) {
+        eventTrackUuid = packet.getTrackEvent().getTrackUuid();
+      }
+    }
+
+    // The event is on the leaf (child) track.
+    TrackDescriptor childTd = descriptorsByUuid.get(eventTrackUuid);
+    assertThat(childTd).isNotNull();
+    assertThat(childTd.getStaticName()).isEqualTo("child_track");
+
+    // The child is nested under the parent track.
+    TrackDescriptor parentTd = descriptorsByUuid.get(childTd.getParentUuid());
+    assertThat(parentTd).isNotNull();
+    assertThat(parentTd.getStaticName()).isEqualTo("parent_track");
+
+    // The parent track is rooted at the process track.
+    assertThat(parentTd.getParentUuid()).isEqualTo(PerfettoTrace.getProcessTrackUuid());
+  }
+
+  @Test
+  public void testThreeLevelNestedTrack() throws Exception {
+    TraceConfig traceConfig = getTraceConfig(FOO);
+
+    PerfettoTrace.Session session = new PerfettoTrace.Session(true, traceConfig.toByteArray());
+
+    PerfettoTrack a = PerfettoTrack.process("A");
+    PerfettoTrack b = a.child("B");
+    PerfettoTrack c = b.child("C");
+    PerfettoTrace.instant(FOO_CATEGORY, "event").usingTrack(c).emit();
+
+    Trace trace = Trace.parseFrom(session.close());
+
+    Map<Long, TrackDescriptor> descriptorsByUuid = new HashMap<>();
+    long eventTrackUuid = 0;
+    for (TracePacket packet : trace.getPacketList()) {
+      if (packet.hasTrackDescriptor()) {
+        TrackDescriptor td = packet.getTrackDescriptor();
+        descriptorsByUuid.put(td.getUuid(), td);
+      }
+      if (packet.hasTrackEvent()
+          && TrackEvent.Type.TYPE_INSTANT.equals(packet.getTrackEvent().getType())
+          && packet.getTrackEvent().hasTrackUuid()) {
+        eventTrackUuid = packet.getTrackEvent().getTrackUuid();
+      }
+    }
+
+    // Walk the chain leaf -> root: C -> B -> A -> process track.
+    TrackDescriptor cTd = descriptorsByUuid.get(eventTrackUuid);
+    assertThat(cTd).isNotNull();
+    assertThat(cTd.getStaticName()).isEqualTo("C");
+
+    TrackDescriptor bTd = descriptorsByUuid.get(cTd.getParentUuid());
+    assertThat(bTd).isNotNull();
+    assertThat(bTd.getStaticName()).isEqualTo("B");
+
+    TrackDescriptor aTd = descriptorsByUuid.get(bTd.getParentUuid());
+    assertThat(aTd).isNotNull();
+    assertThat(aTd.getStaticName()).isEqualTo("A");
+
+    assertThat(aTd.getParentUuid()).isEqualTo(PerfettoTrace.getProcessTrackUuid());
   }
 
   @Test
@@ -455,11 +503,11 @@ public class PerfettoTraceTest {
     PerfettoTrace.Session session = new PerfettoTrace.Session(true, traceConfig.toByteArray());
 
     PerfettoTrace.counter(FOO_CATEGORY, 16)
-        .usingCounterTrack(PerfettoTrace.getProcessTrackUuid(), FOO)
+        .usingProcessCounterTrack(FOO)
         .emit();
 
     PerfettoTrace.counter(FOO_CATEGORY, 3.14)
-        .usingCounterTrack(PerfettoTrace.getThreadTrackUuid(Process.myTid()), "bar")
+        .usingThreadCounterTrack(Process.myTid(), "bar")
         .emit();
 
     Trace trace = Trace.parseFrom(session.close());
@@ -922,6 +970,17 @@ public class PerfettoTraceTest {
   }
 
   private void collectInternedData(TracePacket packet) {
+    // Debug-arg names are written inline (DebugAnnotation.name), not interned --
+    // the body is encoded in Java before emit, so it can't know the per-sequence
+    // name_iid. Collect the inline names from the track event itself.
+    if (packet.hasTrackEvent()) {
+      for (DebugAnnotation dbg : packet.getTrackEvent().getDebugAnnotationsList()) {
+        if (!dbg.getName().isEmpty()) {
+          mDebugAnnotationNames.add(dbg.getName());
+        }
+      }
+    }
+
     if (!packet.hasInternedData()) {
       return;
     }

@@ -107,7 +107,7 @@ class Extra {
   DISALLOW_COPY_AND_ASSIGN(Extra);
 
   // These PerfettoTeHlExtra pointers are really pointers to all the other
-  // types of extras: Category, DebugArg, Counter etc. Those objects are
+  // types of extras: NamedTrack, Counter, RawBody etc. Those objects are
   // individually managed by Java.
   std::vector<PerfettoTeHlExtra*> extras_;
 };
@@ -142,71 +142,43 @@ class Category {
 };
 
 /**
- * @brief Represents one end of a flow between two events.
+ * @brief A (possibly nested) chain of named tracks (the HL NESTED_TRACKS extra).
+ *
+ * The chain is, outermost first: an optional root (process or thread; global
+ * roots have none) followed by one named level per name. The native HL path
+ * derives the per-level uuids and emits a TrackDescriptor for each level once
+ * per sequence. A single named level (a flat named track) is just a one-element
+ * chain, so this also subsumes the old single-track path.
  */
-class Flow {
+class NestedTracks {
  public:
-  Flow();
+  // root_type: 0 = global, 1 = process, 2 = thread (matches PerfettoTrack).
+  // tid is only used for the thread root (0 = calling thread). names/ids,
+  // is_name_static and is_counter are parallel per-level arrays, outermost
+  // first. A level with is_counter[i] == true is emitted as a counter track
+  // (empty CounterDescriptor, counter-magic uuid); only a leaf is ever a
+  // counter.
+  NestedTracks(int root_type,
+               uint64_t tid,
+               const std::vector<std::string>& names,
+               const std::vector<uint64_t>& ids,
+               const std::vector<bool>& is_name_static,
+               const std::vector<bool>& is_counter);
 
-  void set_process_flow(uint64_t id);
-  void set_process_terminating_flow(uint64_t id);
-  static void delete_flow(Flow* flow);
+  static void delete_track(NestedTracks* track);
 
-  const PerfettoTeHlExtraFlow* get() const { return &flow_; }
+  const PerfettoTeHlExtraNestedTracks* get() const { return &extra_; }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(Flow);
-  PerfettoTeHlExtraFlow flow_;
-};
-
-/**
- * @brief Represents a named track.
- */
-class NamedTrack {
- public:
-  NamedTrack(uint64_t id,
-             uint64_t parent_uuid,
-             const std::string& name,
-             bool is_name_static);
-
-  static void delete_track(NamedTrack* track);
-
-  const PerfettoTeHlExtraNamedTrack* get() const { return &track_; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NamedTrack);
-  const std::string name_;
-  PerfettoTeHlExtraNamedTrack track_;
-};
-
-/**
- * @brief Represents a registered track.
- */
-class RegisteredTrack {
- public:
-  RegisteredTrack(uint64_t id,
-                  uint64_t parent_uuid,
-                  const std::string& name,
-                  bool is_counter,
-                  bool is_name_static_);
-
-  ~RegisteredTrack();
-
-  void register_track();
-  void unregister_track();
-  static void delete_track(RegisteredTrack* track);
-
-  const PerfettoTeHlExtraRegisteredTrack* get() const { return &track_; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RegisteredTrack);
-  PerfettoTeRegisteredTrack registered_track_;
-  PerfettoTeHlExtraRegisteredTrack track_;
-  const std::string name_;
-  const uint64_t id_;
-  const uint64_t parent_uuid_;
-  const bool is_counter_;
-  const bool is_name_static_;
+  DISALLOW_COPY_AND_ASSIGN(NestedTracks);
+  // Owns the names; the entries below point into these. None of these vectors
+  // are mutated after construction, so the pointers stay valid.
+  std::vector<std::string> names_;
+  PerfettoTeHlNestedTrackThread root_thread_;
+  PerfettoTeHlNestedTrack root_other_;
+  std::vector<PerfettoTeHlNestedTrackNamed> named_;
+  std::vector<PerfettoTeHlNestedTrack*> ptrs_;
+  PerfettoTeHlExtraNestedTracks extra_;
 };
 
 /**
@@ -225,75 +197,87 @@ class Counter {
   PerfettoTeHlExtraCounterUnion counter_;
 };
 
-/**
- * @brief Represents a debug argument for a trace event.
- */
-class DebugArg {
+// The single extra carrying everything the Java side encodes for a track event:
+// the pre-serialized body (debug args, flows, counter value, plain proto fields)
+// spliced in verbatim as one RAW proto field, plus any interned string fields.
+// All ride one PROTO_FIELDS extra. The body bytes are copied once, on the
+// Java->native crossing, into this object's own native buffer under a @FastNative
+// method (which skips the JNI thread-state transition that dominates a small
+// copy). Interned fields can't live in the verbatim body -- their iid is
+// per-sequence native state -- so they are carried as CSTR_INTERNED fields here
+// and interned natively at emit time, alongside the raw body.
+class RawBody {
  public:
-  explicit DebugArg(const std::string& name) : name_(name) {}
+  RawBody() {
+    raw_.header.type = PERFETTO_TE_HL_PROTO_TYPE_RAW;
+    raw_.header.id = 0;
+    raw_.buf = nullptr;
+    raw_.len = 0;
+    proto_.header.type = PERFETTO_TE_HL_EXTRA_TYPE_PROTO_FIELDS;
+    rebuild();
+  }
 
-  static void delete_arg(DebugArg* arg) { delete arg; }
+  // Ensures the native buffer can hold len bytes, sets raw_.len, and returns a
+  // writable pointer the JNI copy fills from the Java byte[]. raw_.buf is kept
+  // in sync with the (possibly reallocated) buffer.
+  uint8_t* reserve_body(size_t len) {
+    if (len > buf_.size()) {
+      buf_.resize(len);
+    }
+    raw_.buf = buf_.data();
+    raw_.len = len;
+    return buf_.data();
+  }
 
-  const char* name() const { return name_.c_str(); }
-  PerfettoTeHlExtraDebugArgUnion* get() { return &arg_; }
+  // Adds an interned string proto field carried alongside the raw body and
+  // interned natively at emit time. Interned fields are rare, so this per-field
+  // crossing is fine; events without one pay nothing.
+  void add_interned(uint32_t id, const char* str, uint32_t interned_type_id) {
+    interned_strs_.emplace_back(str);
+    PerfettoTeHlProtoFieldCstrInterned field{};
+    field.header.type = PERFETTO_TE_HL_PROTO_TYPE_CSTR_INTERNED;
+    field.header.id = id;
+    field.interned_type_id = interned_type_id;
+    interned_.push_back(field);
+    rebuild();
+  }
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(DebugArg);
-  PerfettoTeHlExtraDebugArgUnion arg_;
-  const std::string name_;
-};
+  // Clears per-event state after the emit consumes it. Cheap on the common path
+  // (no interned fields): a single store plus an empty check.
+  void reset_after_emit() {
+    raw_.len = 0;
+    if (!interned_.empty()) {
+      interned_.clear();
+      interned_strs_.clear();
+      rebuild();
+    }
+  }
 
-class ProtoField {
- public:
-  ProtoField() {}
-  static void delete_field(ProtoField* field) { delete field; }
-
-  PerfettoTeHlProtoFieldUnion* get() { return &arg_; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ProtoField);
-  PerfettoTeHlProtoFieldUnion arg_;
-};
-
-class ProtoFieldNested {
- public:
-  ProtoFieldNested();
-
-  void add_field(PerfettoTeHlProtoField* field);
-  void set_id(uint32_t id);
-  static void delete_field(ProtoFieldNested* field);
-
-  const PerfettoTeHlProtoFieldNested* get() const { return &field_; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ProtoFieldNested);
-  PerfettoTeHlProtoFieldNested field_;
-  // These PerfettoTeHlProtoField pointers are really pointers to all the other
-  // types of protos: PerfettoTeHlProtoFieldVarInt,
-  // PerfettoTeHlProtoFieldVarInt, PerfettoTeHlProtoFieldVarInt,
-  // PerfettoTeHlProtoFieldNested. Those objects are individually managed by
-  // Java.
-  std::vector<PerfettoTeHlProtoField*> fields_;
-};
-
-class Proto {
- public:
-  Proto();
-
-  void add_field(PerfettoTeHlProtoField* field);
-  void clear_fields();
-  static void delete_proto(Proto* proto);
+  static void delete_raw_body(RawBody* raw_body) { delete raw_body; }
 
   const PerfettoTeHlExtraProtoFields* get() const { return &proto_; }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(Proto);
+  // Rebuilds the NULL-terminated field list (the raw body field, then each
+  // interned field). Re-derives every pointer from current storage, so it is
+  // safe after a vector reallocation.
+  void rebuild() {
+    fields_.clear();
+    fields_.push_back(&raw_.header);
+    for (size_t i = 0; i < interned_.size(); ++i) {
+      interned_[i].str = interned_strs_[i].c_str();
+      fields_.push_back(&interned_[i].header);
+    }
+    fields_.push_back(nullptr);
+    proto_.fields = fields_.data();
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(RawBody);
   PerfettoTeHlExtraProtoFields proto_;
-  // These PerfettoTeHlProtoField pointers are really pointers to all the other
-  // types of protos: PerfettoTeHlProtoFieldVarInt,
-  // PerfettoTeHlProtoFieldVarInt, PerfettoTeHlProtoFieldVarInt,
-  // PerfettoTeHlProtoFieldNested. Those objects are individually managed by
-  // Java.
+  PerfettoTeHlProtoFieldRaw raw_;
+  std::vector<uint8_t> buf_;
+  std::vector<PerfettoTeHlProtoFieldCstrInterned> interned_;
+  std::vector<std::string> interned_strs_;
   std::vector<PerfettoTeHlProtoField*> fields_;
 };
 

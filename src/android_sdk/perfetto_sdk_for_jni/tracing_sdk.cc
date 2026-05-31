@@ -124,123 +124,47 @@ void Category::delete_category(Category* ptr) {
   delete ptr;
 }
 
-Flow::Flow() : flow_{} {}
+NestedTracks::NestedTracks(int root_type,
+                           uint64_t tid,
+                           const std::vector<std::string>& names,
+                           const std::vector<uint64_t>& ids,
+                           const std::vector<bool>& is_name_static,
+                           const std::vector<bool>& is_counter)
+    : names_(names), root_thread_{}, root_other_{} {
+  const size_t count = names_.size();
+  named_.reserve(count);
+  ptrs_.reserve(count + 2);
 
-void Flow::set_process_flow(uint64_t id) {
-  flow_.header.type = PERFETTO_TE_HL_EXTRA_TYPE_FLOW;
-  PerfettoTeFlow ret = PerfettoTeProcessScopedFlow(id);
-  flow_.id = ret.id;
-}
-
-void Flow::set_process_terminating_flow(uint64_t id) {
-  flow_.header.type = PERFETTO_TE_HL_EXTRA_TYPE_TERMINATING_FLOW;
-  PerfettoTeFlow ret = PerfettoTeProcessScopedFlow(id);
-  flow_.id = ret.id;
-}
-
-void Flow::delete_flow(Flow* ptr) {
-  delete ptr;
-}
-
-NamedTrack::NamedTrack(uint64_t id,
-                       uint64_t parent_uuid,
-                       const std::string& name,
-                       bool is_name_static)
-    : name_(name),
-      track_{{PERFETTO_TE_HL_EXTRA_TYPE_NAMED_TRACK},
-             name_.data(),
-             id,
-             parent_uuid,
-             is_name_static} {}
-
-void NamedTrack::delete_track(NamedTrack* ptr) {
-  delete ptr;
-}
-
-RegisteredTrack::RegisteredTrack(uint64_t id,
-                                 uint64_t parent_uuid,
-                                 const std::string& name,
-                                 bool is_counter,
-                                 bool is_name_static)
-    : registered_track_{},
-      track_{{PERFETTO_TE_HL_EXTRA_TYPE_REGISTERED_TRACK},
-             &registered_track_.impl},
-      name_(name),
-      id_(id),
-      parent_uuid_(parent_uuid),
-      is_counter_(is_counter),
-      is_name_static_(is_name_static) {
-  register_track();
-}
-
-RegisteredTrack::~RegisteredTrack() {
-  unregister_track();
-}
-
-void RegisteredTrack::register_track() {
-  if (registered_track_.impl.descriptor)
-    return;
-
-  if (is_counter_) {
-    PerfettoTeCounterTrackRegister(&registered_track_, name_.data(),
-                                   parent_uuid_, is_name_static_);
-  } else {
-    PerfettoTeNamedTrackRegister(&registered_track_, name_.data(), id_,
-                                 parent_uuid_, is_name_static_);
-  }
-}
-
-void RegisteredTrack::unregister_track() {
-  if (!registered_track_.impl.descriptor)
-    return;
-  PerfettoTeRegisteredTrackUnregister(&registered_track_);
-}
-
-void RegisteredTrack::delete_track(RegisteredTrack* ptr) {
-  delete ptr;
-}
-
-Proto::Proto() : proto_({{PERFETTO_TE_HL_EXTRA_TYPE_PROTO_FIELDS}, nullptr}) {}
-
-void Proto::add_field(PerfettoTeHlProtoField* ptr) {
-  if (!fields_.empty()) {
-    fields_.pop_back();
+  // Outermost entry: the root scope. Global roots have none (the first named
+  // level then hangs off uuid 0).
+  if (root_type == 1 /* process */) {
+    root_other_.type = PERFETTO_TE_HL_NESTED_TRACK_TYPE_PROCESS;
+    ptrs_.push_back(&root_other_);
+  } else if (root_type == 2 /* thread */) {
+    root_thread_.header.type = PERFETTO_TE_HL_NESTED_TRACK_TYPE_THREAD;
+    root_thread_.tid = tid;
+    ptrs_.push_back(&root_thread_.header);
   }
 
-  fields_.push_back(ptr);
-  fields_.push_back(nullptr);
-  proto_.fields = fields_.data();
-}
-
-void Proto::clear_fields() {
-  fields_.clear();
-  proto_.fields = nullptr;
-}
-
-void Proto::delete_proto(Proto* ptr) {
-  delete ptr;
-}
-
-ProtoFieldNested::ProtoFieldNested()
-    : field_({{PERFETTO_TE_HL_PROTO_TYPE_NESTED, 0}, nullptr}) {}
-
-void ProtoFieldNested::add_field(PerfettoTeHlProtoField* ptr) {
-  if (!fields_.empty()) {
-    fields_.pop_back();
+  for (size_t i = 0; i < count; i++) {
+    PerfettoTeHlNestedTrackNamed entry{};
+    entry.header.type = PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED;
+    entry.name = names_[i].c_str();
+    entry.id = ids[i];
+    entry.is_name_static = i < is_name_static.size() ? is_name_static[i] : false;
+    entry.is_counter = i < is_counter.size() ? is_counter[i] : false;
+    named_.push_back(entry);
   }
+  for (size_t i = 0; i < count; i++) {
+    ptrs_.push_back(reinterpret_cast<PerfettoTeHlNestedTrack*>(&named_[i]));
+  }
+  ptrs_.push_back(nullptr);
 
-  fields_.push_back(ptr);
-  fields_.push_back(nullptr);
-  field_.fields = fields_.data();
+  extra_.header.type = PERFETTO_TE_HL_EXTRA_TYPE_NESTED_TRACKS;
+  extra_.tracks = ptrs_.data();
 }
 
-void ProtoFieldNested::set_id(uint32_t id) {
-  fields_.clear();
-  field_.header.id = id;
-  field_.fields = nullptr;
-}
-
-void ProtoFieldNested::delete_field(ProtoFieldNested* ptr) {
+void NestedTracks::delete_track(NestedTracks* ptr) {
   delete ptr;
 }
 
