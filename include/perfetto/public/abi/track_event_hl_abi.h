@@ -47,6 +47,10 @@ enum PerfettoTeHlProtoFieldType {
   PERFETTO_TE_HL_PROTO_TYPE_DOUBLE = 6,
   PERFETTO_TE_HL_PROTO_TYPE_FLOAT = 7,
   PERFETTO_TE_HL_PROTO_TYPE_CSTR_INTERNED = 8,
+  // Pre-serialized protobuf appended verbatim into the enclosing message (no
+  // field-id wrapper). Lets a caller batch-encode several fields on its own side
+  // and hand them over as one blob. `header.id` is ignored.
+  PERFETTO_TE_HL_PROTO_TYPE_RAW = 9,
 };
 
 // Common header for all the proto fields.
@@ -77,6 +81,14 @@ struct PerfettoTeHlProtoFieldCstrInterned {
 // PERFETTO_TE_HL_PROTO_TYPE_BYTES
 struct PerfettoTeHlProtoFieldBytes {
   struct PerfettoTeHlProtoField header;
+  const void* buf;
+  size_t len;
+};
+
+// PERFETTO_TE_HL_PROTO_TYPE_RAW
+struct PerfettoTeHlProtoFieldRaw {
+  struct PerfettoTeHlProtoField header;
+  // Pre-serialized protobuf, appended verbatim (no field-id/length wrapper).
   const void* buf;
   size_t len;
 };
@@ -122,6 +134,7 @@ struct PerfettoTeHlProtoFieldFloat {
 union PerfettoTeHlProtoFieldUnion {
   struct PerfettoTeHlProtoFieldCstr field_cstr;
   struct PerfettoTeHlProtoFieldBytes field_bytes;
+  struct PerfettoTeHlProtoFieldRaw field_raw;
   struct PerfettoTeHlProtoFieldNested field_nested;
   struct PerfettoTeHlProtoFieldVarInt field_varint;
   struct PerfettoTeHlProtoFieldFixed64 field_fixed64;
@@ -322,6 +335,23 @@ struct PerfettoTeHlNestedTrackNamed {
   const char* name;
   // Partially identifies the track, along `name` and the parent hierarchy.
   uint64_t id;
+  // If true `name` is emitted as the descriptor's static_name (field 2),
+  // otherwise as its (dynamic) name (field 10). Defaults to false for callers
+  // that zero-initialize (e.g. the PERFETTO_TE_NESTED_TRACK_NAMED macro).
+  bool is_name_static;
+  // If true this leaf is a counter track: its descriptor carries an (empty)
+  // CounterDescriptor and its uuid is derived with the counter magic instead of
+  // `id`. A counter leaf ignores `id`. Defaults to false for callers that
+  // zero-initialize (e.g. the PERFETTO_TE_NESTED_TRACK_NAMED macro), so a plain
+  // named track is unchanged and the field is backward-compatible.
+  bool is_counter;
+};
+
+// PERFETTO_TE_HL_NESTED_TRACK_TYPE_THREAD
+struct PerfettoTeHlNestedTrackThread {
+  struct PerfettoTeHlNestedTrack header;
+  // The thread id whose track roots the chain. 0 means the calling thread.
+  uint64_t tid;
 };
 
 struct PerfettoTeHlNestedTrackProto {

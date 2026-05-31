@@ -21,12 +21,12 @@ import com.google.errorprone.annotations.CompileTimeConstant;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.NestedTracks;
 
 /**
- * An immutable, reusable handle to a (possibly nested) named track.
+ * An immutable, reusable handle to a (possibly nested) track.
  *
  * <p>Build a track once — typically a {@code static final} — and pass it to
  * {@link PerfettoTrackEventBuilder#usingTrack}. A track is rooted at the process,
- * the current thread, or the global scope, and can be nested arbitrarily deep with
- * {@link #child}:
+ * the current thread, or the global scope, can be nested arbitrarily deep with
+ * {@link #child}, and a leaf may be a counter ({@link #childCounter}):
  *
  * <pre>
  *   static final PerfettoTrack RENDER = PerfettoTrack.process("Render");
@@ -36,12 +36,14 @@ import dev.perfetto.sdk.PerfettoTrackEventExtra.NestedTracks;
  * </pre>
  *
  * <p>Emitting on {@code GPU} emits the {@code TrackDescriptor}s for the whole
- * chain (Render under the process, GPU under Render) once per sequence, matching
- * the C SDK's nested-track behaviour. The track uuid is derived natively exactly
- * as the C SDK derives it.
+ * chain (Render under the process, GPU under Render) once per sequence; each uuid
+ * is derived natively exactly as the C SDK derives it.
  *
- * <p>This is the nesting-only shape supported by the high-level ABI; sibling
- * ordering, counter units and similar are intentionally not exposed here.
+ * <p>This is the single track primitive: the flat {@code usingProcessNamedTrack} /
+ * {@code usingCounterTrack} builder helpers are sugar over a one-level
+ * {@code PerfettoTrack}. Its names are compile-time constants, so a handle is held
+ * in a {@code static final} field like a {@link PerfettoTrace.Category} and owns
+ * its native track for life (built once, reused, freed on GC).
  */
 public final class PerfettoTrack {
   // Root scope of the chain. Mirrors RootType in tracing_sdk.h.
@@ -53,9 +55,18 @@ public final class PerfettoTrack {
   private static final long DEFAULT_ID = 0;
 
   final int mRootType;
-  // Names and ids of the chain, outermost (closest to the root) first.
+  // The thread id the chain is rooted at, for ROOT_THREAD only. 0 means the
+  // emitting thread (the common case, and the only shape the public factories
+  // produce). Set explicitly only by the thread-scoped flat helper.
+  final long mTid;
+  // Names, ids, name-static flags and counter flags of the chain, outermost
+  // (closest to the root) first. All four are parallel and the same length. A
+  // counter leaf (mIsCounter[i] == true) is emitted with an empty
+  // CounterDescriptor and a counter-magic uuid; only a leaf is ever a counter.
   final String[] mNames;
   final long[] mIds;
+  final boolean[] mIsNameStatic;
+  final boolean[] mIsCounter;
 
   // The handle's native nested-tracks extra, built lazily on first use and held
   // for the handle's lifetime. Freed by the cleaner when the handle is collected.
@@ -66,10 +77,19 @@ public final class PerfettoTrack {
   private static final PerfettoNativeMemoryCleaner sCleaner =
       new PerfettoNativeMemoryCleaner();
 
-  private PerfettoTrack(int rootType, String[] names, long[] ids) {
+  private PerfettoTrack(
+      int rootType,
+      long tid,
+      String[] names,
+      long[] ids,
+      boolean[] isNameStatic,
+      boolean[] isCounter) {
     mRootType = rootType;
+    mTid = tid;
     mNames = names;
     mIds = ids;
+    mIsNameStatic = isNameStatic;
+    mIsCounter = isCounter;
   }
 
   /**
@@ -92,17 +112,27 @@ public final class PerfettoTrack {
 
   /** A track named {@code name} rooted at the process track. */
   public static PerfettoTrack process(@CompileTimeConstant String name) {
-    return new PerfettoTrack(ROOT_PROCESS, new String[] {name}, new long[] {DEFAULT_ID});
+    return rooted(ROOT_PROCESS, 0, name);
   }
 
   /** A track named {@code name} rooted at the calling thread's track. */
   public static PerfettoTrack thread(@CompileTimeConstant String name) {
-    return new PerfettoTrack(ROOT_THREAD, new String[] {name}, new long[] {DEFAULT_ID});
+    return rooted(ROOT_THREAD, 0, name);
   }
 
   /** A track named {@code name} rooted at the global scope. */
   public static PerfettoTrack global(@CompileTimeConstant String name) {
-    return new PerfettoTrack(ROOT_GLOBAL, new String[] {name}, new long[] {DEFAULT_ID});
+    return rooted(ROOT_GLOBAL, 0, name);
+  }
+
+  /** A counter track named {@code name} rooted at the process track. */
+  public static PerfettoTrack processCounter(@CompileTimeConstant String name) {
+    return rootedCounter(ROOT_PROCESS, 0, name);
+  }
+
+  /** A counter track named {@code name} rooted at the calling thread's track. */
+  public static PerfettoTrack threadCounter(@CompileTimeConstant String name) {
+    return rootedCounter(ROOT_THREAD, 0, name);
   }
 
   /** A child track named {@code name} nested under this one. */
@@ -115,13 +145,85 @@ public final class PerfettoTrack {
    * disambiguates the track from same-named siblings.
    */
   public PerfettoTrack child(long id, @CompileTimeConstant String name) {
+    return appendLevel(id, name, /* isNameStatic= */ true, /* isCounter= */ false);
+  }
+
+  /**
+   * A counter track named {@code name} nested under this one. A counter leaf
+   * carries the counter value set via {@link
+   * PerfettoTrackEventBuilder#setCounter}; its uuid is derived with the counter
+   * magic and its descriptor carries an (empty) CounterDescriptor.
+   */
+  public PerfettoTrack childCounter(@CompileTimeConstant String name) {
+    return appendLevel(DEFAULT_ID, name, /* isNameStatic= */ true, /* isCounter= */ true);
+  }
+
+  // --- Internal helpers for the flat named/counter-track builder sugar, which
+  // makes those helpers a one-level PerfettoTrack. They take the leaf id and
+  // name-static flag the public API doesn't, and (for the thread helper) an
+  // explicit tid. The sugar builds a fresh handle per emit, so it looks up the
+  // builder's content cache from scalar args (flatCacheKey/isFlat) and only
+  // allocates a handle on a miss. ---
+
+  /** A one-level (flat) track. Built only on a flat-sugar cache miss. */
+  static PerfettoTrack flat(
+      int rootType, long tid, String name, long id, boolean isNameStatic, boolean isCounter) {
+    return new PerfettoTrack(
+        rootType, tid, new String[] {name}, new long[] {id},
+        new boolean[] {isNameStatic}, new boolean[] {isCounter});
+  }
+
+  /** The content cache key for a one-level track, computed without a handle. */
+  static int flatCacheKey(
+      int rootType, long tid, String name, long id, boolean isNameStatic, boolean isCounter) {
+    int h = rootType;
+    h = 31 * h + (int) (tid ^ (tid >>> 32));
+    h = 31 * h + name.hashCode();
+    h = 31 * h + (int) (id ^ (id >>> 32));
+    h = 31 * h + (isNameStatic ? 1 : 0);
+    h = 31 * h + (isCounter ? 1 : 0);
+    return h;
+  }
+
+  /** True if this is exactly the given one-level track (no allocation). */
+  boolean isFlat(
+      int rootType, long tid, String name, long id, boolean isNameStatic, boolean isCounter) {
+    return mNames.length == 1
+        && mRootType == rootType
+        && mTid == tid
+        && mIds[0] == id
+        && mIsNameStatic[0] == isNameStatic
+        && mIsCounter[0] == isCounter
+        && mNames[0].equals(name);
+  }
+
+  private static PerfettoTrack rooted(int rootType, long tid, String name) {
+    return new PerfettoTrack(
+        rootType, tid, new String[] {name}, new long[] {DEFAULT_ID}, new boolean[] {true},
+        new boolean[] {false});
+  }
+
+  private static PerfettoTrack rootedCounter(int rootType, long tid, String name) {
+    return new PerfettoTrack(
+        rootType, tid, new String[] {name}, new long[] {DEFAULT_ID}, new boolean[] {true},
+        new boolean[] {true});
+  }
+
+  private PerfettoTrack appendLevel(
+      long id, String name, boolean isNameStatic, boolean isCounter) {
     int n = mNames.length;
     String[] names = new String[n + 1];
     long[] ids = new long[n + 1];
+    boolean[] staticFlags = new boolean[n + 1];
+    boolean[] counterFlags = new boolean[n + 1];
     System.arraycopy(mNames, 0, names, 0, n);
     System.arraycopy(mIds, 0, ids, 0, n);
+    System.arraycopy(mIsNameStatic, 0, staticFlags, 0, n);
+    System.arraycopy(mIsCounter, 0, counterFlags, 0, n);
     names[n] = name;
     ids[n] = id;
-    return new PerfettoTrack(mRootType, names, ids);
+    staticFlags[n] = isNameStatic;
+    counterFlags[n] = isCounter;
+    return new PerfettoTrack(mRootType, mTid, names, ids, staticFlags, counterFlags);
   }
 }

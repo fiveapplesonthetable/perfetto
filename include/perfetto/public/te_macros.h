@@ -402,7 +402,7 @@ struct PerfettoTeHlMacroNameAndType {
       struct PerfettoTeHlNestedTrack*,           \
       PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(       \
           PerfettoTeHlNestedTrackNamed,          \
-          {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED}, NAME, ID}))
+          {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED}, NAME, ID, false, false}))
 
 // A track uniquely identified by `ID` (a uint64_t) and its parent hierarchy.
 // The rest of the params should be PERFETTO_TE_PROTO_FIELD_* macros and should
@@ -443,11 +443,12 @@ struct PerfettoTeHlMacroNameAndType {
 
 // The current thread track. This shouldn't have parents (it should be the first
 // param).
-#define PERFETTO_TE_NESTED_TRACK_THREAD()  \
-  PERFETTO_REINTERPRET_CAST(               \
-      struct PerfettoTeHlNestedTrack*,     \
-      PERFETTO_I_TE_COMPOUND_LITERAL_ADDR( \
-          PerfettoTeHlNestedTrack, {PERFETTO_TE_HL_NESTED_TRACK_TYPE_THREAD}))
+#define PERFETTO_TE_NESTED_TRACK_THREAD()                          \
+  PERFETTO_REINTERPRET_CAST(                                       \
+      struct PerfettoTeHlNestedTrack*,                             \
+      PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(                         \
+          PerfettoTeHlNestedTrackThread,                          \
+          {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_THREAD}, 0}))
 
 // The current process track. This shouldn't have parents (it should be the
 // first param).
