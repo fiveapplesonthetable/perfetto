@@ -56,6 +56,11 @@ export default class implements PerfettoPlugin {
 
     resetCachedOverview();
     disposeBaseline();
+    // The eager dispose above only runs when the next trace also has heap
+    // data. Defer disposal onto the trace's trash too, so baseline engines
+    // (each a separate trace_processor Worker) are torn down when this trace
+    // is closed or replaced by a non-heap trace, not leaked.
+    ctx.trash.defer(disposeBaseline);
 
     ctx.pages.registerPage({
       route: '/heapdump',

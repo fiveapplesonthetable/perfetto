@@ -160,6 +160,33 @@ describe('cross-trace flamegraph diff: name-path pairing', () => {
     expect(a.delta_size).toBe(2);
   });
 
+  test('path_hash_stable is NUL-free and stable per name-path', () => {
+    // Regression: path_hash_stable is injected into inline SQL VALUES, where
+    // an embedded NUL (\x00) truncates the string literal at parse time. The
+    // raw name-path key contains separators, so it must be encoded as a
+    // NUL-free id — and two cur nodes on the same name-path must share it.
+    const cur: RawTreeRow[] = [
+      node(1, null, 'Root', 0),
+      node(2, 1, 'A', 10),
+      node(3, 1, 'B', 20),
+      // Same name-path as node 2 (Root -> A) but a distinct engine id.
+      node(4, 1, 'A', 5),
+    ];
+    const base: RawTreeRow[] = [node(11, null, 'Root', 0)];
+    const out = pairTrees(cur, base);
+    for (const r of out) {
+      expect(r.path_hash_stable).not.toContain('\x00');
+      expect(r.path_hash_stable).not.toContain('\x01');
+      expect(r.path_hash_stable).toMatch(/^\d+$/);
+    }
+    const aRows = out.filter((r) => r.name === 'A');
+    expect(aRows).toHaveLength(2);
+    expect(aRows[0].path_hash_stable).toBe(aRows[1].path_hash_stable);
+    expect(out.find((r) => r.name === 'B')!.path_hash_stable).not.toBe(
+      aRows[0].path_hash_stable,
+    );
+  });
+
   test('pairing: count is paired alongside size', () => {
     const cur: RawTreeRow[] = [
       node(1, null, 'Root', 0, 1),

@@ -125,10 +125,25 @@ export function pairTrees(
       prev.selfCount += b.self_count;
     }
   }
+  // Assign each distinct path key a small dense integer id, used as
+  // path_hash_stable. The raw name-path key embeds \x00 / \x01 separators,
+  // and path_hash_stable is injected into an inline SQL string literal (see
+  // injectPairedTable). Standard SQLite — and the native trace_processor —
+  // reject an embedded NUL there (it terminates the literal at parse time);
+  // only the Wasm engine happens to tolerate it, so injecting the raw key is
+  // both non-portable and fragile. A dense id is NUL-free and collision-free,
+  // and equal name-paths still map to equal ids — matching the same-trace
+  // path's integer path_h identity (see flamegraph_view.ts buildDiffMetric).
+  const pathIds = new Map<string, number>();
   const out: PairedRow[] = [];
   for (const c of cur) {
     const k = curKeys.get(c.id);
     if (k === undefined) continue;
+    let pathId = pathIds.get(k);
+    if (pathId === undefined) {
+      pathId = pathIds.size;
+      pathIds.set(k, pathId);
+    }
     const b = baseByKey.get(k);
     const bSelfSize = b?.selfSize ?? 0;
     const bSelfCount = b?.selfCount ?? 0;
@@ -141,10 +156,7 @@ export function pairTrees(
       delta_size: c.self_size - bSelfSize,
       delta_count: c.self_count - bSelfCount,
       is_new: b === undefined ? 1 : 0,
-      // The flamegraph reads path_hash_stable as an unaggregatable string —
-      // it's the pivot/tooltip key. Cross-trace can't reuse the stdlib's
-      // (upid, ts)-based hash, so use the same name-path key we paired on.
-      path_hash_stable: k,
+      path_hash_stable: String(pathId),
     });
   }
   return out;
@@ -193,9 +205,11 @@ export async function fetchClassTreeRows(
   return out;
 }
 
-// Quote a string for inline-VALUES SQL. The tree we read came from the
-// engine, so it never contains control characters that confuse the SQL
-// parser, but it can contain single quotes (class names like `a'b`).
+// Quote a string for inline-VALUES SQL. The only strings injected here are
+// class names (from the engine) and the numeric path_hash_stable, neither of
+// which contains an embedded NUL — important because a NUL truncates a SQLite
+// string literal at parse time. We only need to escape single quotes (class
+// names like `a'b`).
 function sqlString(s: string | null): string {
   if (s === null) return 'NULL';
   return `'${s.replace(/'/g, "''")}'`;
