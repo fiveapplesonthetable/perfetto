@@ -238,6 +238,7 @@ function buildTabs(
       content: m(FlamegraphObjectsView, {
         engine,
         navigate: navigateWithTabs,
+        grid: session.gridAccess(`fg:${fg.pathHashes}:${fg.isDominator}`),
         pathHashes: fg.pathHashes,
         isDominator: fg.isDominator,
         onBackToTimeline: () => trace.navigate('#!/viewer'),
@@ -257,6 +258,8 @@ function buildTabs(
         navigate: navigateWithTabs,
         openFlamegraphPivotedAt: session.openFlamegraphPivotedAt,
         params: {id: obj.objId},
+        gridFor: (subKey: string) =>
+          session.gridAccess(`obj:${obj.objId}:${subKey}`),
       }),
     });
   }
