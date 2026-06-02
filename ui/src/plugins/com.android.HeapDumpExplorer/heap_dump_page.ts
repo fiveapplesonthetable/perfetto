@@ -158,6 +158,7 @@ function buildTabs(
         activeDump,
         navigate: navigateWithTabs,
         clearNavParam,
+        grid: session.gridAccess('classes'),
         initialRootClass:
           state.view === 'classes' ? state.params.rootClass : undefined,
       }),
@@ -170,6 +171,7 @@ function buildTabs(
         activeDump,
         navigate: navigateWithTabs,
         clearNavParam,
+        grid: session.gridAccess('objects'),
         initialClass: state.view === 'objects' ? state.params.cls : undefined,
       }),
     },
@@ -180,6 +182,7 @@ function buildTabs(
         engine,
         activeDump,
         navigate: navigateWithTabs,
+        grid: session.gridAccess('dominators'),
       }),
     },
     {
@@ -203,6 +206,7 @@ function buildTabs(
         activeDump,
         navigate: navigateWithTabs,
         clearNavParam,
+        grid: session.gridAccess('strings'),
         initialQuery: state.view === 'strings' ? state.params.q : undefined,
         hasFieldValues: overview.hasFieldValues,
       }),
@@ -215,6 +219,7 @@ function buildTabs(
         activeDump,
         navigate: navigateWithTabs,
         clearNavParam,
+        grid: session.gridAccess('arrays'),
         initialArrayHash:
           state.view === 'arrays' ? state.params.arrayHash : undefined,
         hasFieldValues: overview.hasFieldValues,

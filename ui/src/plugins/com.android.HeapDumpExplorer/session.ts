@@ -31,7 +31,15 @@ import {
 } from './nav_state';
 import type {OverviewData} from './types';
 import type {FlamegraphState} from '../../widgets/flamegraph';
-import type {HdeState} from './persisted_state';
+import type {Column, Filter} from '../../components/widgets/datagrid/model';
+import type {GridStateAccess} from './components';
+import {
+  type GridSlot,
+  type GridStateJson,
+  type HdeState,
+  decodeGridSlot,
+  encodeGridSlot,
+} from './persisted_state';
 import {
   METRIC_DOMINATED_OBJECT_SIZE,
   METRIC_OBJECT_SIZE,
@@ -86,6 +94,11 @@ export class HeapDumpExplorerSession {
   // Persists across tab switches; reset on dump change so a new dump
   // opens with defaults instead of the prior dump's filters.
   private _flamegraphPanelState: FlamegraphState | undefined;
+
+  // Per-tab DataGrid state (column order/visibility/sort + filters), keyed by a
+  // stable tab key. Only holds tabs the user actually customised; views fall
+  // back to their own defaults for keys absent here. Reset on dump change.
+  private readonly _grids = new Map<string, GridSlot>();
 
   // Set when the plugin auto-redirected to HDE on load; gates the
   // "default view changed" hint on the overview.
@@ -170,7 +183,44 @@ export class HeapDumpExplorerSession {
 
   readonly clearNavParam = (key: string): void => {
     delete (this._nav.params as Record<string, unknown>)[key];
+    // A consumed nav param (e.g. ?cls=Foo) becomes a one-shot grid filter, so
+    // drop it from the persisted nav. Otherwise it would re-apply on restore
+    // and clobber the user's later manual filter edits to the same grid.
+    this.persist();
   };
+
+  // --- Per-tab DataGrid state ------------------------------------------------
+
+  gridColumns(key: string): readonly Column[] | undefined {
+    return this._grids.get(key)?.columns;
+  }
+
+  gridFilters(key: string): readonly Filter[] {
+    return this._grids.get(key)?.filters ?? [];
+  }
+
+  setGridColumns(key: string, columns: readonly Column[]): void {
+    const prev = this._grids.get(key);
+    this._grids.set(key, {columns, filters: prev?.filters ?? []});
+    this.persist();
+  }
+
+  setGridFilters(key: string, filters: readonly Filter[]): void {
+    const prev = this._grids.get(key);
+    this._grids.set(key, {columns: prev?.columns, filters});
+    this.persist();
+  }
+
+  // Bundles the accessors for one grid so a view can run DataGrid in controlled
+  // mode without depending on the session directly.
+  gridAccess(key: string): GridStateAccess {
+    return {
+      columns: this.gridColumns(key),
+      filters: this.gridFilters(key),
+      setColumns: (c) => this.setGridColumns(key, c),
+      setFilters: (f) => this.setGridFilters(key, f),
+    };
+  }
 
   syncFromSubpage(subpage: string | undefined): void {
     const sub = subpage?.startsWith('/') ? subpage.slice(1) : subpage;
@@ -365,6 +415,7 @@ export class HeapDumpExplorerSession {
     this._nextInstanceId = 0;
     this._activeInstanceId = null;
     this._flamegraphPanelState = undefined;
+    this._grids.clear();
   }
 
   // Mirrors the current session state into the store so it lands in shared
@@ -373,6 +424,13 @@ export class HeapDumpExplorerSession {
     const store = this._store;
     if (store === undefined) return;
     const dump = this._activeDump;
+    let grids: Record<string, GridStateJson> | undefined;
+    if (this._grids.size > 0) {
+      grids = {};
+      for (const [key, slot] of this._grids) {
+        grids[key] = encodeGridSlot(slot);
+      }
+    }
     const snapshot: HdeState = {
       activeDump:
         dump === null ? undefined : {upid: dump.upid, ts: dump.ts.toString()},
@@ -388,6 +446,7 @@ export class HeapDumpExplorerSession {
         label: t.label,
       })),
       flamegraphPanelState: this._flamegraphPanelState,
+      grids,
     };
     store.edit((draft) => {
       Object.assign(draft, snapshot);
@@ -440,6 +499,11 @@ export class HeapDumpExplorerSession {
     this._flamegraphPanelState = s.flamegraphPanelState;
     if (s.nav !== undefined) {
       this._nav = subpageToState(s.nav);
+    }
+
+    this._grids.clear();
+    for (const [key, slot] of Object.entries(s.grids ?? {})) {
+      this._grids.set(key, decodeGridSlot(slot));
     }
 
     for (const tab of this._flamegraphTabs) {
