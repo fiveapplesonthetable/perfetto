@@ -37,6 +37,9 @@ export interface ProfileView {
 const SNAPSHOT_INTERVAL_MS = 3_000; // How over to take a snapshot of the runnign trace and extract data.
 const INITIAL_SNAPSHOT_INTERVAL_MS = 1_000; // Use a shorter interval for the first snapshot to get data on screen faster.
 const POLLING_INTERVAL_MS = 1_000; // Recording config polling interval for process stats and system stats.
+// Own ring buffer for the optional display-video capture, kept separate
+// from the stats/ftrace buffers so encoded frames never evict memory data.
+const VIDEO_BUFFER_SIZE_KB = 256 * 1024;
 
 let engineCounter = 0;
 
@@ -100,6 +103,7 @@ export class LiveSession {
   private readonly sessionName: string;
   private readonly device?: AdbDevice;
   private readonly linuxTarget?: TracedWebsocketTarget;
+  private readonly captureVideo: boolean;
   private timer?: ReturnType<typeof setTimeout>;
   private snapshotInFlight = false;
   private isDisposed = false;
@@ -145,6 +149,7 @@ export class LiveSession {
     this.device = conn.device;
     this.linuxTarget = conn.linuxTarget;
     this.deviceName = conn.deviceName;
+    this.captureVideo = conn.captureVideo ?? false;
     this.sessionName = `livemem-${uuidv4().substring(0, 8)}`;
     this.startAndPoll();
   }
@@ -233,7 +238,7 @@ export class LiveSession {
   }
 
   private async startAndPoll(): Promise<void> {
-    const config = createMonitoringConfig(this.sessionName);
+    const config = createMonitoringConfig(this.sessionName, this.captureVideo);
     const result = this.linuxTarget
       ? await this.linuxTarget.startTracing(config)
       : await createAdbTracingSession(this.device!, config);
@@ -321,119 +326,144 @@ export class LiveSession {
   }
 }
 
-function createMonitoringConfig(
+export function createMonitoringConfig(
   uniqueSessionName: string,
+  captureVideo: boolean,
 ): protos.ITraceConfig {
+  const buffers: protos.TraceConfig.IBufferConfig[] = [
+    {
+      name: 'initial_stats',
+      sizeKb: 4 * 1024,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.DISCARD,
+    },
+    {
+      name: 'polled_stats',
+      sizeKb: 4 * 1024,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
+    },
+    {
+      name: 'ftrace',
+      sizeKb: 4 * 1024,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
+    },
+  ];
+
+  const dataSources: protos.TraceConfig.IDataSource[] = [
+    {
+      config: {
+        name: 'linux.process_stats',
+        targetBufferName: 'initial_stats',
+        processStatsConfig: {
+          scanAllProcessesOnStart: true,
+          recordProcessAge: true,
+        },
+      },
+    },
+    {
+      config: {
+        name: 'android.packages_list',
+        targetBufferName: 'initial_stats',
+      },
+    },
+    {
+      config: {
+        name: 'linux.process_stats',
+        targetBufferName: 'polled_stats',
+        processStatsConfig: {
+          scanAllProcessesOnStart: false,
+          procStatsPollMs: POLLING_INTERVAL_MS,
+          recordProcessDmabufRss: true,
+        },
+      },
+    },
+    {
+      config: {
+        name: 'linux.sys_stats',
+        targetBufferName: 'polled_stats',
+        sysStatsConfig: {
+          meminfoPeriodMs: POLLING_INTERVAL_MS,
+          psiPeriodMs: POLLING_INTERVAL_MS,
+          meminfoCounters: [
+            protos.MeminfoCounters.MEMINFO_MEM_TOTAL,
+            protos.MeminfoCounters.MEMINFO_MEM_FREE,
+            protos.MeminfoCounters.MEMINFO_MEM_AVAILABLE,
+            protos.MeminfoCounters.MEMINFO_BUFFERS,
+            protos.MeminfoCounters.MEMINFO_CACHED,
+            protos.MeminfoCounters.MEMINFO_SWAP_TOTAL,
+            protos.MeminfoCounters.MEMINFO_SWAP_FREE,
+            protos.MeminfoCounters.MEMINFO_SWAP_CACHED,
+            protos.MeminfoCounters.MEMINFO_SHMEM,
+            protos.MeminfoCounters.MEMINFO_ACTIVE_ANON,
+            protos.MeminfoCounters.MEMINFO_INACTIVE_ANON,
+            protos.MeminfoCounters.MEMINFO_ACTIVE_FILE,
+            protos.MeminfoCounters.MEMINFO_INACTIVE_FILE,
+            protos.MeminfoCounters.MEMINFO_ANON_PAGES,
+            protos.MeminfoCounters.MEMINFO_SLAB,
+            protos.MeminfoCounters.MEMINFO_KERNEL_STACK,
+            protos.MeminfoCounters.MEMINFO_PAGE_TABLES,
+            protos.MeminfoCounters.MEMINFO_ZRAM,
+            protos.MeminfoCounters.MEMINFO_MAPPED,
+            protos.MeminfoCounters.MEMINFO_DIRTY,
+            protos.MeminfoCounters.MEMINFO_WRITEBACK,
+          ],
+          vmstatPeriodMs: POLLING_INTERVAL_MS,
+          vmstatCounters: [
+            protos.VmstatCounters.VMSTAT_PSWPIN,
+            protos.VmstatCounters.VMSTAT_PSWPOUT,
+            protos.VmstatCounters.VMSTAT_PGFAULT,
+            protos.VmstatCounters.VMSTAT_PGMAJFAULT,
+            protos.VmstatCounters.VMSTAT_WORKINGSET_REFAULT_FILE,
+            protos.VmstatCounters.VMSTAT_PGSTEAL_FILE,
+            protos.VmstatCounters.VMSTAT_PGSCAN_FILE,
+          ],
+        },
+      },
+    },
+    {
+      config: {
+        name: 'linux.ftrace',
+        targetBufferName: 'ftrace',
+        ftraceConfig: {
+          ftraceEvents: [
+            'dmabuf_heap/dma_heap_stat',
+            'sched/sched_process_exit',
+            'sched/sched_process_free',
+            'task/task_newtask',
+            'task/task_rename',
+            'lowmemorykiller/lowmemory_kill',
+            'oom/oom_score_adj_update',
+          ],
+          atraceApps: ['lmkd'],
+          disableGenericEvents: true,
+        },
+      },
+    },
+  ];
+
+  // Optionally pair the memory timeline with display frames, in their own
+  // buffer (capped to its size so it never evicts memory data).
+  if (captureVideo) {
+    buffers.push({
+      name: 'video',
+      sizeKb: VIDEO_BUFFER_SIZE_KB,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
+    });
+    dataSources.push({
+      config: {
+        name: 'android.display.video',
+        targetBufferName: 'video',
+        displayVideoConfig: {
+          format: protos.DisplayVideoConfig.Format.FORMAT_H264,
+          maxStreamSizeBytes: VIDEO_BUFFER_SIZE_KB * 1024,
+        },
+      },
+    });
+  }
+
   return {
     uniqueSessionName,
-    buffers: [
-      {
-        name: 'initial_stats',
-        sizeKb: 4 * 1024,
-        fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.DISCARD,
-      },
-      {
-        name: 'polled_stats',
-        sizeKb: 4 * 1024,
-        fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
-      },
-      {
-        name: 'ftrace',
-        sizeKb: 4 * 1024,
-        fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
-      },
-    ],
-    dataSources: [
-      {
-        config: {
-          name: 'linux.process_stats',
-          targetBufferName: 'initial_stats',
-          processStatsConfig: {
-            scanAllProcessesOnStart: true,
-            recordProcessAge: true,
-          },
-        },
-      },
-      {
-        config: {
-          name: 'android.packages_list',
-          targetBufferName: 'initial_stats',
-        },
-      },
-      {
-        config: {
-          name: 'linux.process_stats',
-          targetBufferName: 'polled_stats',
-          processStatsConfig: {
-            scanAllProcessesOnStart: false,
-            procStatsPollMs: POLLING_INTERVAL_MS,
-            recordProcessDmabufRss: true,
-          },
-        },
-      },
-      {
-        config: {
-          name: 'linux.sys_stats',
-          targetBufferName: 'polled_stats',
-          sysStatsConfig: {
-            meminfoPeriodMs: POLLING_INTERVAL_MS,
-            psiPeriodMs: POLLING_INTERVAL_MS,
-            meminfoCounters: [
-              protos.MeminfoCounters.MEMINFO_MEM_TOTAL,
-              protos.MeminfoCounters.MEMINFO_MEM_FREE,
-              protos.MeminfoCounters.MEMINFO_MEM_AVAILABLE,
-              protos.MeminfoCounters.MEMINFO_BUFFERS,
-              protos.MeminfoCounters.MEMINFO_CACHED,
-              protos.MeminfoCounters.MEMINFO_SWAP_TOTAL,
-              protos.MeminfoCounters.MEMINFO_SWAP_FREE,
-              protos.MeminfoCounters.MEMINFO_SWAP_CACHED,
-              protos.MeminfoCounters.MEMINFO_SHMEM,
-              protos.MeminfoCounters.MEMINFO_ACTIVE_ANON,
-              protos.MeminfoCounters.MEMINFO_INACTIVE_ANON,
-              protos.MeminfoCounters.MEMINFO_ACTIVE_FILE,
-              protos.MeminfoCounters.MEMINFO_INACTIVE_FILE,
-              protos.MeminfoCounters.MEMINFO_ANON_PAGES,
-              protos.MeminfoCounters.MEMINFO_SLAB,
-              protos.MeminfoCounters.MEMINFO_KERNEL_STACK,
-              protos.MeminfoCounters.MEMINFO_PAGE_TABLES,
-              protos.MeminfoCounters.MEMINFO_ZRAM,
-              protos.MeminfoCounters.MEMINFO_MAPPED,
-              protos.MeminfoCounters.MEMINFO_DIRTY,
-              protos.MeminfoCounters.MEMINFO_WRITEBACK,
-            ],
-            vmstatPeriodMs: POLLING_INTERVAL_MS,
-            vmstatCounters: [
-              protos.VmstatCounters.VMSTAT_PSWPIN,
-              protos.VmstatCounters.VMSTAT_PSWPOUT,
-              protos.VmstatCounters.VMSTAT_PGFAULT,
-              protos.VmstatCounters.VMSTAT_PGMAJFAULT,
-              protos.VmstatCounters.VMSTAT_WORKINGSET_REFAULT_FILE,
-              protos.VmstatCounters.VMSTAT_PGSTEAL_FILE,
-              protos.VmstatCounters.VMSTAT_PGSCAN_FILE,
-            ],
-          },
-        },
-      },
-      {
-        config: {
-          name: 'linux.ftrace',
-          targetBufferName: 'ftrace',
-          ftraceConfig: {
-            ftraceEvents: [
-              'dmabuf_heap/dma_heap_stat',
-              'sched/sched_process_exit',
-              'sched/sched_process_free',
-              'task/task_newtask',
-              'task/task_rename',
-              'lowmemorykiller/lowmemory_kill',
-              'oom/oom_score_adj_update',
-            ],
-            atraceApps: ['lmkd'],
-            disableGenericEvents: true,
-          },
-        },
-      },
-    ],
+    buffers,
+    dataSources,
   };
 }
 
