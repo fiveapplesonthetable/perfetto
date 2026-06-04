@@ -117,6 +117,16 @@ struct PerfettoTeHlMacroNameAndType {
           PerfettoTeHlProtoFieldBytes,               \
           {{PERFETTO_TE_HL_PROTO_TYPE_BYTES, ID}, VAL, SIZE}))
 
+// A `SIZE` long blob of pre-serialized protobuf starting at `VAL`, appended
+// verbatim into the enclosing message (no field-id wrapper). The blob must be
+// one or more complete, correctly-tagged fields of the enclosing message.
+#define PERFETTO_TE_PROTO_FIELD_RAW(VAL, SIZE)  \
+  PERFETTO_REINTERPRET_CAST(                    \
+      struct PerfettoTeHlProtoField*,           \
+      PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(      \
+          PerfettoTeHlProtoFieldRaw,            \
+          {{PERFETTO_TE_HL_PROTO_TYPE_RAW, 0}, VAL, SIZE}))
+
 // An varint protobuf field (with field id `ID`) and value `VAL`.
 #define PERFETTO_TE_PROTO_FIELD_VARINT(ID, VAL)                          \
   PERFETTO_REINTERPRET_CAST(struct PerfettoTeHlProtoField*,              \

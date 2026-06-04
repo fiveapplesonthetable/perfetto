@@ -93,6 +93,14 @@ int main(void) {
                     perfetto_protos_TrackEvent_source_location_field_number,
                     PERFETTO_TE_PROTO_FIELD_CSTR(2, __FILE__),
                     PERFETTO_TE_PROTO_FIELD_VARINT(4, __LINE__))));
+    // Pre-serialized `debug_annotations { int_value: 42 }` bytes, spliced onto
+    // the event verbatim via a single RAW proto field. Useful when a caller has
+    // already encoded fields on its own side and wants to hand them over as one
+    // blob instead of rebuilding them with the typed macros.
+    static const uint8_t raw_body[] = {0x22, 0x02, 0x20, 0x2a};
+    PERFETTO_TE(physics, PERFETTO_TE_INSTANT("name10"),
+                PERFETTO_TE_PROTO_FIELDS(
+                    PERFETTO_TE_PROTO_FIELD_RAW(raw_body, sizeof(raw_body))));
     PERFETTO_TE(
         physics, PERFETTO_TE_COUNTER(),
         PERFETTO_TE_COUNTER_TRACK("mycounter", PerfettoTeProcessTrackUuid()),

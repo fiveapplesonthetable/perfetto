@@ -2440,6 +2440,37 @@ TEST_F(SharedLibTrackEventTest, TrackEventHlProtoFieldString) {
                           VarIntField(42)))))))))));
 }
 
+TEST_F(SharedLibTrackEventTest, TrackEventHlProtoFieldRaw) {
+  TracingSession tracing_session = TracingSession::Builder()
+                                       .set_data_source_name("track_event")
+                                       .add_enabled_category("*")
+                                       .Build();
+
+  // Wire bytes of `debug_annotations { int_value: 42 }`: TrackEvent field 4
+  // (debug_annotations, length 2) wrapping DebugAnnotation field 4 (int_value,
+  // varint 42). PERFETTO_TE_PROTO_FIELD_RAW splices them onto the event
+  // verbatim, exactly as if the fields had been built with the typed macros.
+  static const uint8_t kRaw[] = {0x22, 0x02, 0x20, 0x2a};
+
+  PERFETTO_TE(cat1, PERFETTO_TE_INSTANT("event"),
+              PERFETTO_TE_PROTO_FIELDS(
+                  PERFETTO_TE_PROTO_FIELD_RAW(kRaw, sizeof(kRaw))));
+
+  tracing_session.StopBlocking();
+  std::vector<uint8_t> data = tracing_session.ReadBlocking();
+  EXPECT_THAT(
+      FieldView(data),
+      Contains(PbField(
+          perfetto_protos_Trace_packet_field_number,
+          AllFieldsWithId(
+              perfetto_protos_TracePacket_track_event_field_number,
+              ElementsAre(AllFieldsWithId(
+                  perfetto_protos_TrackEvent_debug_annotations_field_number,
+                  ElementsAre(MsgField(ElementsAre(PbField(
+                      perfetto_protos_DebugAnnotation_int_value_field_number,
+                      VarIntField(42)))))))))));
+}
+
 TEST_F(SharedLibTrackEventTest, TrackEventHlNestedTrack) {
   TracingSession tracing_session = TracingSession::Builder()
                                        .set_data_source_name("track_event")
