@@ -375,11 +375,9 @@ ANDROID_TRACK_EVENT_PROCESS_TABLE = Table(
     sql_name='__intrinsic_android_track_event_process',
     columns=[
         C('upid', CppTableId(PROCESS_TABLE), cpp_access=CppAccess.READ),
-        C('start_ts',
-          CppOptional(CppInt64()),
+        C('fw_start_ts', CppOptional(CppInt64()),
           cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
-        C('end_ts',
-          CppOptional(CppInt64()),
+        C('fw_end_ts', CppOptional(CppInt64()),
           cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
     ],
     tabledoc=TableDoc(
@@ -387,8 +385,8 @@ ANDROID_TRACK_EVENT_PROCESS_TABLE = Table(
         group='Android',
         columns={
             'upid': 'The process this row describes.',
-            'start_ts': 'Timestamp of AndroidProcessStartEvent.',
-            'end_ts': 'Timestamp of AndroidBinderDiedEvent.',
+            'fw_start_ts': 'Timestamp of AndroidProcessStartEvent.',
+            'fw_end_ts': 'Timestamp of AndroidBinderDiedEvent.',
         },
     ),
 )
