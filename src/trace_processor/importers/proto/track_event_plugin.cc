@@ -18,6 +18,6 @@
 
 namespace perfetto::trace_processor {
 
-TrackEventPluginRegistry::Plugin::~Plugin() = default;
+TrackEventPlugin::~TrackEventPlugin() = default;
 
 }  // namespace perfetto::trace_processor

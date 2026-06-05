@@ -50,7 +50,9 @@ class DummyMemoryMapping;
 
 class TrackEventParser {
  public:
-  TrackEventParser(TraceProcessorContext*, TrackEventTracker*);
+  TrackEventParser(TraceProcessorContext*,
+                   TrackEventTracker*,
+                   const TrackEventPluginRegistry*);
 
   void ParseTrackDescriptor(int64_t packet_timestamp,
                             protozero::ConstBytes,
@@ -66,9 +68,6 @@ class TrackEventParser {
 
   void OnEventsFullyExtracted();
 
-  TrackEventPluginRegistry& mutable_plugins() { return plugins_; }
-  const TrackEventPluginRegistry& plugins() const { return plugins_; }
-
  private:
   friend class TrackEventEventImporter;
 
@@ -83,6 +82,7 @@ class TrackEventParser {
 
   TraceProcessorContext* context_;
   TrackEventTracker* track_event_tracker_;
+  const TrackEventPluginRegistry* plugins_;
 
   const StringId counter_name_thread_time_id_;
   const StringId counter_name_thread_instruction_count_id_;
@@ -136,8 +136,6 @@ class TrackEventParser {
   std::vector<uint32_t> reflect_fields_;
   ActiveChromeProcessesTracker active_chrome_processes_tracker_;
   DummyMemoryMapping* inline_callstack_dummy_mapping_ = nullptr;
-
-  TrackEventPluginRegistry plugins_;
 };
 
 }  // namespace perfetto::trace_processor
