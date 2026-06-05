@@ -52,7 +52,7 @@ class TrackEventParser {
  public:
   TrackEventParser(TraceProcessorContext*,
                    TrackEventTracker*,
-                   const TrackEventPluginRegistry*);
+                   TrackEventPluginRegistry*);
 
   void ParseTrackDescriptor(int64_t packet_timestamp,
                             protozero::ConstBytes,
@@ -82,7 +82,6 @@ class TrackEventParser {
 
   TraceProcessorContext* context_;
   TrackEventTracker* track_event_tracker_;
-  const TrackEventPluginRegistry* plugins_;
 
   const StringId counter_name_thread_time_id_;
   const StringId counter_name_thread_instruction_count_id_;

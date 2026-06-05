@@ -134,11 +134,10 @@ std::optional<base::Status> MaybeParseAndroidJobName(
 
 TrackEventParser::TrackEventParser(TraceProcessorContext* context,
                                    TrackEventTracker* track_event_tracker,
-                                   const TrackEventPluginRegistry* plugins)
+                                   TrackEventPluginRegistry* plugins)
     : args_parser_(*context->descriptor_pool_),
       context_(context),
       track_event_tracker_(track_event_tracker),
-      plugins_(plugins),
       counter_name_thread_time_id_(
           context->storage->InternString("thread_time")),
       counter_name_thread_instruction_count_id_(
@@ -295,6 +294,11 @@ TrackEventParser::TrackEventParser(TraceProcessorContext* context,
   for (uint16_t index : kReflectFields) {
     reflect_fields_.push_back(index);
   }
+
+  // Publish the args parser to the plugin registry. Plugins register after this
+  // parser is constructed (additional modules load after the default ones), and
+  // install their overrides on the args parser at that point.
+  plugins->set_args_parser(&args_parser_);
 }
 
 void TrackEventParser::ParseTrackDescriptor(
@@ -457,8 +461,6 @@ void TrackEventParser::ParseTrackEvent(int64_t ts,
         stats::track_event_dropped_packets_outside_of_range_of_interest);
     return;
   }
-  plugins_->ParseFields(blob, ts);
-
   base::Status status =
       TrackEventEventImporter(this, ts, event_data, blob, packet_sequence_id)
           .Import();

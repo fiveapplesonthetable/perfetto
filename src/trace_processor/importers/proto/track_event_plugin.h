@@ -17,52 +17,55 @@
 #ifndef SRC_TRACE_PROCESSOR_IMPORTERS_PROTO_TRACK_EVENT_PLUGIN_H_
 #define SRC_TRACE_PROCESSOR_IMPORTERS_PROTO_TRACK_EVENT_PLUGIN_H_
 
-#include <cstdint>
-#include <initializer_list>
 #include <memory>
 #include <vector>
 
-#include "perfetto/ext/base/flat_hash_map.h"
-#include "perfetto/protozero/field.h"
-#include "perfetto/protozero/proto_decoder.h"
+#include "perfetto/base/logging.h"
 
 namespace perfetto::trace_processor {
 
-// Parses an extension field nested inside a TrackEvent. Registered against one
-// or more TrackEvent field ids; ParseField runs for each matching field.
+namespace util {
+class ProtoToArgsParser;
+}
+
+// A plugin that handles TrackEvent extension messages at the args level.
+//
+// RegisterOverrides() is called once, when the TrackEventParser is built. A
+// plugin installs parsing overrides on the args parser for the extension
+// message types it owns; each override fires while ParseMessage walks an event,
+// receiving the parsed message. An override may run a side effect and return
+// nullopt to let the field keep flowing into args, or return a Status to take
+// it over (see ProtoToArgsParser::AddParsingOverrideForType).
+//
+// The extension descriptor must be in the pool for an override to fire. The
+// frameworks/base descriptors are registered by RegisterAdditionalModules,
+// which is not linked into the minimal build, so plugins add nothing there.
 class TrackEventPlugin {
  public:
   virtual ~TrackEventPlugin();
-  virtual void ParseField(uint32_t field_id,
-                          protozero::ConstBytes data,
-                          int64_t ts) = 0;
+  virtual void RegisterOverrides(util::ProtoToArgsParser& args_parser) = 0;
 };
 
-// Field-id-keyed dispatch to TrackEventPlugins. A no-op until something
-// registers, so an empty registry costs one check per event.
+// Owns the registered plugins and installs their overrides on the args parser.
+//
+// TrackEventParser publishes its args parser via set_args_parser() when it is
+// constructed. Plugins register later, when the additional proto modules are
+// set up, and each plugin's overrides are installed straight away. The registry
+// stays empty in the minimal build, where no plugin registers.
 class TrackEventPluginRegistry {
  public:
-  // Registers `plugin` to handle each id in `field_ids`. Takes ownership.
-  void Register(std::unique_ptr<TrackEventPlugin> plugin,
-                std::initializer_list<uint32_t> field_ids) {
-    TrackEventPlugin* p = plugin.get();
-    plugins_.push_back(std::move(plugin));
-    for (uint32_t id : field_ids)
-      handlers_.Insert(id, p);
+  void set_args_parser(util::ProtoToArgsParser* args_parser) {
+    args_parser_ = args_parser;
   }
 
-  void ParseFields(protozero::ConstBytes event_bytes, int64_t ts) const {
-    if (handlers_.size() == 0)
-      return;
-    protozero::ProtoDecoder decoder(event_bytes);
-    for (auto f = decoder.ReadField(); f.valid(); f = decoder.ReadField()) {
-      if (auto* h = handlers_.Find(f.id()))
-        (*h)->ParseField(f.id(), f.as_bytes(), ts);
-    }
+  void Register(std::unique_ptr<TrackEventPlugin> plugin) {
+    PERFETTO_DCHECK(args_parser_);
+    plugin->RegisterOverrides(*args_parser_);
+    plugins_.push_back(std::move(plugin));
   }
 
  private:
-  base::FlatHashMap<uint32_t, TrackEventPlugin*> handlers_;
+  util::ProtoToArgsParser* args_parser_ = nullptr;
   std::vector<std::unique_ptr<TrackEventPlugin>> plugins_;
 };
 

@@ -16,11 +16,10 @@
 
 #include "src/trace_processor/plugins/android_framework_track_event/android_framework_track_event.h"
 
-#include <cstdint>
-#include <memory>
 #include <optional>
 
 #include "perfetto/base/compiler.h"
+#include "perfetto/base/status.h"
 #include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/protozero/field.h"
 #include "protos/third_party/android/frameworks/base/proto/tracing/frameworks_base_track_event.pbzero.h"
@@ -31,34 +30,45 @@
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/android_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
+#include "src/trace_processor/util/proto_to_args_parser.h"
 
 namespace perfetto::trace_processor::android_framework_track_event {
 namespace {
 
-using FBTE = ::com::android::internal::pbzero::FrameworksBaseTrackEvent;
 using AndroidProcessStartEvent =
     ::com::android::internal::pbzero::AndroidProcessStartEvent;
 using AndroidBinderDiedEvent =
     ::com::android::internal::pbzero::AndroidBinderDiedEvent;
 
 // Records AndroidProcessStartEvent and AndroidBinderDiedEvent into
-// __intrinsic_android_track_event_process (upid, fw_start_ts, fw_end_ts).
+// __intrinsic_android_track_event_process (upid, fw_start_ts, fw_end_ts). The
+// events are AndroidProcessStartEvent (2010) and AndroidBinderDiedEvent (2013)
+// extensions on TrackEvent, so we hook the args parser by type and let the
+// fields keep flowing into args.
 class Parser : public TrackEventPlugin {
  public:
   explicit Parser(TraceProcessorContext* context) : context_(context) {}
   ~Parser() override = default;
 
-  void ParseField(uint32_t field_id,
-                  protozero::ConstBytes data,
-                  int64_t ts) override {
-    switch (field_id) {
-      case FBTE::kProcessStartEventFieldNumber:
-        HandleProcessStart(data, ts);
-        break;
-      case FBTE::kBinderDiedEventFieldNumber:
-        HandleBinderDied(data, ts);
-        break;
-    }
+  void RegisterOverrides(util::ProtoToArgsParser& args_parser) override {
+    args_parser.AddParsingOverrideForType(
+        ".com.android.internal.AndroidProcessStartEvent",
+        [this](util::ProtoToArgsParser::ScopedNestedKeyContext&,
+               const protozero::ConstBytes& data,
+               util::ProtoToArgsParser::Delegate& delegate)
+            -> std::optional<base::Status> {
+          HandleProcessStart(data, delegate.packet_timestamp());
+          return std::nullopt;
+        });
+    args_parser.AddParsingOverrideForType(
+        ".com.android.internal.AndroidBinderDiedEvent",
+        [this](util::ProtoToArgsParser::ScopedNestedKeyContext&,
+               const protozero::ConstBytes& data,
+               util::ProtoToArgsParser::Delegate& delegate)
+            -> std::optional<base::Status> {
+          HandleBinderDied(data, delegate.packet_timestamp());
+          return std::nullopt;
+        });
   }
 
  private:
@@ -136,8 +146,7 @@ class AndroidFrameworkTrackEventPlugin
       ProtoImporterModuleContext* module_context,
       TraceProcessorContext* trace_context) override {
     module_context->track_event_plugins.Register(
-        std::make_unique<Parser>(trace_context),
-        {FBTE::kProcessStartEventFieldNumber, FBTE::kBinderDiedEventFieldNumber});
+        std::make_unique<Parser>(trace_context));
   }
 };
 
