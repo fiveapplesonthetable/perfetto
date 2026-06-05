@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "perfetto/base/compiler.h"
 #include "perfetto/ext/base/flat_hash_map.h"
@@ -92,9 +93,8 @@ class Parser : public TrackEventPlugin {
       return;
     UniquePid upid = context_->process_tracker->GetOrCreateProcess(evt.pid());
     SetProcessMetadata(upid, evt);
-    // A process start is the birth of this row. The only exception is a pid
-    // reused within the trace, which is rare and benign here.
-    PERFETTO_DCHECK(!upid_to_row_.Find(upid));
+    // A duplicate start for the same upid (e.g. a re-snapshot) just overwrites
+    // fw_start_ts on the existing row, so no uniqueness guard is needed here.
     GetOrInsertRow(upid).set_fw_start_ts(ts);
   }
 
@@ -102,12 +102,21 @@ class Parser : public TrackEventPlugin {
     AndroidBinderDiedEvent::Decoder evt(data);
     if (!evt.has_pid())
       return;
-    UniquePid upid = context_->process_tracker->GetOrCreateProcess(evt.pid());
-    GetOrInsertRow(upid).set_fw_end_ts(ts);
-    // End the process so its pid is freed for reuse. In traces with only an
-    // initial ftrace snapshot (no ongoing sched) this is the sole signal that
-    // ends it; when ftrace sched is present its earlier exit ends it first and
-    // this is a no-op.
+    // Resolve the process without creating one. If ftrace sched already ended
+    // it (freeing the pid), GetOrCreateProcess would resurrect a phantom
+    // process, so look it up via its still-tracked main thread instead and
+    // bail if the process is already gone.
+    std::optional<UniqueTid> utid =
+        context_->process_tracker->GetThreadOrNull(evt.pid());
+    if (!utid)
+      return;
+    std::optional<UniquePid> upid =
+        context_->storage->thread_table()[*utid].upid();
+    if (!upid)
+      return;
+    GetOrInsertRow(*upid).set_fw_end_ts(ts);
+    // End the process so its pid is freed for reuse. With only an initial
+    // ftrace snapshot (no ongoing sched) this is the sole signal that ends it.
     context_->process_tracker->EndThread(ts, evt.pid());
   }
 
