@@ -52,8 +52,43 @@ source_set("android_bugreport") {
     "android_log_event_parser.h",
     "android_log_reader.cc",
     "android_log_reader.h",
+    "bugreport_format.cc",
+    "bugreport_format.h",
+    "bugreport_parser_registry.cc",
+    "bugreport_parsers.h",
+    "bugreport_section_parser.h",
+    "bugreport_time.cc",
+    "bugreport_time.h",
+    "bugreport_timeline_emitter.cc",
+    "bugreport_timeline_emitter.h",
+    "bugreport_timeline_event.h",
     "chunked_line_reader.cc",
     "chunked_line_reader.h",
+    "dumpstate_vm_traces_parser.cc",
+    "dumpsys_activity_processes_parser.cc",
+    "dumpsys_activity_services_parser.cc",
+    "dumpsys_alarm_parser.cc",
+    "dumpsys_app_hibernation_parser.cc",
+    "dumpsys_appops_parser.cc",
+    "dumpsys_audio_parser.cc",
+    "dumpsys_bluetooth_parser.cc",
+    "dumpsys_broadcasts_parser.cc",
+    "dumpsys_connmetrics_parser.cc",
+    "dumpsys_dbinfo_parser.cc",
+    "dumpsys_display_parser.cc",
+    "dumpsys_dropbox_parser.cc",
+    "dumpsys_eventlog_parser.cc",
+    "dumpsys_input_method_parser.cc",
+    "dumpsys_input_parser.cc",
+    "dumpsys_jobscheduler_parser.cc",
+    "dumpsys_media_metrics_parser.cc",
+    "dumpsys_misc_history_parser.cc",
+    "dumpsys_notification_parser.cc",
+    "dumpsys_package_parser.cc",
+    "dumpsys_power_parser.cc",
+    "dumpsys_sensorservice_parser.cc",
+    "dumpsys_settings_parser.cc",
+    "dumpsys_usagestats_parser.cc",
   ]
   deps = [
     ":android_dumpstate_event",
@@ -75,7 +110,10 @@ source_set("android_bugreport") {
 }
 
 perfetto_unittest_source_set("unittests") {
-  sources = [ "android_log_unittest.cc" ]
+  sources = [
+    "android_log_unittest.cc",
+    "bugreport_time_unittest.cc",
+  ]
   testonly = true
   deps = [
     ":android_bugreport",

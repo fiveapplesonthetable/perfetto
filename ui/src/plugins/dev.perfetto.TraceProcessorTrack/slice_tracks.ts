@@ -74,6 +74,11 @@ interface SliceTrackTypeSchema {
 
 export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
   {
+    type: 'android_bugreport',
+    topLevelGroup: undefined,
+    group: 'Bugreport',
+  },
+  {
     type: 'battery_stats',
     topLevelGroup: 'POWER',
     group: 'Battery Stats',

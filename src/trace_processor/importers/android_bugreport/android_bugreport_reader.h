@@ -71,6 +71,7 @@ class AndroidBugreportReader {
   base::Status ParsePersistentLogcat(const BugReportFile&,
                                      const std::set<LogFile>&,
                                      std::vector<TimestampedAndroidLogEvent>);
+  base::Status ParseAuxiliaryFiles(std::vector<util::ZipFile>& files);
 
   TraceProcessorContext* const context_;
   std::unique_ptr<AndroidDumpstateReader> dumpstate_reader_;

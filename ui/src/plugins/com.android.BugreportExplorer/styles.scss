@@ -1,0 +1,317 @@
+// Copyright (C) 2026 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Styles for the Bugreport Explorer plugin.
+
+// The two panes and their scroll containers are laid out here; all visual
+// styling (list items, selection, header bar, ...) comes from the standard
+// widgets (Menu/MenuItem, DetailsShell, ButtonGroup, ...).
+
+.pf-bre-page {
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+// ---- Left pane: search box + Menu of sections/services ----
+
+.pf-bre-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pf-bre-sidebar__search {
+  flex-shrink: 0;
+  padding: 0.5rem;
+
+  .pf-text-input {
+    width: 100%;
+  }
+}
+
+.pf-bre-sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+// ---- Right pane: DetailsShell with the section content ----
+
+.pf-bre-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pf-bre-loading {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pf-bre-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pf-bre-content__inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+// ---- Structured view: the two-pane entity browser (entity_view.ts) ----
+// Mirrors the SurfaceFlinger viewer layout: flex panes over a tinted
+// background whose 1px gap draws the divider, both panes scrollable, all
+// colours from the theme variables.
+
+.pf-bre-ev {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  gap: 1px;
+  background: var(--pf-color-border);
+}
+
+.pf-bre-ev__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  // Both axes scroll so long entity names / deep trees / wide values are
+  // reachable instead of being clipped.
+  overflow: auto;
+  background: var(--pf-color-background);
+
+  &--structure {
+    flex: 1 1 0;
+  }
+  &--props {
+    flex: 1.1 1 0;
+  }
+
+  // Let the Section fill the pane so the properties DataGrid can flex to the
+  // remaining height.
+  > .pf-section {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    border: none;
+
+    > article {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+  }
+}
+
+.pf-bre-ev__search {
+  flex-shrink: 0;
+  margin-bottom: 4px;
+  width: 100%;
+}
+
+.pf-bre-ev__tree {
+  // Grow to content so the enclosing pane scrolls horizontally rather than
+  // squashing or clipping nodes.
+  min-width: max-content;
+
+  // The Tree widget bolds its left column (it is designed for key:value
+  // pairs); entity names here are labels, not keys.
+  .pf-tree-left {
+    font-weight: normal;
+  }
+}
+
+// A selectable entity node in the hierarchy.
+.pf-bre-hnode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--pf-color-text);
+
+  &--sel {
+    background: color-mix(in srgb, var(--pf-color-accent) 24%, transparent);
+  }
+  &__name {
+    white-space: nowrap;
+  }
+  // Quiet child-entity count.
+  &__count {
+    color: var(--pf-color-text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  // Noisy remainder of the entity line ("{a1b2c3 ...}" hash blobs).
+  &__dim {
+    color: var(--pf-color-text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+    max-width: 36ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.pf-bre-ev__toolbar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.pf-bre-ev__grid {
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.pf-bre-ev__empty {
+  padding: 12px;
+  color: var(--pf-color-text-muted);
+}
+
+// Collapsed block with the entity's prose/text lines.
+.pf-bre-ev__text {
+  flex-shrink: 0;
+  padding: 0.25rem 0;
+
+  summary {
+    cursor: pointer;
+    color: var(--pf-color-text-muted);
+    font-size: 0.75rem;
+    user-select: none;
+  }
+}
+
+.pf-bre-ev__text-lines {
+  font-family: var(--pf-font-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.1rem;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+// ---- DataGrid-based renderers ----
+
+.pf-bre-grid-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// Vertically stacked sub-grids (e.g. the meminfo PSS tables); the outer
+// content container provides the scrolling.
+.pf-bre-stacked {
+  padding-bottom: 0.5rem;
+}
+
+.pf-bre-subheading {
+  font-weight: 600;
+  padding: 0.75rem 0.75rem 0.25rem;
+}
+
+.pf-bre-subgrid {
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+// ---- Key/value header block (meminfo summary, cpuinfo load, ...) ----
+
+.pf-bre-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.125rem 1rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--pf-color-border-secondary);
+  flex-shrink: 0;
+}
+
+.pf-bre-kv__key {
+  font-weight: 600;
+  color: var(--pf-color-text-muted);
+  white-space: nowrap;
+}
+
+.pf-bre-kv__value {
+  overflow-wrap: anywhere;
+}
+
+// ---- "N unrecognized lines" fallback for table renderers ----
+
+.pf-bre-unparsed {
+  flex-shrink: 0;
+  padding: 0.25rem 0.75rem;
+
+  summary {
+    cursor: pointer;
+    color: var(--pf-color-text-muted);
+    font-size: 0.75rem;
+    user-select: none;
+  }
+}
+
+.pf-bre-unparsed__lines {
+  font-family: var(--pf-font-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.1rem;
+  overflow-x: auto;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+// ---- Raw view ----
+
+.pf-bre-raw {
+  padding: 0.5rem 0.75rem;
+  font-family: var(--pf-font-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.1rem;
+}
+
+.pf-bre-raw__line {
+  white-space: pre;
+}
+
+.pf-bre-truncation-note {
+  color: var(--pf-color-text-muted);
+  font-style: italic;
+  padding: 0.25rem 0;
+}

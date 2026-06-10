@@ -263,6 +263,9 @@ def CheckChangeHasNoTabs(changed_files: List[str]) -> List[str]:
           '*.png',
           '*.jpg',
           '*/test/data/*',
+          # Diff test goldens are verbatim trace_processor output and may
+          # contain tabs embedded in trace data (e.g. kernel log messages).
+          '*/diff_tests/*.out',
           'Makefile',
           'rules',
           '*.descriptor',

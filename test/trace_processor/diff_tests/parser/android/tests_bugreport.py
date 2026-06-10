@@ -176,3 +176,77 @@ class AndroidBugreport(TestSuite):
     "(com.qualcomm.qti.telephonyservice)",2502,7180,7180,553,0,6772,0,408,0,0,0,0,0,0,0,1,0,"space]"
     "(com.google.android.grilservice)",2503,7180,7180,553,0,6772,0,408,0,0,0,0,0,0,0,1,0,"space]"
         """))
+
+  def test_android_bugreport_timeline_tracks(self):
+    return DiffTestBlueprint(
+        trace=DataPath('bugreport-crosshatch-SPB5.zip'),
+        query="""
+        SELECT track.name AS track_name, count(*) AS cnt
+        FROM track JOIN slice ON slice.track_id = track.id
+        WHERE track.type GLOB 'android_bugreport*'
+        GROUP BY 1 ORDER BY 1;
+        """,
+        out=Csv("""
+        "track_name","cnt"
+        "Activity launches",2
+        "Alarms",16
+        "App services events",38
+        "App usage",52
+        "AppOps",306
+        "Audio",67
+        "Broadcasts (background)",300
+        "Broadcasts (foreground)",68
+        "DefaultCellBroadcastService events",1
+        "Dropbox",64
+        "GcmService events",7
+        "GoogleLocationManagerService events",10
+        "GoogleLocationService events",118
+        "IME",26
+        "Job history",51
+        "Media metrics",263
+        "Network metrics",2
+        "Notifications",4
+        "Power: wake locks",1030
+        "Provider connections",31
+        "Recent tasks",5
+        "Sensors",111
+        "Service starts",93
+        "Stack dumps",76
+        "SystemUIAuxiliaryDumpService events",1766
+        "TelephonyDebugService events",212
+        "Usage events",359
+        "activity events",15
+        "bluetooth_manager events",10
+        "carrier_config events",16
+        "connectivity events",20
+        "content events",14
+        "content_capture events",4
+        "econtroller events",32
+        "isms events",72
+        "isub events",47
+        "media.audio_flinger events",54
+        "media.metrics events",4
+        "netd events",127
+        "netpolicy events",749
+        "network_stack events",2
+        "notification events",18
+        "phone events",32
+        "telecom events",2
+        "telephony.registry events",39
+        "tethering events",36
+        "wifi events",207
+        "wifiaware events",9
+        "wifiscanner events",126
+        """))
+
+  def test_android_bugreport_timeline_events(self):
+    return DiffTestBlueprint(
+        trace=DataPath('bugreport-crosshatch-SPB5.zip'),
+        query="""
+        SELECT track.name AS track_name, slice.ts, slice.dur, slice.name
+        FROM track JOIN slice ON slice.track_id = track.id
+        WHERE track.type GLOB 'android_bugreport*'
+        ORDER BY slice.ts, track.name, slice.name
+        LIMIT 30;
+        """,
+        out=Path('android_bugreport_timeline_events_test.out'))

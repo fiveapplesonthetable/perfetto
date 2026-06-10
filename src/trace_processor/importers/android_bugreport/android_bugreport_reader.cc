@@ -57,6 +57,27 @@ bool IsLogFile(const util::ZipFile& file) {
          !base::EndsWith(file.name(), "logcat.id");
 }
 
+// Auxiliary text files in the zip (FS/proc/*, FS/data/anr/*, tombstones,
+// dumpstate_log.txt, ...) are ingested into the android_dumpstate table so
+// they are browsable; ANR/tombstone files also feed the stack-dump parser.
+// Known-binary artifacts (the proto/ dumps, screenshots, config.gz) are
+// skipped by extension, plus a NUL-byte sniff for anything else.
+bool IsKnownBinaryFile(const std::string& name) {
+  static constexpr const char* kBinarySuffixes[] = {
+      ".png", ".jpg", ".zip",
+      ".gz",  ".pb",  ".proto",
+      ".id",  ".bin", ".perfetto-trace",
+      ".so"};
+  for (const char* suffix : kBinarySuffixes) {
+    if (base::EndsWith(name, suffix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+constexpr int64_t kMaxAuxFileSize = 4 * 1024 * 1024;
+
 // Extracts the year field from the bugreport-xxx.txt file name.
 // This is because logcat events have only the month and day.
 // This is obviously bugged for cases of bugreports collected across new year
@@ -139,8 +160,42 @@ base::Status AndroidBugreportReader::Parse(std::vector<util::ZipFile> files) {
 
   ASSIGN_OR_RETURN(std::vector<TimestampedAndroidLogEvent> logcat_events,
                    ParseDumpstateTxt(bug_report));
-  return ParsePersistentLogcat(bug_report, ordered_log_files,
-                               std::move(logcat_events));
+  RETURN_IF_ERROR(ParsePersistentLogcat(bug_report, ordered_log_files,
+                                        std::move(logcat_events)));
+  return ParseAuxiliaryFiles(files);
+}
+
+base::Status AndroidBugreportReader::ParseAuxiliaryFiles(
+    std::vector<util::ZipFile>& files) {
+  for (util::ZipFile& file : files) {
+    const std::string& name = file.name();
+    // Log files were std::move()d out of the vector earlier.
+    if (name.empty() || file.uncompressed_size() == 0 ||
+        file.uncompressed_size() > kMaxAuxFileSize || IsKnownBinaryFile(name)) {
+      continue;
+    }
+    dumpstate_reader_->StartAuxiliaryFile(name);
+    bool looks_binary = false;
+    base::Status status =
+        file.DecompressLines([&](const std::vector<base::StringView>& lines) {
+          for (const base::StringView& line : lines) {
+            if (looks_binary) {
+              return;
+            }
+            if (line.find('\0') != base::StringView::npos) {
+              looks_binary = true;
+              return;
+            }
+            dumpstate_reader_->ParseAuxiliaryFileLine(line);
+          }
+        });
+    // Decompression errors on one auxiliary file shouldn't fail the import.
+    if (!status.ok()) {
+      continue;
+    }
+  }
+  dumpstate_reader_->FinishAuxiliaryFiles();
+  return base::OkStatus();
 }
 
 base::StatusOr<std::vector<TimestampedAndroidLogEvent>>
@@ -154,6 +209,8 @@ AndroidBugreportReader::ParseDumpstateTxt(const BugReportFile& bug_report) {
           dumpstate_reader_->ParseLine(&log_reader, line);
         }
       });
+
+  dumpstate_reader_->EndOfStream(base::StringView());
 
   std::vector<TimestampedAndroidLogEvent> logcat_events =
       std::move(log_reader).ConsumeBufferedEvents();

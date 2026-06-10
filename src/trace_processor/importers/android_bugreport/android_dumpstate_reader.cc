@@ -29,6 +29,7 @@
 #include "perfetto/ext/base/string_view_splitter.h"
 #include "src/trace_processor/importers/android_bugreport/android_battery_stats_reader.h"
 #include "src/trace_processor/importers/android_bugreport/android_log_reader.h"
+#include "src/trace_processor/importers/android_bugreport/bugreport_parsers.h"
 #include "src/trace_processor/importers/common/clock_tracker.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/android_tables_py.h"
@@ -37,9 +38,25 @@
 namespace perfetto::trace_processor {
 
 AndroidDumpstateReader::AndroidDumpstateReader(TraceProcessorContext* context)
-    : context_(context), battery_stats_reader_(context) {}
+    : context_(context),
+      battery_stats_reader_(context),
+      format_parser_(context),
+      timeline_emitter_(context, &format_parser_.format()) {}
 
 AndroidDumpstateReader::~AndroidDumpstateReader() = default;
+
+void AndroidDumpstateReader::SwitchSectionParser(
+    android_bugreport::BugreportParserRegistration::Target target,
+    base::StringView name) {
+  for (auto& parser : current_section_parsers_) {
+    parser->EndOfSection();
+  }
+  android_bugreport::BugreportParserDeps deps{
+      context_, &format_parser_.format(), &timeline_emitter_,
+      name.ToStdString()};
+  current_section_parsers_ =
+      android_bugreport::BugreportParserRegistry::Create(target, name, deps);
+}
 
 base::Status AndroidDumpstateReader::ParseLine(base::StringView line) {
   if (!default_log_reader_) {
@@ -82,6 +99,15 @@ base::Status AndroidDumpstateReader::ParseLine(
   // Here we put each line in a dedicated table, android_dumpstate, keeping
   // track of the dumpstate `section` and dumpsys `service`.
   static constexpr size_t npos = base::StringView::npos;
+  using ParserTarget = android_bugreport::BugreportParserRegistration::Target;
+  if (in_preamble_) {
+    if (line.StartsWith("------ ")) {
+      in_preamble_ = false;
+      format_parser_.Finalize();
+    } else {
+      format_parser_.ParseLine(line);
+    }
+  }
   if (line.StartsWith("------ ") && line.EndsWith(" ------")) {
     // These lines mark the beginning and end of dumpstate sections:
     // ------ DUMPSYS CRITICAL (/system/bin/dumpsys) ------
@@ -93,7 +119,9 @@ base::Status AndroidDumpstateReader::ParseLine(
     current_service_ = "";
     if (end_marker) {
       current_section_id_ = StringId::Null();
+      SwitchSectionParser(ParserTarget::kSection, "");
     } else {
+      SwitchSectionParser(ParserTarget::kSection, section);
       current_section_id_ = context_->storage->InternString(section);
       current_section_ = Section::kOther;
       if (section.StartsWith("DUMPSYS")) {
@@ -101,9 +129,14 @@ base::Status AndroidDumpstateReader::ParseLine(
       } else if (section.StartsWith("SYSTEM LOG") ||
                  section.StartsWith("EVENT LOG") ||
                  section.StartsWith("RADIO LOG")) {
-        // KERNEL LOG is deliberately omitted because SYSTEM LOG is a
-        // superset. KERNEL LOG contains all dupes.
         current_section_ = Section::kLog;
+      } else if (section.StartsWith("KERNEL LOG")) {
+        // On some devices logcat includes the kernel buffer, making KERNEL
+        // LOG a near-complete duplicate of SYSTEM LOG; on others it is the
+        // only source of kernel messages. Parse it through a deduplicating
+        // reader so unique lines (e.g. early boot) are kept either way.
+        current_section_ = Section::kDedupLog;
+        dedup_log_reader_.reset();
       } else if (section.StartsWith("BLOCK STAT")) {
         // Coalesce all the block stats into one section. Otherwise they
         // pollute the table with one section per block device.
@@ -119,6 +152,7 @@ base::Status AndroidDumpstateReader::ParseLine(
       line.find("was the duration of dumpsys") != npos) {
     current_service_id_ = StringId::Null();
     current_service_ = "";
+    SwitchSectionParser(ParserTarget::kDumpsysService, "");
     return base::OkStatus();
   }
   if (current_section_ == Section::kDumpsys && current_service_id_.is_null() &&
@@ -137,14 +171,28 @@ base::Status AndroidDumpstateReader::ParseLine(
     svc = svc.substr(0, svc.size() - 1);
     current_service_id_ = context_->storage->InternString(svc);
     current_service_ = svc;
+    SwitchSectionParser(ParserTarget::kDumpsysService, svc);
   } else if (current_section_ == Section::kDumpsys &&
              current_service_ == "alarm") {
     MaybeSetTzOffsetFromAlarmService(line);
   } else if (current_section_ == Section::kLog) {
     PERFETTO_DCHECK(log_reader != nullptr);
     RETURN_IF_ERROR(log_reader->ParseLine(line));
+  } else if (current_section_ == Section::kDedupLog) {
+    PERFETTO_DCHECK(log_reader != nullptr);
+    if (!dedup_log_reader_) {
+      // Snapshot the events buffered so far (i.e. the other log sections of
+      // this dumpstate file) as the dedup candidates.
+      dedup_log_reader_ = std::make_unique<DedupingAndroidLogReader>(
+          context_, log_reader->year(), /*wait_for_tz=*/true,
+          log_reader->buffered_events());
+    }
+    RETURN_IF_ERROR(dedup_log_reader_->ParseLine(line));
   } else if (current_section_ == Section::kBatteryStats) {
     RETURN_IF_ERROR(battery_stats_reader_.ParseLine(line));
+  }
+  for (auto& parser : current_section_parsers_) {
+    RETURN_IF_ERROR(parser->ParseLine(line));
   }
 
   // Append the line to the android_dumpstate table.
@@ -232,9 +280,62 @@ void AndroidDumpstateReader::MaybeSetTzOffsetFromAlarmService(
     int64_t tz_offset_ns =
         (tz_adjusted_ts_ms - non_tz_adjusted_ts_ms.value()) * 1000 * 1000;
     context_->clock_tracker->set_timezone_offset(tz_offset_ns);
+
+    // The same line also carries an exact elapsedRealtime <-> wall-clock
+    // anchor ("nowELAPSED=<ms>"), which lets section parsers convert
+    // elapsed-based timestamps to wall-clock.
+    std::optional<int64_t> now_elapsed_ms = base::StringViewToInt64(
+        line.substr(end_of_rtc_str + strlen(" nowELAPSED=")));
+    if (now_elapsed_ms.has_value()) {
+      format_parser_.SetElapsedAnchor(tz_adjusted_ts_ms, *now_elapsed_ms);
+    }
   }
 }
 
-void AndroidDumpstateReader::EndOfStream(base::StringView) {}
+void AndroidDumpstateReader::StartAuxiliaryFile(const std::string& name) {
+  if (aux_parser_) {
+    aux_parser_->EndOfSection();
+    aux_parser_.reset();
+  }
+  aux_section_id_ = context_->storage->InternString(base::StringView(name));
+  // ANR dumps and tombstones contain "----- pid N at <ts> -----" stack dump
+  // headers, same as the VM TRACES sections.
+  if (name.find("/anr/") != std::string::npos ||
+      name.find("tombstone") != std::string::npos) {
+    android_bugreport::BugreportParserDeps deps{
+        context_, &format_parser_.format(), &timeline_emitter_, name};
+    aux_parser_ = android_bugreport::CreateVmTracesParser(deps);
+  }
+}
+
+base::Status AndroidDumpstateReader::ParseAuxiliaryFileLine(
+    base::StringView line) {
+  if (aux_parser_) {
+    RETURN_IF_ERROR(aux_parser_->ParseLine(line));
+  }
+  context_->storage->mutable_android_dumpstate_table()->Insert(
+      {aux_section_id_, StringId::Null(),
+       context_->storage->InternString(line)});
+  return base::OkStatus();
+}
+
+void AndroidDumpstateReader::FinishAuxiliaryFiles() {
+  if (aux_parser_) {
+    aux_parser_->EndOfSection();
+    aux_parser_.reset();
+  }
+  timeline_emitter_.Flush();
+}
+
+void AndroidDumpstateReader::EndOfStream(base::StringView) {
+  for (auto& parser : current_section_parsers_) {
+    parser->EndOfSection();
+  }
+  current_section_parsers_.clear();
+  if (dedup_log_reader_) {
+    dedup_log_reader_->EndOfStream(base::StringView());
+  }
+  timeline_emitter_.Flush();
+}
 
 }  // namespace perfetto::trace_processor

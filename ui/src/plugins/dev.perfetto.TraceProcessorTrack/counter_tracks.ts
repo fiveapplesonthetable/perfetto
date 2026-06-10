@@ -77,6 +77,11 @@ export const COUNTER_TRACK_SCHEMAS: ReadonlyArray<CounterTrackTypeSchema> = [
     group: 'Android Energy Estimates',
   },
   {
+    type: 'android_bugreport_counter',
+    topLevelGroup: undefined,
+    group: 'Bugreport',
+  },
+  {
     type: 'atrace_counter',
     topLevelGroup: 'PROCESS',
     group: undefined,

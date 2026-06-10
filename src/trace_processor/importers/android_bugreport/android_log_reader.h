@@ -83,6 +83,8 @@ class AndroidLogReader : public ChunkedLineReader {
   virtual base::Status ProcessEvent(std::chrono::nanoseconds event_ts,
                                     AndroidLogEvent event);
 
+  int32_t year() const { return default_year_; }
+
  protected:
   // Sends the given event to the sorting stage.
   // `event_ts` is the ts of the event as read from the log and will be
@@ -124,6 +126,10 @@ class BufferingAndroidLogReader : public AndroidLogReader {
 
   std::vector<TimestampedAndroidLogEvent> ConsumeBufferedEvents() && {
     return std::move(events_);
+  }
+
+  const std::vector<TimestampedAndroidLogEvent>& buffered_events() const {
+    return events_;
   }
 
  private:

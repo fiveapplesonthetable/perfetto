@@ -34,6 +34,7 @@ export const defaultPlugins = [
   'com.android.AndroidPerfTraceCounters',
   'com.android.AndroidStartup',
   'com.android.Bluetooth',
+  'com.android.BugreportExplorer',
   'com.android.ContainedTraces',
   'com.android.CpuPerUid',
   'com.android.CujFrameDebugTrack',
