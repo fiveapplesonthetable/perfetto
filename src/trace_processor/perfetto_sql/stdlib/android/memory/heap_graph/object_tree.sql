@@ -175,3 +175,41 @@ AS (
   ORDER BY
     total_cumulative_size DESC
 );
+
+-- Direct reference counts per reachable object, one linear pass each over
+-- heap_graph_reference; materialized once when this module is included.
+-- Both counts are scoped to the live subgraph, making them exact duals
+-- (their totals over the whole graph are identical):
+-- - NULL `owned_id` rows are fields holding null and don't count.
+-- - Incoming counts only references from reachable owners: references from
+--   unreachable (garbage) objects hold nothing alive.
+-- - Outgoing counts only references to reachable targets: the only
+--   references a reachable object can hold to unreachable ones are
+--   dead-but-uncleared weak/phantom/finalizer referents.
+CREATE PERFETTO TABLE _heap_graph_incoming_refs AS
+SELECT ref.owned_id AS id, count() AS cnt
+FROM heap_graph_reference AS ref
+JOIN heap_graph_object AS owner_obj
+  ON ref.owner_id = owner_obj.id
+JOIN heap_graph_object AS owned_obj
+  ON ref.owned_id = owned_obj.id
+WHERE
+  owner_obj.reachable
+  AND owned_obj.reachable
+GROUP BY
+  ref.owned_id
+ORDER BY
+  id;
+
+CREATE PERFETTO TABLE _heap_graph_outgoing_refs AS
+SELECT ref.owner_id AS id, count() AS cnt
+FROM heap_graph_reference AS ref
+JOIN heap_graph_object AS owner_obj ON ref.owner_id = owner_obj.id
+JOIN heap_graph_object AS owned_obj ON ref.owned_id = owned_obj.id
+WHERE
+  owner_obj.reachable
+  AND owned_obj.reachable
+GROUP BY
+  ref.owner_id
+ORDER BY
+  id;

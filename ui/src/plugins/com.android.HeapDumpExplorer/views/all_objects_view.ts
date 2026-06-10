@@ -57,12 +57,17 @@ function buildQuery(activeDump: HeapDump): string {
         ifnull(d.dominated_size_bytes, o.self_size) AS retained,
         ifnull(d.dominated_native_size_bytes, o.native_size) AS retained_native,
         ifnull(d.dominated_obj_count, 1) AS retained_count,
+        ifnull(inr.cnt, 0) AS in_refs,
+        ifnull(outr.cnt, 0) AS out_refs,
         ifnull(o.heap_type, 'default') AS heap,
+        o.root_type,
         od.value_string AS str
       FROM heap_graph_object o
       JOIN heap_graph_class c ON o.type_id = c.id
       LEFT JOIN heap_graph_dominator_tree d ON d.id = o.id
       LEFT JOIN heap_graph_object_data od ON o.object_data_id = od.id
+      LEFT JOIN _heap_graph_incoming_refs inr ON inr.id = o.id
+      LEFT JOIN _heap_graph_outgoing_refs outr ON outr.id = o.id
       WHERE o.reachable != 0
         AND ${dumpFilterSql(activeDump, 'o')}
     ) base
@@ -149,8 +154,24 @@ function makeUiSchema(navigate: NavFn): SchemaRegistry {
         columnType: 'quantitative',
         cellRenderer: countRenderer,
       },
+      in_refs: {
+        title: colHeader('In Refs', COL_INFO.incomingRefs),
+        titleString: 'In Refs',
+        columnType: 'quantitative',
+        cellRenderer: countRenderer,
+      },
+      out_refs: {
+        title: colHeader('Out Refs', COL_INFO.outgoingRefs),
+        titleString: 'Out Refs',
+        columnType: 'quantitative',
+        cellRenderer: countRenderer,
+      },
       heap: {
         title: 'Heap',
+        columnType: 'text',
+      },
+      root_type: {
+        title: 'Root Type',
         columnType: 'text',
       },
       cls: {
@@ -219,7 +240,10 @@ function AllObjectsView(): m.Component<AllObjectsViewAttrs> {
             {id: 'reachable_size', field: 'reachable_size'},
             {id: 'reachable_native', field: 'reachable_native'},
             {id: 'reachable_count', field: 'reachable_count'},
+            {id: 'in_refs', field: 'in_refs'},
+            {id: 'out_refs', field: 'out_refs'},
             {id: 'heap', field: 'heap'},
+            {id: 'root_type', field: 'root_type'},
           ],
           filters,
           showExportButton: true,

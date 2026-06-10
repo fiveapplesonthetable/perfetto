@@ -21,6 +21,51 @@ from python.generators.diff_tests.testing import TestSuite
 
 class HeapGraph(TestSuite):
 
+  def test_heap_graph_dominator_tree_reference_counts(self):
+    return DiffTestBlueprint(
+        trace=Path('heap_graph_for_dominator_tree.textproto'),
+        query="""
+          INCLUDE PERFETTO MODULE android.memory.heap_graph.object_tree;
+
+          SELECT
+            cls.name AS type_name,
+            ifnull(inr.cnt, 0) AS in_refs,
+            ifnull(outr.cnt, 0) AS out_refs
+          FROM heap_graph_object obj
+          JOIN heap_graph_class cls ON obj.type_id = cls.id
+          LEFT JOIN _heap_graph_incoming_refs inr ON inr.id = obj.id
+          LEFT JOIN _heap_graph_outgoing_refs outr ON outr.id = obj.id
+          WHERE obj.reachable != 0
+          ORDER BY type_name;
+        """,
+        out=Csv("""
+          "type_name","in_refs","out_refs"
+          "A",2,1
+          "B",1,3
+          "C",1,2
+          "D",2,1
+          "E",2,1
+          "F",1,1
+          "G",1,2
+          "H",2,2
+          "I",4,1
+          "J",1,1
+          "K",2,2
+          "L",1,1
+          "M",1,2
+          "N",2,2
+          "O",1,3
+          "P",1,0
+          "Q",1,0
+          "R",1,3
+          "S",0,2
+          "T",1,0
+          "U",1,0
+          "V",1,0
+          "W",1,0
+          "sun.misc.Cleaner",0,1
+        """))
+
   def test_heap_graph_dominator_tree(self):
     return DiffTestBlueprint(
         trace=Path('heap_graph_for_dominator_tree.textproto'),

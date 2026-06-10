@@ -225,6 +225,10 @@ export const COL_INFO = {
     'Native size of every object reachable from this one (BFS tree). ' +
     'Includes objects also reachable via other paths.',
   reachableCount: 'Count of objects reachable from this one (BFS tree).',
+  incomingRefs:
+    'Count of direct (non-null) references from other objects to this one.',
+  outgoingRefs:
+    'Count of direct non-null references from this object to other objects.',
   bitmapStorage:
     'Pixel-storage backing decoded from Bitmap.mId. ' +
     "'heap' = malloc'd in this process — each duplicate is real RAM cost. " +

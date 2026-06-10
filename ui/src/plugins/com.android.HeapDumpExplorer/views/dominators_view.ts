@@ -48,6 +48,8 @@ function buildQuery(activeDump: HeapDump): string {
       ifnull(d.dominated_size_bytes, o.self_size) AS retained,
       ifnull(d.dominated_native_size_bytes, o.native_size) AS retained_native,
       d.dominated_obj_count AS retained_count,
+      ifnull(inr.cnt, 0) AS in_refs,
+      ifnull(outr.cnt, 0) AS out_refs,
       ifnull(o.heap_type, 'default') AS heap,
       o.root_type,
       a.cumulative_size AS reachable_size,
@@ -57,6 +59,8 @@ function buildQuery(activeDump: HeapDump): string {
     JOIN heap_graph_object o ON d.id = o.id
     JOIN heap_graph_class c ON o.type_id = c.id
     LEFT JOIN _heap_graph_object_tree_aggregation a ON a.id = o.id
+    LEFT JOIN _heap_graph_incoming_refs inr ON inr.id = o.id
+    LEFT JOIN _heap_graph_outgoing_refs outr ON outr.id = o.id
     WHERE d.idom_id IS NULL
       AND ${dumpFilterSql(activeDump, 'o')}
   `;
@@ -130,6 +134,18 @@ function makeUiSchema(navigate: NavFn): SchemaRegistry {
         columnType: 'quantitative',
         cellRenderer: countRenderer,
       },
+      in_refs: {
+        title: colHeader('In Refs', COL_INFO.incomingRefs),
+        titleString: 'In Refs',
+        columnType: 'quantitative',
+        cellRenderer: countRenderer,
+      },
+      out_refs: {
+        title: colHeader('Out Refs', COL_INFO.outgoingRefs),
+        titleString: 'Out Refs',
+        columnType: 'quantitative',
+        cellRenderer: countRenderer,
+      },
       heap: {
         title: 'Heap',
         columnType: 'text',
@@ -184,6 +200,8 @@ function DominatorsView(): m.Component<DominatorsViewAttrs> {
             {id: 'reachable_size', field: 'reachable_size'},
             {id: 'reachable_native', field: 'reachable_native'},
             {id: 'reachable_count', field: 'reachable_count'},
+            {id: 'in_refs', field: 'in_refs'},
+            {id: 'out_refs', field: 'out_refs'},
             {id: 'heap', field: 'heap'},
             {id: 'root_type', field: 'root_type'},
           ],
