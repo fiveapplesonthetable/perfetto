@@ -107,6 +107,34 @@ int main(void) {
                     PERFETTO_TE_NESTED_TRACK_NAMED("dynamictrack", 2),
                     PERFETTO_TE_NESTED_TRACK_COUNTER("dynamiccounter")),
                 PERFETTO_TE_INT_COUNTER(99));
+    // "Render" orders its children explicitly: "GPU" (rank 1) sorts before
+    // "CPU" (rank 2) regardless of when they first appear. The two events are
+    // correlated: they are part of the same logical frame.
+    PERFETTO_TE(physics, PERFETTO_TE_INSTANT("gpu_work"),
+                PERFETTO_TE_NESTED_TRACKS(
+                    PERFETTO_TE_NESTED_TRACK_PROCESS(),
+                    PERFETTO_TE_NESTED_TRACK_NAMED_ORDERED(
+                        "Render", 0, 0, PERFETTO_TE_HL_CHILD_ORDERING_EXPLICIT),
+                    PERFETTO_TE_NESTED_TRACK_NAMED_ORDERED("GPU", 0, 1, 0)),
+                PERFETTO_TE_CORRELATION_ID(flow_counter));
+    PERFETTO_TE(physics, PERFETTO_TE_INSTANT("cpu_work"),
+                PERFETTO_TE_NESTED_TRACKS(
+                    PERFETTO_TE_NESTED_TRACK_PROCESS(),
+                    PERFETTO_TE_NESTED_TRACK_NAMED_ORDERED(
+                        "Render", 0, 0, PERFETTO_TE_HL_CHILD_ORDERING_EXPLICIT),
+                    PERFETTO_TE_NESTED_TRACK_NAMED_ORDERED("CPU", 0, 2, 0)),
+                PERFETTO_TE_CORRELATION_ID(flow_counter));
+    // "Worker" tracks merge by an explicit key: same-keyed siblings are
+    // displayed as one track.
+    PERFETTO_TE(
+        physics, PERFETTO_TE_INSTANT("pool_work"),
+        PERFETTO_TE_NESTED_TRACKS(
+            PERFETTO_TE_NESTED_TRACK_PROCESS(),
+            PERFETTO_TE_NESTED_TRACK_NAMED_MERGED(
+                "Worker", 0,
+                PERFETTO_TE_HL_SIBLING_MERGE_BEHAVIOR_BY_SIBLING_MERGE_KEY,
+                "worker_pool", 0)),
+        PERFETTO_TE_CORRELATION_ID_STR("frame_pool"));
     sleep(1);
   }
 }

@@ -305,6 +305,20 @@ struct PerfettoTeHlMacroNameAndType {
       PerfettoTeHlExtraFlow,                \
       {{PERFETTO_TE_HL_EXTRA_TYPE_TERMINATING_FLOW}, (VALUE).id})
 
+// Specifies that this event is part of a logical operation identified by the
+// opaque id `uint64_t VALUE` (emitted as TrackEvent's `correlation_id`).
+// Unlike flows, correlated events are not necessarily causally connected.
+#define PERFETTO_TE_CORRELATION_ID(VALUE)             \
+  PERFETTO_I_TE_EXTRA(PerfettoTeHlExtraCorrelationId, \
+                      {{PERFETTO_TE_HL_EXTRA_TYPE_CORRELATION_ID}, VALUE})
+
+// Specifies that this event is part of a logical operation identified by the
+// string `const char* VALUE` (emitted as TrackEvent's `correlation_id_str`).
+// Unlike flows, correlated events are not necessarily causally connected.
+#define PERFETTO_TE_CORRELATION_ID_STR(VALUE)            \
+  PERFETTO_I_TE_EXTRA(PerfettoTeHlExtraCorrelationIdStr, \
+                      {{PERFETTO_TE_HL_EXTRA_TYPE_CORRELATION_ID_STR}, VALUE})
+
 // Flushes the shared memory buffer and makes sure that all the previous events
 // emitted by this thread are visibile in the central tracing buffer.
 #define PERFETTO_TE_FLUSH() \
@@ -397,12 +411,58 @@ struct PerfettoTeHlMacroNameAndType {
 
 // A track called `NAME` (const char *), uniquely identified by `NAME`, `ID` (a
 // uint64_t) and its parent hierarchy.
-#define PERFETTO_TE_NESTED_TRACK_NAMED(NAME, ID) \
-  PERFETTO_REINTERPRET_CAST(                     \
-      struct PerfettoTeHlNestedTrack*,           \
-      PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(       \
-          PerfettoTeHlNestedTrackNamed,          \
-          {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED}, NAME, ID, false}))
+#define PERFETTO_TE_NESTED_TRACK_NAMED(NAME, ID)                           \
+  PERFETTO_REINTERPRET_CAST(struct PerfettoTeHlNestedTrack*,               \
+                            PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(           \
+                                PerfettoTeHlNestedTrackNamed,              \
+                                {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED}, \
+                                 NAME,                                     \
+                                 ID,                                       \
+                                 false,                                    \
+                                 0,                                        \
+                                 0,                                        \
+                                 0,                                        \
+                                 PERFETTO_NULL,                            \
+                                 0}))
+
+// Like PERFETTO_TE_NESTED_TRACK_NAMED, but also sets this level's
+// `sibling_order_rank` (its rank among siblings; lower sorts first, honored
+// when the parent's ordering is EXPLICIT) and `child_ordering` (how this level
+// orders its own children: a PERFETTO_TE_HL_CHILD_ORDERING_* value).
+#define PERFETTO_TE_NESTED_TRACK_NAMED_ORDERED(NAME, ID, RANK, ORDERING)   \
+  PERFETTO_REINTERPRET_CAST(struct PerfettoTeHlNestedTrack*,               \
+                            PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(           \
+                                PerfettoTeHlNestedTrackNamed,              \
+                                {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED}, \
+                                 NAME,                                     \
+                                 ID,                                       \
+                                 false,                                    \
+                                 RANK,                                     \
+                                 ORDERING,                                 \
+                                 0,                                        \
+                                 PERFETTO_NULL,                            \
+                                 0}))
+
+// Like PERFETTO_TE_NESTED_TRACK_NAMED, but also sets how this level is merged
+// with its eligible siblings: `BEHAVIOR` is a
+// PERFETTO_TE_HL_SIBLING_MERGE_BEHAVIOR_* value, `KEY_STR` (a const char*,
+// can be PERFETTO_NULL) and `KEY_INT` (a uint64_t) select the siblings this
+// track is merged with when `BEHAVIOR` is BY_SIBLING_MERGE_KEY (`KEY_STR`, if
+// not NULL, takes precedence over `KEY_INT`).
+#define PERFETTO_TE_NESTED_TRACK_NAMED_MERGED(NAME, ID, BEHAVIOR, KEY_STR, \
+                                              KEY_INT)                     \
+  PERFETTO_REINTERPRET_CAST(struct PerfettoTeHlNestedTrack*,               \
+                            PERFETTO_I_TE_COMPOUND_LITERAL_ADDR(           \
+                                PerfettoTeHlNestedTrackNamed,              \
+                                {{PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED}, \
+                                 NAME,                                     \
+                                 ID,                                       \
+                                 false,                                    \
+                                 0,                                        \
+                                 0,                                        \
+                                 BEHAVIOR,                                 \
+                                 KEY_STR,                                  \
+                                 KEY_INT}))
 
 // A track uniquely identified by `ID` (a uint64_t) and its parent hierarchy.
 // The rest of the params should be PERFETTO_TE_PROTO_FIELD_* macros and should

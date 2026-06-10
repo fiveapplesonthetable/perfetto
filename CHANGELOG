@@ -17,7 +17,23 @@ Unreleased:
   UI:
    *
   SDK:
-   *
+    * Added sibling ordering and sibling merging support for nested tracks in
+      the C SDK high-level ABI: `PerfettoTeHlNestedTrackNamed` gained
+      `sibling_order_rank`, `child_ordering`, `sibling_merge_behavior` and a
+      string/integer sibling merge key (with `PERFETTO_TE_HL_CHILD_ORDERING_*`
+      and `PERFETTO_TE_HL_SIBLING_MERGE_BEHAVIOR_*` constants and the
+      `PERFETTO_TE_NESTED_TRACK_NAMED_ORDERED()` /
+      `PERFETTO_TE_NESTED_TRACK_NAMED_MERGED()` macros). Exposed in the
+      Android Java SDK via `PerfettoTrack.setSiblingOrderRank()`,
+      `setChildOrdering()`, `setSiblingMergeBehavior()` and
+      `setSiblingMergeKey()`.
+    * Added track event correlation ids to the C SDK high-level ABI: new
+      `PERFETTO_TE_HL_EXTRA_TYPE_CORRELATION_ID` and
+      `PERFETTO_TE_HL_EXTRA_TYPE_CORRELATION_ID_STR` extras (with the
+      `PERFETTO_TE_CORRELATION_ID()` / `PERFETTO_TE_CORRELATION_ID_STR()`
+      macros), emitted as TrackEvent's `correlation_id` /
+      `correlation_id_str`. Exposed in the Android Java SDK via
+      `PerfettoTrackEventBuilder.setCorrelationId()`.
 
 v56.1 - 2026-06-04:
   SDK:
