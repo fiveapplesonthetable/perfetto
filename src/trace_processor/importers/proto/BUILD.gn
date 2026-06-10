@@ -20,6 +20,8 @@ source_set("minimal") {
     "active_chrome_processes_tracker.h",
     "app_wakelock_module.cc",
     "app_wakelock_module.h",
+    "process_state_module.cc",
+    "process_state_module.h",
     "args_parser.cc",
     "args_parser.h",
     "blob_packet_writer.cc",
