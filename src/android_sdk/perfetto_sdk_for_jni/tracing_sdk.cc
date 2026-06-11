@@ -29,15 +29,27 @@
 namespace perfetto {
 namespace sdk_for_jni {
 void register_perfetto(bool backend_in_process) {
-  static std::once_flag registration;
-  std::call_once(registration, [backend_in_process]() {
+  // Each backend is initialized at most once, but the two backends can be
+  // initialized independently (e.g. the system backend at process start and
+  // the in-process backend later, when a component creates an in-process
+  // Session). PerfettoProducerInit is documented as safe to call multiple
+  // times; the tracing muxer replays existing data source / category
+  // registrations onto backends added later.
+  static std::once_flag once_in_process;
+  static std::once_flag once_system;
+  static std::once_flag once_te;
+  auto init_backend = [](PerfettoBackendTypes backend) {
     struct PerfettoProducerInitArgs args = PERFETTO_PRODUCER_INIT_ARGS_INIT();
-    args.backends = backend_in_process ? PERFETTO_BACKEND_IN_PROCESS
-                                       : PERFETTO_BACKEND_SYSTEM;
+    args.backends = backend;
     args.shmem_size_hint_kb = 1024;
     PerfettoProducerInit(args);
-    PerfettoTeInit();
-  });
+  };
+  if (backend_in_process) {
+    std::call_once(once_in_process, init_backend, PERFETTO_BACKEND_IN_PROCESS);
+  } else {
+    std::call_once(once_system, init_backend, PERFETTO_BACKEND_SYSTEM);
+  }
+  std::call_once(once_te, []() { PerfettoTeInit(); });
 }
 
 void trace_event(int type,
