@@ -33,6 +33,7 @@ import dev.perfetto.sdk.PerfettoTrackEventExtra.Flow;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.NamedTrack;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.PerfettoPointer;
 import dev.perfetto.sdk.PerfettoTrackEventExtra.Proto;
+import dev.perfetto.sdk.PerfettoTrackEventExtra.Timestamp;
 
 /** Builder for Perfetto track event extras. */
 public final class PerfettoTrackEventBuilder {
@@ -92,6 +93,7 @@ public final class PerfettoTrackEventBuilder {
 
   private static final class LazyInitObjects {
     private Counter mCounter = null;
+    private Timestamp mTimestamp = null;
 
     private final PerfettoNativeMemoryCleaner mNativeMemoryCleaner;
 
@@ -104,6 +106,13 @@ public final class PerfettoTrackEventBuilder {
         mCounter = new Counter(mNativeMemoryCleaner);
       }
       return mCounter;
+    }
+
+    public Timestamp getTimestamp() {
+      if (mTimestamp == null) {
+        mTimestamp = new Timestamp(mNativeMemoryCleaner);
+      }
+      return mTimestamp;
     }
   }
 
@@ -317,6 +326,24 @@ public final class PerfettoTrackEventBuilder {
     }
     arg.setValueString(val);
     addPerfettoPointerToExtra(arg);
+    return this;
+  }
+
+  /**
+   * Emits the event at an explicit timestamp (CLOCK_BOOTTIME nanoseconds)
+   * instead of now. Applies to all event types, including begin/end, so
+   * historical slices can be replayed with their true durations.
+   */
+  public PerfettoTrackEventBuilder setTimestamp(long bootTimeNanos) {
+    if (!mIsCategoryEnabled) {
+      return this;
+    }
+    if (mIsDebug) {
+      checkNotBuildingProto();
+    }
+    Timestamp timestamp = mLazyInitObjects.getTimestamp();
+    timestamp.setValue(bootTimeNanos);
+    addPerfettoPointerToExtra(timestamp);
     return this;
   }
 
