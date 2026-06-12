@@ -478,6 +478,29 @@ static void dev_perfetto_sdk_PerfettoTrackEventExtraCounter_set_value_double(
   counter_double.value = val;
 }
 
+static jlong dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_init(
+    PERFETTO_JNI_HOST_PARAMS) {
+  return toJLong(new sdk_for_jni::Timestamp());
+}
+
+static jlong dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_delete(
+    PERFETTO_JNI_HOST_PARAMS) {
+  return toJLong(&sdk_for_jni::Timestamp::delete_timestamp);
+}
+
+static jlong dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_get_extra_ptr(
+    PERFETTO_JNI_HOST_PARAMS_COMMA jlong ptr) {
+  sdk_for_jni::Timestamp* timestamp = toPointer<sdk_for_jni::Timestamp>(ptr);
+  return toJLong(timestamp->get());
+}
+
+static void dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_set_value(
+    PERFETTO_JNI_HOST_PARAMS_COMMA jlong ptr,
+    jlong val) {
+  sdk_for_jni::Timestamp* timestamp = toPointer<sdk_for_jni::Timestamp>(ptr);
+  timestamp->set_value(static_cast<uint64_t>(val));
+}
+
 static jlong dev_perfetto_sdk_PerfettoTrackEventExtra_init(
     PERFETTO_JNI_HOST_PARAMS) {
   return toJLong(new sdk_for_jni::Extra());
@@ -667,6 +690,16 @@ static const JNINativeMethod gCounterMethods[] = {
     {"native_set_value_double", "(JD)V",
      (void*)dev_perfetto_sdk_PerfettoTrackEventExtraCounter_set_value_double}};
 
+static const JNINativeMethod gTimestampMethods[] = {
+    {"native_init", "()J",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_init},
+    {"native_delete", "()J",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_delete},
+    {"native_get_extra_ptr", "(J)J",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_get_extra_ptr},
+    {"native_set_value", "(JJ)V",
+     (void*)dev_perfetto_sdk_PerfettoTrackEventExtraTimestamp_set_value}};
+
 int register_dev_perfetto_sdk_PerfettoTrackEventExtra(JNIEnv* env) {
   int res = jniRegisterNativeMethods(
       env,
@@ -740,6 +773,13 @@ int register_dev_perfetto_sdk_PerfettoTrackEventExtra(JNIEnv* env) {
           "dev/perfetto/sdk/PerfettoTrackEventExtra$Counter"),
       gCounterMethods, NELEM(gCounterMethods));
   LOG_ALWAYS_FATAL_IF(res < 0, "Unable to register counter native methods.");
+
+  res = jniRegisterNativeMethods(
+      env,
+      TO_MAYBE_JAR_JAR_CLASS_NAME(
+          "dev/perfetto/sdk/PerfettoTrackEventExtra$Timestamp"),
+      gTimestampMethods, NELEM(gTimestampMethods));
+  LOG_ALWAYS_FATAL_IF(res < 0, "Unable to register timestamp native methods.");
 
   return 0;
 }

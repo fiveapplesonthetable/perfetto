@@ -262,6 +262,32 @@ class Counter {
 };
 
 /**
+ * @brief Represents an explicit timestamp extra (PerfettoTeHlExtraTimestamp).
+ * Used to emit events at a past time, e.g. when replaying in-memory history
+ * buffers during a structured dump. The value is CLOCK_BOOTTIME nanoseconds.
+ */
+class Timestamp {
+ public:
+  Timestamp() {
+    timestamp_.header = {PERFETTO_TE_HL_EXTRA_TYPE_TIMESTAMP};
+    timestamp_.timestamp.clock_id = PERFETTO_TE_TIMESTAMP_TYPE_BOOT;
+    timestamp_.timestamp.value = 0;
+  }
+
+  void set_value(uint64_t boot_time_nanos) {
+    timestamp_.timestamp.value = boot_time_nanos;
+  }
+
+  static void delete_timestamp(Timestamp* timestamp) { delete timestamp; }
+
+  const PerfettoTeHlExtraTimestamp* get() const { return &timestamp_; }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(Timestamp);
+  PerfettoTeHlExtraTimestamp timestamp_;
+};
+
+/**
  * @brief Represents a debug argument for a trace event.
  */
 class DebugArg {

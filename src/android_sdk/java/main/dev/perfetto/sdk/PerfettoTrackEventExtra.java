@@ -273,6 +273,42 @@ final class PerfettoTrackEventExtra {
     private static native long native_get_extra_ptr(long ptr);
   }
 
+  /**
+   * Explicit timestamp extra: emits the event at the given CLOCK_BOOTTIME
+   * nanoseconds instead of now, e.g. to replay in-memory history buffers.
+   */
+  static final class Timestamp implements PerfettoPointer {
+    private final long mPtr;
+    private final long mExtraPtr;
+
+    Timestamp(PerfettoNativeMemoryCleaner memoryCleaner) {
+      mPtr = native_init();
+      mExtraPtr = native_get_extra_ptr(mPtr);
+      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
+    }
+
+    @Override
+    public long getPtr() {
+      return mExtraPtr;
+    }
+
+    public void setValue(long bootTimeNanos) {
+      native_set_value(mPtr, bootTimeNanos);
+    }
+
+    @CriticalNative
+    private static native long native_init();
+
+    @CriticalNative
+    private static native long native_delete();
+
+    @CriticalNative
+    private static native void native_set_value(long ptr, long value);
+
+    @CriticalNative
+    private static native long native_get_extra_ptr(long ptr);
+  }
+
   static final class Arg implements PerfettoPointer {
     // Private pointer holding Perfetto object with metadata
     private final long mPtr;
