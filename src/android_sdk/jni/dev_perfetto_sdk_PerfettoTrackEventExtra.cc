@@ -385,17 +385,23 @@ static jlong dev_perfetto_sdk_PerfettoTrackEventExtraNestedTracks_init(
     jclass,
     jint root_type,
     jobjectArray names,
-    jlongArray ids) {
+    jlongArray ids,
+    jbooleanArray is_names_static) {
   const jsize num_names = env->GetArrayLength(names);
-  const jsize num_ids = env->GetArrayLength(ids);
-  // names and ids are built in lockstep by PerfettoTrack, so they should match.
-  // Tracing must never crash the caller, so on a mismatch just log and use the
-  // shorter length rather than over-reading.
-  const jsize n = num_names < num_ids ? num_names : num_ids;
-  if (num_names != num_ids) {
-    __android_log_print(ANDROID_LOG_ERROR, "PerfettoJNI",
-                        "nested track names (%d) and ids (%d) length mismatch",
-                        num_names, num_ids);
+  // All the arrays are built in lockstep by PerfettoTrack, so the lengths
+  // should match. Tracing must never crash the caller, so on a mismatch just
+  // log and use the shortest length rather than over-reading.
+  jsize n = num_names;
+  const jsize lengths[] = {env->GetArrayLength(ids),
+                           env->GetArrayLength(is_names_static)};
+  for (jsize length : lengths) {
+    if (length != num_names) {
+      __android_log_print(ANDROID_LOG_ERROR, "PerfettoJNI",
+                          "nested track parallel array length mismatch "
+                          "(names %d vs %d)",
+                          num_names, length);
+      n = n < length ? n : length;
+    }
   }
   std::vector<std::string> names_vec;
   names_vec.reserve(static_cast<size_t>(n));
@@ -406,8 +412,13 @@ static jlong dev_perfetto_sdk_PerfettoTrackEventExtraNestedTracks_init(
   }
   std::vector<uint64_t> ids_vec(static_cast<size_t>(n));
   env->GetLongArrayRegion(ids, 0, n, reinterpret_cast<jlong*>(ids_vec.data()));
+  std::vector<uint8_t> is_names_static_vec(static_cast<size_t>(n));
+  env->GetBooleanArrayRegion(
+      is_names_static, 0, n,
+      reinterpret_cast<jboolean*>(is_names_static_vec.data()));
   return toJLong(new sdk_for_jni::NestedTracks(
-      static_cast<sdk_for_jni::RootType>(root_type), names_vec, ids_vec));
+      static_cast<sdk_for_jni::RootType>(root_type), names_vec, ids_vec,
+      is_names_static_vec));
 }
 
 static jlong dev_perfetto_sdk_PerfettoTrackEventExtraNestedTracks_delete(
@@ -638,7 +649,7 @@ static const JNINativeMethod gNamedTrackMethods[] = {
 };
 
 static const JNINativeMethod gNestedTracksMethods[] = {
-    {"native_init", "(I[Ljava/lang/String;[J)J",
+    {"native_init", "(I[Ljava/lang/String;[J[Z)J",
      (void*)dev_perfetto_sdk_PerfettoTrackEventExtraNestedTracks_init},
     {"native_delete", "()J",
      (void*)dev_perfetto_sdk_PerfettoTrackEventExtraNestedTracks_delete},

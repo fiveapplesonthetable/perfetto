@@ -40,8 +40,10 @@ import dev.perfetto.sdk.PerfettoTrackEventExtra.NestedTracks;
  * the C SDK's nested-track behaviour. The track uuid is derived natively exactly
  * as the C SDK derives it. Emit cost grows with the nesting depth.
  *
- * <p>This is the nesting-only shape supported by the high-level ABI; sibling
- * ordering, counter units and similar are intentionally not exposed here.
+ * <p>Names are emitted as {@code static_name} (interned) and so must be
+ * compile-time constants. Each level also has a {@code ...WithDynamicName}
+ * variant ({@link #processWithDynamicName}, {@link #childWithDynamicName}, ...)
+ * that takes a runtime string and emits it as {@code name} instead.
  */
 public final class PerfettoTrack {
   // Root scope of the chain. Mirrors RootType in tracing_sdk.h.
@@ -53,9 +55,12 @@ public final class PerfettoTrack {
   private static final long DEFAULT_ID = 0;
 
   final int mRootType;
-  // Names and ids of the chain, outermost (closest to the root) first.
+  // Per-level state of the chain, outermost (closest to the root) first; the
+  // arrays are parallel.
   final String[] mNames;
   final long[] mIds;
+  // Whether each level's name is emitted as static_name (interned) or as name.
+  final boolean[] mIsNamesStatic;
 
   // The handle's native nested-tracks extra, built lazily on first use and held
   // for the handle's lifetime. Freed by the cleaner when the handle is collected.
@@ -65,10 +70,11 @@ public final class PerfettoTrack {
   // needs no native lib, so it is safe to hold statically.
   private static final PerfettoNativeMemoryCleaner sCleaner = new PerfettoNativeMemoryCleaner();
 
-  private PerfettoTrack(int rootType, String[] names, long[] ids) {
+  private PerfettoTrack(int rootType, String[] names, long[] ids, boolean[] isNamesStatic) {
     mRootType = rootType;
     mNames = names;
     mIds = ids;
+    mIsNamesStatic = isNamesStatic;
   }
 
   /**
@@ -83,7 +89,7 @@ public final class PerfettoTrack {
   NestedTracks nestedTracks() {
     NestedTracks n = mNested;
     if (n == null) {
-      n = new NestedTracks(mRootType, mNames, mIds, sCleaner);
+      n = new NestedTracks(mRootType, mNames, mIds, mIsNamesStatic, sCleaner);
       mNested = n;
     }
     return n;
@@ -91,17 +97,37 @@ public final class PerfettoTrack {
 
   /** A track named {@code name} rooted at the process track. */
   public static PerfettoTrack process(@CompileTimeConstant String name) {
-    return new PerfettoTrack(ROOT_PROCESS, new String[] {name}, new long[] {DEFAULT_ID});
+    return root(ROOT_PROCESS, name, /* isNameStatic= */ true);
+  }
+
+  /** Like {@link #process}, but {@code name} is emitted as a dynamic name. */
+  public static PerfettoTrack processWithDynamicName(String name) {
+    return root(ROOT_PROCESS, name, /* isNameStatic= */ false);
   }
 
   /** A track named {@code name} rooted at the emitting thread's track. */
   public static PerfettoTrack thread(@CompileTimeConstant String name) {
-    return new PerfettoTrack(ROOT_THREAD, new String[] {name}, new long[] {DEFAULT_ID});
+    return root(ROOT_THREAD, name, /* isNameStatic= */ true);
+  }
+
+  /** Like {@link #thread}, but {@code name} is emitted as a dynamic name. */
+  public static PerfettoTrack threadWithDynamicName(String name) {
+    return root(ROOT_THREAD, name, /* isNameStatic= */ false);
   }
 
   /** A track named {@code name} rooted at the global scope. */
   public static PerfettoTrack global(@CompileTimeConstant String name) {
-    return new PerfettoTrack(ROOT_GLOBAL, new String[] {name}, new long[] {DEFAULT_ID});
+    return root(ROOT_GLOBAL, name, /* isNameStatic= */ true);
+  }
+
+  /** Like {@link #global}, but {@code name} is emitted as a dynamic name. */
+  public static PerfettoTrack globalWithDynamicName(String name) {
+    return root(ROOT_GLOBAL, name, /* isNameStatic= */ false);
+  }
+
+  private static PerfettoTrack root(int rootType, String name, boolean isNameStatic) {
+    return new PerfettoTrack(
+        rootType, new String[] {name}, new long[] {DEFAULT_ID}, new boolean[] {isNameStatic});
   }
 
   /** A child track named {@code name} nested under this one. */
@@ -114,13 +140,30 @@ public final class PerfettoTrack {
    * disambiguates the track from same-named siblings.
    */
   public PerfettoTrack child(long id, @CompileTimeConstant String name) {
+    return child(id, name, /* isNameStatic= */ true);
+  }
+
+  /** Like {@link #child(String)}, but {@code name} is emitted as a dynamic name. */
+  public PerfettoTrack childWithDynamicName(String name) {
+    return childWithDynamicName(DEFAULT_ID, name);
+  }
+
+  /** Like {@link #child(long, String)}, but {@code name} is emitted as a dynamic name. */
+  public PerfettoTrack childWithDynamicName(long id, String name) {
+    return child(id, name, /* isNameStatic= */ false);
+  }
+
+  private PerfettoTrack child(long id, String name, boolean isNameStatic) {
     int n = mNames.length;
     String[] names = new String[n + 1];
     long[] ids = new long[n + 1];
+    boolean[] isNamesStatic = new boolean[n + 1];
     System.arraycopy(mNames, 0, names, 0, n);
     System.arraycopy(mIds, 0, ids, 0, n);
+    System.arraycopy(mIsNamesStatic, 0, isNamesStatic, 0, n);
     names[n] = name;
     ids[n] = id;
-    return new PerfettoTrack(mRootType, names, ids);
+    isNamesStatic[n] = isNameStatic;
+    return new PerfettoTrack(mRootType, names, ids, isNamesStatic);
   }
 }

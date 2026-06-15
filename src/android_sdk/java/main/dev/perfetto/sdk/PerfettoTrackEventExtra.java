@@ -172,8 +172,9 @@ final class PerfettoTrackEventExtra {
         int rootType,
         String[] names,
         long[] ids,
+        boolean[] isNamesStatic,
         PerfettoNativeMemoryCleaner memoryCleaner) {
-      mPtr = native_init(rootType, names, ids);
+      mPtr = native_init(rootType, names, ids, isNamesStatic);
       mExtraPtr = native_get_extra_ptr(mPtr);
       memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
     }
@@ -184,7 +185,8 @@ final class PerfettoTrackEventExtra {
     }
 
     @FastNative
-    private static native long native_init(int rootType, String[] names, long[] ids);
+    private static native long native_init(
+        int rootType, String[] names, long[] ids, boolean[] isNamesStatic);
 
     @CriticalNative
     private static native long native_delete();

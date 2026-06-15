@@ -303,6 +303,43 @@ public class PerfettoTraceTest {
   }
 
   @Test
+  public void testDynamicNameNestedTrack() throws Exception {
+    TraceConfig traceConfig = getTraceConfig(FOO);
+
+    PerfettoTrace.Session session = new PerfettoTrace.Session(true, traceConfig.toByteArray());
+
+    // Static parent, dynamic child: name is per-level.
+    PerfettoTrack parent = PerfettoTrack.process("static_parent");
+    PerfettoTrack child = parent.childWithDynamicName("dynamic_child");
+    PerfettoTrace.instant(FOO_CATEGORY, "event").usingTrack(child).emit();
+
+    Trace trace = Trace.parseFrom(session.close());
+
+    Map<Long, TrackDescriptor> descriptorsByUuid = new HashMap<>();
+    long eventTrackUuid = 0;
+    for (TracePacket packet : trace.getPacketList()) {
+      if (packet.hasTrackDescriptor()) {
+        TrackDescriptor td = packet.getTrackDescriptor();
+        descriptorsByUuid.put(td.getUuid(), td);
+      }
+      if (packet.hasTrackEvent()
+          && TrackEvent.Type.TYPE_INSTANT.equals(packet.getTrackEvent().getType())
+          && packet.getTrackEvent().hasTrackUuid()) {
+        eventTrackUuid = packet.getTrackEvent().getTrackUuid();
+      }
+    }
+
+    // The child carries a dynamic name; the parent a static one.
+    TrackDescriptor childTd = descriptorsByUuid.get(eventTrackUuid);
+    assertThat(childTd.getName()).isEqualTo("dynamic_child");
+    assertThat(childTd.getStaticName()).isEmpty();
+
+    TrackDescriptor parentTd = descriptorsByUuid.get(childTd.getParentUuid());
+    assertThat(parentTd.getStaticName()).isEqualTo("static_parent");
+    assertThat(parentTd.getName()).isEmpty();
+  }
+
+  @Test
   public void testGlobalNestedTrack() throws Exception {
     TraceConfig traceConfig = getTraceConfig(FOO);
 

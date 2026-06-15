@@ -159,7 +159,8 @@ void NamedTrack::delete_track(NamedTrack* ptr) {
 
 NestedTracks::NestedTracks(RootType root_type,
                            const std::vector<std::string>& names,
-                           const std::vector<uint64_t>& ids)
+                           const std::vector<uint64_t>& ids,
+                           const std::vector<uint8_t>& is_names_static)
     : names_(names), root_{}, extra_{} {
   const size_t count = names_.size();
   named_.reserve(count);
@@ -187,7 +188,7 @@ NestedTracks::NestedTracks(RootType root_type,
     entry.header.type = PERFETTO_TE_HL_NESTED_TRACK_TYPE_NAMED;
     entry.name = names_[i].c_str();
     entry.id = ids[i];
-    entry.is_name_static = true;
+    entry.is_name_static = is_names_static[i] != 0;
     named_.push_back(entry);
     ptrs_.push_back(reinterpret_cast<PerfettoTeHlNestedTrack*>(&named_.back()));
   }
