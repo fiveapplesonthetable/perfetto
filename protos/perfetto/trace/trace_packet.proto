@@ -284,6 +284,13 @@ message TracePacket {
 
     SystemdJournaldEvent journald_event = 132;
 
+    // Raw bytes of an ART hprof (Java heap dump). The whole hprof is carried in
+    // a single packet's bytes field; trace_processor feeds it to the same
+    // art_hprof parser used for standalone .hprof files, so an embedded heap
+    // dump populates the heap_graph_* tables. Lets a heap dump ride inside a
+    // perfetto trace instead of being a separate file.
+    bytes art_hprof = 133;
+
     // This field is only used for testing.
     // In previous versions of this proto this field had the id 268435455
     // This caused many problems:

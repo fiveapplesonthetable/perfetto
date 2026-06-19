@@ -18,6 +18,7 @@
 
 #include "src/trace_processor/importers/etw/etw_module.h"
 #include "src/trace_processor/importers/ftrace/ftrace_module.h"
+#include "src/trace_processor/importers/proto/art_hprof_module.h"
 #include "src/trace_processor/importers/proto/chrome_system_probes_module.h"
 #include "src/trace_processor/importers/proto/memory_tracker_snapshot_module.h"
 #include "src/trace_processor/importers/proto/metadata_minimal_module.h"
@@ -43,6 +44,8 @@ void RegisterDefaultModules(ProtoImporterModuleContext* module_context,
   module_context->track_module =
       static_cast<TrackEventModule*>(module_context->modules.back().get());
 
+  module_context->modules.emplace_back(
+      new ArtHprofModule(module_context, context));
   module_context->modules.emplace_back(
       new MemoryTrackerSnapshotModule(module_context, context));
   module_context->modules.emplace_back(

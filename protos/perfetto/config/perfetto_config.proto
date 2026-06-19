@@ -4686,8 +4686,18 @@ message TrackEventConfig {
 
 // Begin of protos/perfetto/config/data_source_config.proto
 
+// Config for the android.hprof data source: capture a Java heap dump of a
+// process and embed the raw hprof in the trace (parsed into heap_graph_*).
+message ArtHprofConfig {
+  // Process(es) to dump, matched like JavaHprofConfig.process_cmdline.
+  repeated string process_cmdline = 1;
+  // If set, bitmaps are embedded in the hprof (am dumpheap --dump-bitmaps) so
+  // the Heap Dump Explorer can render them.
+  optional bool dump_bitmaps = 2;
+}
+
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 143
+// Next id: 144
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -4816,6 +4826,8 @@ message DataSourceConfig {
   // Data source name: android.java_hprof
   // Introduced in Android 11.
   optional JavaHprofConfig java_hprof_config = 110 [lazy = true];
+  // Data source name: android.hprof
+  optional ArtHprofConfig art_hprof_config = 143;
   // Data source name: android.power
   optional AndroidPowerConfig android_power_config = 106 [lazy = true];
   // Data source name: android.log

@@ -22,7 +22,17 @@ const DUMP_INTERVAL_MS = 10_000;
 const PROC_STATS_BUFFER_SIZE_KB = 4 * 1024;
 const HEAPPROFD_BUFFER_SIZE_KB = 128 * 1024;
 const JAVA_HPROF_BUFFER_SIZE_KB = 256 * 1024;
+// A full raw hprof can be tens of MB; give it a large discard buffer.
+const HPROF_BUFFER_SIZE_KB = 512 * 1024;
 const STATS_POLL_INTERVAL_MS = 3000;
+
+// Options for what to capture when profiling a process.
+export interface ProfileOptions {
+  // Capture a raw ART hprof (android.hprof) in addition to the live profile.
+  readonly rawHprof?: boolean;
+  // Embed bitmaps in the hprof so the Heap Dump Explorer can render them.
+  readonly bitmaps?: boolean;
+}
 
 export type ProfileState = 'recording' | 'stopping' | 'finished' | 'error';
 
@@ -48,9 +58,10 @@ export class ProfileSession {
     pid: number,
     processName: string,
     startX: number,
+    options?: ProfileOptions,
   ): Promise<ProfileSession> {
     const self = new ProfileSession(pid, processName, startX);
-    const config = buildProcessProfileConfig(pid);
+    const config = buildProcessProfileConfig(pid, processName, options);
     const result =
       targetOrDevice instanceof TracedWebsocketTarget
         ? await targetOrDevice.startTracing(config)
@@ -125,64 +136,89 @@ export class ProfileSession {
   }
 }
 
-function buildProcessProfileConfig(pid: number): protos.ITraceConfig {
+function buildProcessProfileConfig(
+  pid: number,
+  processName: string,
+  options?: ProfileOptions,
+): protos.ITraceConfig {
+  const buffers: protos.TraceConfig.IBufferConfig[] = [
+    {
+      name: 'process_stats',
+      sizeKb: PROC_STATS_BUFFER_SIZE_KB,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.DISCARD,
+    },
+    {
+      name: 'heapprofd',
+      sizeKb: HEAPPROFD_BUFFER_SIZE_KB,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
+    },
+    {
+      name: 'java_hprof',
+      sizeKb: JAVA_HPROF_BUFFER_SIZE_KB,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
+    },
+  ];
+  const dataSources: protos.TraceConfig.IDataSource[] = [
+    {
+      config: {
+        name: 'linux.process_stats',
+        targetBufferName: 'process_stats',
+        processStatsConfig: {
+          scanAllProcessesOnStart: true, // Necessary for track names.
+        },
+      },
+    },
+    {
+      config: {
+        name: 'android.heapprofd',
+        targetBufferName: 'heapprofd',
+        heapprofdConfig: {
+          pid: [pid],
+          samplingIntervalBytes: 32 * 1024, // Slightly larger than default to reduce overhead.
+          shmemSizeBytes: 16 * 1024 * 1024,
+          blockClient: true, // Important for trace integrity.
+          continuousDumpConfig: {
+            dumpIntervalMs: DUMP_INTERVAL_MS, // Important for getting regular heap snapshots to see how memory usage evolves over time.
+          },
+        },
+      },
+    },
+    {
+      config: {
+        name: 'android.java_hprof',
+        targetBufferName: 'java_hprof',
+        javaHprofConfig: {
+          pid: [pid],
+          continuousDumpConfig: {
+            dumpIntervalMs: DUMP_INTERVAL_MS, // Required for Java profiles.
+          },
+        },
+      },
+    },
+  ];
+  if (options?.rawHprof) {
+    // Capture a raw ART hprof of the process and embed it in the trace; it is
+    // parsed into the heap_graph_* tables and opens in the Heap Dump Explorer.
+    buffers.push({
+      name: 'hprof',
+      sizeKb: HPROF_BUFFER_SIZE_KB,
+      fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.DISCARD,
+    });
+    dataSources.push({
+      config: {
+        name: 'android.hprof',
+        targetBufferName: 'hprof',
+        artHprofConfig: {
+          processCmdline: [processName],
+          dumpBitmaps: options.bitmaps ?? false,
+        },
+      },
+    });
+  }
   return {
     compressionType:
       protos.TraceConfig.CompressionType.COMPRESSION_TYPE_DEFLATE,
-    buffers: [
-      {
-        name: 'process_stats',
-        sizeKb: PROC_STATS_BUFFER_SIZE_KB,
-        fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.DISCARD,
-      },
-      {
-        name: 'heapprofd',
-        sizeKb: HEAPPROFD_BUFFER_SIZE_KB,
-        fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
-      },
-      {
-        name: 'java_hprof',
-        sizeKb: JAVA_HPROF_BUFFER_SIZE_KB,
-        fillPolicy: protos.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER,
-      },
-    ],
-    dataSources: [
-      {
-        config: {
-          name: 'linux.process_stats',
-          targetBufferName: 'process_stats',
-          processStatsConfig: {
-            scanAllProcessesOnStart: true, // Necessary for track names.
-          },
-        },
-      },
-      {
-        config: {
-          name: 'android.heapprofd',
-          targetBufferName: 'heapprofd',
-          heapprofdConfig: {
-            pid: [pid],
-            samplingIntervalBytes: 32 * 1024, // Slightly larger than default to reduce overhead.
-            shmemSizeBytes: 16 * 1024 * 1024,
-            blockClient: true, // Important for trace integrity.
-            continuousDumpConfig: {
-              dumpIntervalMs: DUMP_INTERVAL_MS, // Important for getting regular heap snapshots to see how memory usage evolves over time.
-            },
-          },
-        },
-      },
-      {
-        config: {
-          name: 'android.java_hprof',
-          targetBufferName: 'java_hprof',
-          javaHprofConfig: {
-            pid: [pid],
-            continuousDumpConfig: {
-              dumpIntervalMs: DUMP_INTERVAL_MS, // Required for Java profiles.
-            },
-          },
-        },
-      },
-    ],
+    buffers,
+    dataSources,
   };
 }

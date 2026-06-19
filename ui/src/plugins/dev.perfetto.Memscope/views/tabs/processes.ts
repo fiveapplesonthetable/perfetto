@@ -782,19 +782,43 @@ class ProcessTable implements m.ClassComponent<ProcessTableAttrs> {
         return `${s}s`;
       })();
       const canProfile = p.debuggable || isUserDebug;
-      const profileButton = m(Button, {
-        label: 'Profile',
-        rightIcon: 'arrow_forward',
-        rounded: true,
-        variant: ButtonVariant.Filled,
-        intent: Intent.Primary,
-        disabled: !canProfile,
-        tooltip: canProfile
-          ? undefined
-          : 'Process is not debuggable. A userdebug or eng build is required to heap profile.',
-        onclick: () =>
-          session.startProfile(p.pid, p.processName).then(() => m.redraw()),
-      });
+      const profile = (options?: {rawHprof?: boolean; bitmaps?: boolean}) =>
+        session
+          .startProfile(p.pid, p.processName, options)
+          .then(() => m.redraw());
+      const profileButton = m(
+        PopupMenu,
+        {
+          trigger: m(Button, {
+            className: 'pf-memscope-profile-btn',
+            label: 'Profile',
+            rightIcon: 'arrow_drop_down',
+            rounded: true,
+            variant: ButtonVariant.Filled,
+            intent: Intent.Primary,
+            disabled: !canProfile,
+            tooltip: canProfile
+              ? undefined
+              : 'Process is not debuggable. A userdebug or eng build is required to heap profile.',
+          }),
+        },
+        m(MenuItem, {
+          label: 'Live profile (heap graph)',
+          icon: 'show_chart',
+          onclick: () => profile(),
+        }),
+        m(MenuDivider),
+        m(MenuItem, {
+          label: 'Raw hprof',
+          icon: 'memory',
+          onclick: () => profile({rawHprof: true}),
+        }),
+        m(MenuItem, {
+          label: 'Raw hprof + bitmaps',
+          icon: 'image',
+          onclick: () => profile({rawHprof: true, bitmaps: true}),
+        }),
+      );
       const mutedStyle = canProfile
         ? undefined
         : {color: 'var(--pf-color-text-muted)', opacity: '0.7'};

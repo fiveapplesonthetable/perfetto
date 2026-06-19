@@ -23,7 +23,11 @@ import {createAdbTracingSession} from '../../dev.perfetto.RecordTraceV2/adb/adb_
 import type {TracingSession} from '../../dev.perfetto.RecordTraceV2/interfaces/tracing_session';
 import type {TracedWebsocketTarget} from '../../dev.perfetto.RecordTraceV2/traced_over_websocket/traced_websocket_target';
 import type {ConnectionResult} from '../views/connection';
-import {ProfileSession, type ProfileState} from './profile_session';
+import {
+  ProfileSession,
+  type ProfileOptions,
+  type ProfileState,
+} from './profile_session';
 
 export interface ProfileView {
   readonly pid: number;
@@ -180,7 +184,11 @@ export class LiveSession {
   }
 
   /** Starts a heap profiling session for a single process. */
-  async startProfile(pid: number, processName: string): Promise<void> {
+  async startProfile(
+    pid: number,
+    processName: string,
+    options?: ProfileOptions,
+  ): Promise<void> {
     if (this.profileImpl) {
       await this.profileImpl.session.cancel();
     }
@@ -189,6 +197,7 @@ export class LiveSession {
       pid,
       processName,
       this.data?.xMax ?? 0,
+      options,
     );
     this.profileImpl = {session, startMs: Date.now()};
   }
