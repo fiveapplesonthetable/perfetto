@@ -25,7 +25,8 @@ export type NavState =
       view: 'flamegraph-objects';
       params: {pathHashes?: string; isDominator?: boolean};
     }
-  | {view: 'flamegraph'; params: Record<string, never>};
+  | {view: 'flamegraph'; params: Record<string, never>}
+  | {view: 'object-refs'; params: {objId: number; dir: 'in' | 'out'}};
 
 export type NavView = NavState['view'];
 
@@ -90,6 +91,15 @@ function stateToParts(state: NavState): {path: string; query: string} {
     }
     case 'flamegraph':
       return {path: 'flamegraph', query: ''};
+    case 'object-refs': {
+      // Per-object reference flamegraph tab identity goes in the path:
+      // "object-refs_<dir>_0x<objId>".
+      const {objId, dir} = state.params;
+      return {
+        path: `object-refs_${dir}_0x${objId.toString(16)}`,
+        query: '',
+      };
+    }
   }
 }
 
@@ -176,6 +186,16 @@ export function subpageToState(subpage: string | undefined): NavState {
     }
     case 'flamegraph':
       return {view: 'flamegraph', params: {}};
+    case 'object-refs': {
+      // param is "<dir>_0x<objId>" (see stateToParts).
+      const us = param.indexOf('_');
+      const dir = param.slice(0, us) === 'out' ? 'out' : 'in';
+      const rest = us === -1 ? '' : param.slice(us + 1);
+      const objId = rest.startsWith('0x')
+        ? parseInt(rest.slice(2), 16)
+        : parseInt(rest, 10);
+      return {view: 'object-refs', params: {objId: objId || 0, dir}};
+    }
     default:
       return {view: 'overview', params: {}};
   }

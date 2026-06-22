@@ -40,6 +40,14 @@ const INSTANCE_TAB_SCHEMA = z.object({
   label: z.string(),
 });
 
+// An open per-object reference flamegraph tab. The internal flamegraph view
+// state (zoom / filters) is intentionally not persisted -- only the tab's
+// identity, so it reopens on restore but its analysis state is fresh.
+const OBJECT_REF_TAB_SCHEMA = z.object({
+  objId: z.number(),
+  dir: z.enum(['in', 'out']),
+});
+
 export const HDE_STATE_SCHEMA = z
   .object({
     // The selected heap dump; identifies which dump the rest of the state
@@ -53,6 +61,9 @@ export const HDE_STATE_SCHEMA = z
     // Open object/instance inspector tabs. The active one is not stored; it is
     // re-derived from nav (which encodes the object id) on restore.
     instanceTabs: z.array(INSTANCE_TAB_SCHEMA).optional(),
+    // Open per-object reference flamegraph tabs. The active one is re-derived
+    // from nav (which encodes objId + direction) on restore.
+    objectRefTabs: z.array(OBJECT_REF_TAB_SCHEMA).optional(),
     // Filter / pivot / view state of the main Flamegraph tab.
     flamegraphPanelState: FLAMEGRAPH_STATE_SCHEMA.optional(),
   })

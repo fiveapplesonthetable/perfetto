@@ -61,6 +61,9 @@ interface ObjectViewAttrs {
   readonly heaps: ReadonlyArray<HeapInfo>;
   readonly navigate: NavFn;
   readonly openFlamegraphPivotedAt: OpenFlamegraphPivotedAt;
+  // Open a throwaway flamegraph of every object reachable from this object by
+  // following references in one direction.
+  readonly openObjectRefsFlamegraph: (objId: number, dir: 'in' | 'out') => void;
   readonly params: ObjectParams;
 }
 
@@ -644,6 +647,30 @@ function ObjectView(): m.Component<ObjectViewAttrs> {
           ),
           m('div', {class: 'pf-hde-action-row'}, [
             m(InstanceLink, {row, navigate}),
+            m(
+              'button',
+              {
+                class: 'pf-hde-link',
+                title:
+                  'Flamegraph of every object this object references, ' +
+                  'transitively (shortest path on cycles)',
+                onclick: () =>
+                  vnode.attrs.openObjectRefsFlamegraph(row.id, 'out'),
+              },
+              'Outgoing refs flamegraph',
+            ),
+            m(
+              'button',
+              {
+                class: 'pf-hde-link',
+                title:
+                  'Flamegraph of every object that references this object, ' +
+                  'transitively (shortest path on cycles)',
+                onclick: () =>
+                  vnode.attrs.openObjectRefsFlamegraph(row.id, 'in'),
+              },
+              'Incoming refs flamegraph',
+            ),
           ]),
         ]),
 
