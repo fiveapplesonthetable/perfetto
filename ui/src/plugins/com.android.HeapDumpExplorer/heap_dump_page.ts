@@ -33,6 +33,7 @@ import StringsView from './views/strings_view';
 import ArraysView from './views/arrays_view';
 import FlamegraphObjectsView from './views/flamegraph_objects_view';
 import FlamegraphView from './views/flamegraph_view';
+import ObjectRefsFlamegraphView from './views/object_refs_flamegraph_view';
 import type {HeapDumpExplorerSession} from './session';
 
 interface HeapDumpPageAttrs {
@@ -42,6 +43,7 @@ interface HeapDumpPageAttrs {
 
 const FG_KEY_PREFIX = 'fg-';
 const INSTANCE_KEY_PREFIX = 'inst-';
+const OBJREF_KEY_PREFIX = 'objref-';
 
 function fgTabKey(pathHashes: string, isDominator: boolean): string {
   return `${FG_KEY_PREFIX}${isDominator ? 'd' : 'n'}:${pathHashes}`;
@@ -49,6 +51,10 @@ function fgTabKey(pathHashes: string, isDominator: boolean): string {
 
 function instanceTabKey(objId: number): string {
   return `${INSTANCE_KEY_PREFIX}${objId}`;
+}
+
+function objectRefsTabKey(objId: number, dir: 'in' | 'out'): string {
+  return `${OBJREF_KEY_PREFIX}${dir}:${objId}`;
 }
 
 function activeTabKey(session: HeapDumpExplorerSession): string {
@@ -68,6 +74,10 @@ function activeTabKey(session: HeapDumpExplorerSession): string {
   const objId = session.activeInstanceObjId;
   if (objId !== null) {
     return instanceTabKey(objId);
+  }
+  const refs = session.activeObjectRefs;
+  if (refs !== null) {
+    return objectRefsTabKey(refs.objId, refs.dir);
   }
   return session.nav.view;
 }
@@ -235,12 +245,34 @@ function buildTabs(
         heaps: overview.heaps,
         navigate: navigateWithTabs,
         openFlamegraphPivotedAt: session.openFlamegraphPivotedAt,
+        openObjectRefsFlamegraph: session.openObjectRefsFlamegraph,
         params: {id: obj.objId},
       }),
     });
     actions.set(key, {
       select: () => session.navigate('object', {id: obj.objId}),
       close: () => session.closeInstanceTab(obj.objId),
+    });
+  }
+
+  for (const ref of session.objectRefTabs) {
+    const key = objectRefsTabKey(ref.objId, ref.dir);
+    const dirLabel = ref.dir === 'in' ? 'Incoming refs' : 'Outgoing refs';
+    tabs.push({
+      key,
+      title: `${dirLabel} 0x${ref.objId.toString(16)}`,
+      closeButton: true,
+      content: m(ObjectRefsFlamegraphView, {
+        trace,
+        objId: ref.objId,
+        dir: ref.dir,
+        navigate: navigateWithTabs,
+      }),
+    });
+    actions.set(key, {
+      select: () =>
+        session.navigate('object-refs', {objId: ref.objId, dir: ref.dir}),
+      close: () => session.closeObjectRefs(ref.objId, ref.dir),
     });
   }
 
@@ -305,6 +337,7 @@ export class HeapDumpPage implements m.ClassComponent<HeapDumpPageAttrs> {
     session.syncFromSubpage(subpage);
     session.syncInstanceTabFromNav();
     session.syncFlamegraphTabFromNav();
+    session.syncObjectRefsTabFromNav();
 
     const active = session.activeDump;
     const overview = session.cachedOverview;

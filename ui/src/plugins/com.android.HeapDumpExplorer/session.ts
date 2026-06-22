@@ -146,6 +146,7 @@ export class HeapDumpExplorerSession {
       s.activeDump = {upid: d.upid, ts: d.ts.toString()};
       s.flamegraphTabs = undefined;
       s.instanceTabs = undefined;
+      s.objectRefTabs = undefined;
       s.flamegraphPanelState = undefined;
     });
     void this.loadOverview();
@@ -347,6 +348,57 @@ export class HeapDumpExplorerSession {
     const {id, label} = nav.params;
     const tabs = this.store.state.instanceTabs ?? [];
     if (!tabs.some((t) => t.objId === id)) this.openInstanceTab(id, label);
+  }
+
+  get objectRefTabs(): ReadonlyArray<{objId: number; dir: 'in' | 'out'}> {
+    return this.store.state.objectRefTabs ?? [];
+  }
+
+  // The active per-object reference flamegraph, derived from nav, or null.
+  get activeObjectRefs(): {objId: number; dir: 'in' | 'out'} | null {
+    const nav = this.nav;
+    return nav.view === 'object-refs'
+      ? {objId: nav.params.objId, dir: nav.params.dir}
+      : null;
+  }
+
+  // Arrow property: opens (or focuses) the reference flamegraph tab for an
+  // object in a direction, then navigates to it. Passed by reference into the
+  // object view.
+  readonly openObjectRefsFlamegraph = (
+    objId: number,
+    dir: 'in' | 'out',
+  ): void => {
+    const tabs = this.store.state.objectRefTabs ?? [];
+    if (!tabs.some((t) => t.objId === objId && t.dir === dir)) {
+      this.store.edit((s) => {
+        s.objectRefTabs = [...(s.objectRefTabs ?? []), {objId, dir}];
+      });
+    }
+    this.navigate('object-refs', {objId, dir});
+  };
+
+  closeObjectRefs(objId: number, dir: 'in' | 'out'): void {
+    const active = this.activeObjectRefs;
+    this.store.edit((s) => {
+      s.objectRefTabs = (s.objectRefTabs ?? []).filter(
+        (t) => !(t.objId === objId && t.dir === dir),
+      );
+    });
+    if (active !== null && active.objId === objId && active.dir === dir) {
+      this.navigate('overview');
+    }
+  }
+
+  syncObjectRefsTabFromNav(): void {
+    const active = this.activeObjectRefs;
+    if (active === null) return;
+    const tabs = this.store.state.objectRefTabs ?? [];
+    if (!tabs.some((t) => t.objId === active.objId && t.dir === active.dir)) {
+      this.store.edit((s) => {
+        s.objectRefTabs = [...(s.objectRefTabs ?? []), active];
+      });
+    }
   }
 
   get flamegraphPanelState(): FlamegraphState | undefined {
