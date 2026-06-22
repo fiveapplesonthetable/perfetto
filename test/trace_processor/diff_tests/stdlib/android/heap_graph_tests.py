@@ -117,3 +117,74 @@ class HeapGraph(TestSuite):
           "upid","graph_sample_ts","process_uptime","total_heap_size","total_native_alloc_registry_size","total_obj_count","reachable_heap_size","reachable_native_alloc_registry_size","reachable_obj_count","oom_score_adj","anon_rss_and_swap_size","dmabuf_rss_size"
           2,10,"[NULL]",11866,0,5,11866,0,5,-900,4096000,8192000
         """))
+
+  # Outgoing reference forest rooted at A: A -> {B, C}, both -> D. D must appear
+  # exactly ONCE (reached via two equal-length paths), and the D -> B back-edge
+  # (the cycle) must be dropped. Object/parent ids are unstable so we report
+  # class names.
+  def test_heap_graph_outgoing_reference_tree(self):
+    return DiffTestBlueprint(
+        trace=Path('heap_graph_for_reference_tree.textproto'),
+        query="""
+          INCLUDE PERFETTO MODULE android.memory.heap_graph.reference_tree;
+
+          SELECT
+            t.name AS node,
+            pcls.name AS parent,
+            t.self_size
+          FROM _heap_graph_object_reference_tree!(
+            (SELECT o.id
+             FROM heap_graph_object o
+             JOIN heap_graph_class c ON o.type_id = c.id
+             WHERE c.name = 'A'),
+            owner_id,
+            owned_id
+          ) t
+          LEFT JOIN heap_graph_object po ON po.id = t.parent_id
+          LEFT JOIN heap_graph_class pcls ON po.type_id = pcls.id
+          ORDER BY node;
+        """,
+        out=Csv("""
+          "node","parent","self_size"
+          "A","[NULL]",20
+          "B","A",30
+          "C","A",40
+          "D","B",50
+        """))
+
+  # Incoming reference forest rooted at D: who reaches D. The cycle D -> B -> D
+  # collapses, A is reached via B and C but appears once, E (an unreachable
+  # object that still references A) shows up as an ancestor, and W -- a weak
+  # reference whose referent is D -- is excluded, so it is absent despite
+  # referencing D.
+  def test_heap_graph_incoming_reference_tree(self):
+    return DiffTestBlueprint(
+        trace=Path('heap_graph_for_reference_tree.textproto'),
+        query="""
+          INCLUDE PERFETTO MODULE android.memory.heap_graph.reference_tree;
+
+          SELECT
+            t.name AS node,
+            pcls.name AS parent,
+            t.self_size
+          FROM _heap_graph_object_reference_tree!(
+            (SELECT o.id
+             FROM heap_graph_object o
+             JOIN heap_graph_class c ON o.type_id = c.id
+             WHERE c.name = 'D'),
+            owned_id,
+            owner_id
+          ) t
+          LEFT JOIN heap_graph_object po ON po.id = t.parent_id
+          LEFT JOIN heap_graph_class pcls ON po.type_id = pcls.id
+          ORDER BY node;
+        """,
+        out=Csv("""
+          "node","parent","self_size"
+          "A","B",20
+          "B","D",30
+          "C","D",40
+          "D","[NULL]",50
+          "E","A",60
+          "R","A",10
+        """))
