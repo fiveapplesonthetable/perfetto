@@ -637,6 +637,7 @@ perfetto_cc_library(
                ":protos_third_party_android_connectivity_connectivity_network_trace_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_interned_data_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_trace_packet_zero",
+               ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_track_event_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_extensions_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_regular_zero",
                ":protos_third_party_android_packages_modules_bluetooth_tracing_bluetooth_tracing_zero",
@@ -950,6 +951,7 @@ perfetto_cc_library(
                ":protos_third_party_android_connectivity_connectivity_network_trace_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_interned_data_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_trace_packet_zero",
+               ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_track_event_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_extensions_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_regular_zero",
                ":protos_third_party_android_packages_modules_bluetooth_tracing_bluetooth_tracing_zero",
@@ -3194,6 +3196,8 @@ perfetto_filegroup(
     srcs = [
         "src/trace_processor/importers/proto/active_chrome_processes_tracker.cc",
         "src/trace_processor/importers/proto/active_chrome_processes_tracker.h",
+        "src/trace_processor/importers/proto/android_framework_track_event_plugin.cc",
+        "src/trace_processor/importers/proto/android_framework_track_event_plugin.h",
         "src/trace_processor/importers/proto/app_wakelock_module.cc",
         "src/trace_processor/importers/proto/app_wakelock_module.h",
         "src/trace_processor/importers/proto/args_parser.cc",
@@ -3235,6 +3239,7 @@ perfetto_filegroup(
         "src/trace_processor/importers/proto/proto_trace_tokenizer.h",
         "src/trace_processor/importers/proto/protovm_incremental_tracing.cc",
         "src/trace_processor/importers/proto/protovm_incremental_tracing.h",
+        "src/trace_processor/importers/proto/selective_track_event_decoder.h",
         "src/trace_processor/importers/proto/stack_profile_sequence_state.cc",
         "src/trace_processor/importers/proto/stack_profile_sequence_state.h",
         "src/trace_processor/importers/proto/track_event_event_importer.h",
@@ -3242,6 +3247,8 @@ perfetto_filegroup(
         "src/trace_processor/importers/proto/track_event_module.h",
         "src/trace_processor/importers/proto/track_event_parser.cc",
         "src/trace_processor/importers/proto/track_event_parser.h",
+        "src/trace_processor/importers/proto/track_event_plugin.cc",
+        "src/trace_processor/importers/proto/track_event_plugin.h",
         "src/trace_processor/importers/proto/track_event_sequence_state.cc",
         "src/trace_processor/importers/proto/track_event_tokenizer.cc",
         "src/trace_processor/importers/proto/track_event_tokenizer.h",
@@ -10126,6 +10133,15 @@ perfetto_proto_library(
     ],
 )
 
+# GN target: //protos/third_party/android/frameworks/base/proto/tracing:frameworks_base_track_event_zero
+perfetto_cc_protozero_library(
+    name = "protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_track_event_zero",
+    deps = [
+        ":protos_perfetto_trace_track_event_zero",
+        ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_track_event_protos",
+    ],
+)
+
 # GN target: //protos/third_party/android/frameworks/native/tracing:frameworks_native_track_event_source_set
 perfetto_proto_library(
     name = "protos_third_party_android_frameworks_native_tracing_frameworks_native_track_event_protos",
@@ -11134,6 +11150,7 @@ perfetto_cc_library(
                ":protos_third_party_android_connectivity_connectivity_network_trace_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_interned_data_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_trace_packet_zero",
+               ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_track_event_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_extensions_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_regular_zero",
                ":protos_third_party_android_packages_modules_bluetooth_tracing_bluetooth_tracing_zero",
@@ -11449,6 +11466,7 @@ perfetto_cc_binary(
                ":protos_third_party_android_connectivity_connectivity_network_trace_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_interned_data_zero",
                ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_trace_packet_zero",
+               ":protos_third_party_android_frameworks_base_proto_tracing_frameworks_base_track_event_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_extensions_zero",
                ":protos_third_party_android_frameworks_native_tracing_winscope_winscope_regular_zero",
                ":protos_third_party_android_packages_modules_bluetooth_tracing_bluetooth_tracing_zero",

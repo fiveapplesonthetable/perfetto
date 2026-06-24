@@ -22,6 +22,7 @@
 #include "perfetto/trace_processor/ref_counted.h"
 #include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/common/parser_types.h"
+#include "src/trace_processor/importers/proto/android_framework_track_event_plugin.h"
 #include "src/trace_processor/importers/proto/chrome_track_event_extension.descriptor.h"
 #include "src/trace_processor/importers/proto/gpu_track_event.descriptor.h"
 #include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
@@ -42,9 +43,11 @@ TrackEventModule::TrackEventModule(ProtoImporterModuleContext* module_context,
       track_event_tracker_(new TrackEventTracker(context)),
       tokenizer_(module_context, context, track_event_tracker_.get()),
       parser_(&plugin_context_, context, track_event_tracker_.get()) {
-  // Register compiled-in TrackEvent extension plugins here, e.g.:
-  //   plugin_context_.plugins.emplace_back(
-  //       std::make_unique<FooPlugin>(&plugin_context_, context));
+  // Compiled-in TrackEvent extension plugins. Each owns its extension field
+  // ids and side tables; nothing here knows about the events themselves.
+  plugin_context_.plugins.emplace_back(
+      std::make_unique<AndroidFrameworkTrackEventPlugin>(&plugin_context_,
+                                                         context));
 
   RegisterForField(TracePacket::kTrackEventRangeOfInterestFieldNumber);
   RegisterForField(TracePacket::kTrackEventFieldNumber);
