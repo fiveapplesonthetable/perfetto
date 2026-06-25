@@ -44,6 +44,7 @@ export const defaultPlugins = [
   'com.android.MemoryViz',
   'com.android.PinAndroidPerfMetrics',
   'com.android.PinSysUITracks',
+  'com.android.ProcessStateBreakdown',
   'com.android.SysUIWorkspace',
   'com.android.WearLongBatteryTracing',
   'com.google.PixelCpmTrace',
