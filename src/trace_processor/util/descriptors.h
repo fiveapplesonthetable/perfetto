@@ -238,6 +238,22 @@ class DescriptorPool {
     return descriptors_;
   }
 
+  // Opaque memo of a resolved descriptor, reused across FindEnumString calls.
+  class CachedDescriptor {
+   public:
+    CachedDescriptor() = default;
+
+   private:
+    friend class DescriptorPool;
+    std::optional<uint32_t> descriptor_idx_;
+  };
+
+  // Name of |value| in enum |enum_name|, or nullopt. |cache| memoizes the
+  // descriptor across calls.
+  std::optional<std::string> FindEnumString(CachedDescriptor& cache,
+                                            const std::string& enum_name,
+                                            int32_t value) const;
+
  private:
   base::Status AddNestedProtoDescriptors(
       const std::string& file_name,
