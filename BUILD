@@ -499,6 +499,8 @@ perfetto_cc_library(
         ":src_trace_processor_plugins_perf_counter_perf_counter",
         ":src_trace_processor_plugins_perfetto_manifest_perfetto_manifest",
         ":src_trace_processor_plugins_pprof_functions_pprof_functions",
+        ":src_trace_processor_plugins_process_state_importer_process_state_importer",
+        ":src_trace_processor_plugins_process_state_importer_tables",
         ":src_trace_processor_plugins_slice_mipmap_operator_slice_mipmap_operator",
         ":src_trace_processor_plugins_span_join_operator_span_join_operator",
         ":src_trace_processor_plugins_sql_stats_table_sql_stats_table",
@@ -796,6 +798,8 @@ perfetto_cc_library(
         ":src_trace_processor_plugins_perf_counter_perf_counter",
         ":src_trace_processor_plugins_perfetto_manifest_perfetto_manifest",
         ":src_trace_processor_plugins_pprof_functions_pprof_functions",
+        ":src_trace_processor_plugins_process_state_importer_process_state_importer",
+        ":src_trace_processor_plugins_process_state_importer_tables",
         ":src_trace_processor_plugins_slice_mipmap_operator_slice_mipmap_operator",
         ":src_trace_processor_plugins_span_join_operator_span_join_operator",
         ":src_trace_processor_plugins_sql_stats_table_sql_stats_table",
@@ -4809,6 +4813,30 @@ perfetto_filegroup(
     srcs = [
         "src/trace_processor/plugins/pprof_functions/pprof_functions.cc",
         "src/trace_processor/plugins/pprof_functions/pprof_functions.h",
+    ],
+)
+
+# GN target: //src/trace_processor/plugins/process_state_importer:process_state_importer
+perfetto_filegroup(
+    name = "src_trace_processor_plugins_process_state_importer_process_state_importer",
+    srcs = [
+        "src/trace_processor/plugins/process_state_importer/process_state_importer.cc",
+        "src/trace_processor/plugins/process_state_importer/process_state_importer.h",
+        "src/trace_processor/plugins/process_state_importer/process_state_module.cc",
+        "src/trace_processor/plugins/process_state_importer/process_state_module.h",
+    ],
+)
+
+# GN target: //src/trace_processor/plugins/process_state_importer:tables
+perfetto_cc_tp_tables(
+    name = "src_trace_processor_plugins_process_state_importer_tables",
+    srcs = [
+        "src/trace_processor/plugins/process_state_importer/tables.py",
+    ],
+    outs = [
+        "src/trace_processor/plugins/process_state_importer/all_tables_fwd.h",
+        "src/trace_processor/plugins/process_state_importer/tables_fwd.h",
+        "src/trace_processor/plugins/process_state_importer/tables_py.h",
     ],
 )
 
@@ -11046,6 +11074,8 @@ perfetto_cc_library(
         ":src_trace_processor_plugins_perf_counter_perf_counter",
         ":src_trace_processor_plugins_perfetto_manifest_perfetto_manifest",
         ":src_trace_processor_plugins_pprof_functions_pprof_functions",
+        ":src_trace_processor_plugins_process_state_importer_process_state_importer",
+        ":src_trace_processor_plugins_process_state_importer_tables",
         ":src_trace_processor_plugins_slice_mipmap_operator_slice_mipmap_operator",
         ":src_trace_processor_plugins_span_join_operator_span_join_operator",
         ":src_trace_processor_plugins_sql_stats_table_sql_stats_table",
@@ -11373,6 +11403,8 @@ perfetto_cc_binary(
         ":src_trace_processor_plugins_perf_counter_perf_counter",
         ":src_trace_processor_plugins_perfetto_manifest_perfetto_manifest",
         ":src_trace_processor_plugins_pprof_functions_pprof_functions",
+        ":src_trace_processor_plugins_process_state_importer_process_state_importer",
+        ":src_trace_processor_plugins_process_state_importer_tables",
         ":src_trace_processor_plugins_slice_mipmap_operator_slice_mipmap_operator",
         ":src_trace_processor_plugins_span_join_operator_span_join_operator",
         ":src_trace_processor_plugins_sql_stats_table_sql_stats_table",
