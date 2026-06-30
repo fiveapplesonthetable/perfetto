@@ -141,21 +141,21 @@ namespace perfetto::trace_processor::stats {
   F(graphics_frame_event_parser_errors,   kSingle,  kInfo,     kAnalysis, Scope::kMachineAndTrace, ""), \
   F(guess_trace_type_duration_ns,         kSingle,  kInfo,     kAnalysis, Scope::kGlobal, ""), \
   F(interned_data_tokenizer_errors,       kSingle,  kInfo,     kAnalysis, Scope::kMachineAndTrace, ""), \
-  F(invalid_clock_snapshots,              kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace, ""), \
+  F(invalid_clock_snapshots,              kSingle,  kError,    kAnalysis, Scope::kGlobal, ""), \
   F(invalid_cpu_times,                    kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace, ""), \
   F(kernel_wakelock_reused_id,            kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace,      \
        "Duplicated interning ID seen. Should never happen."),                  \
   F(kernel_wakelock_unknown_id,           kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace,      \
        "Interning ID not found. Should never happen."),                        \
-  F(kernel_wakelock_zero_value_reported,  kSingle,  kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+  F(kernel_wakelock_zero_value_reported,  kSingle,  kInfo, kTrace, Scope::kMachineAndTrace,             \
        "Zero value received from SuspendControlService. Indicates a transient "\
        "error in SuspendControlService."),                                     \
   F(kernel_wakelock_non_monotonic_value_reported,                              \
-                                          kSingle,  kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+                                          kSingle,  kInfo, kTrace, Scope::kMachineAndTrace,             \
        "Decreased value received from SuspendControlService. Indicates a "     \
        "transient error in SuspendControlService."),                           \
   F(kernel_wakelock_implausibly_large_value_reported,                          \
-                                          kSingle,  kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+                                          kSingle,  kInfo, kTrace, Scope::kMachineAndTrace,             \
        "Implausibly large increment to value received from "                   \
        "SuspendControlService. Indicates a transient error in "                \
        "SuspendControlService."),                                              \
@@ -260,6 +260,31 @@ namespace perfetto::trace_processor::stats {
       "In either case, see "                                                   \
       "https://perfetto.dev/docs/concepts/buffers"                             \
       "#incremental-state-in-trace-packets"),                                  \
+  F(traced_buf_data_loss_read_gap,        kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+      "Sequence data losses TraceBufferV2 attributed to a read-time ChunkID "  \
+      "gap, per buffer."),                                                     \
+  F(traced_buf_data_loss_chunk_corrupted, kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+      "Sequence data losses TraceBufferV2 attributed to a chunk whose "        \
+      "fragments couldn't be tokenized (malformed / out-of-bounds), per "      \
+      "buffer."),                                                              \
+  F(traced_buf_data_loss_orphan_continuation, kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,     \
+      "Sequence data losses TraceBufferV2 attributed to a continuation/end "   \
+      "fragment with no preceding begin fragment, per buffer."),               \
+  F(traced_buf_data_loss_reassembly_gap,  kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+      "Sequence data losses TraceBufferV2 attributed to a ChunkID gap in the " \
+      "middle of a fragmented packet, per buffer."),                           \
+  F(traced_buf_data_loss_reassembly_broken_chain, kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace, \
+      "Sequence data losses TraceBufferV2 attributed to a broken fragment "    \
+      "chain despite contiguous ChunkIDs, per buffer."),                       \
+  F(traced_buf_data_loss_overwrite,       kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+      "Sequence data losses TraceBufferV2 attributed to a ring-buffer wrap "   \
+      "evicting unread chunks, per buffer."),                                  \
+  F(traced_buf_data_loss_writer_abort,    kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+      "Sequence data losses TraceBufferV2 attributed to a trace writer "       \
+      "aborting an in-progress fragmented packet, per buffer."),               \
+  F(traced_buf_data_loss_smb_full,        kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,         \
+      "Sequence data losses the producer attributed to its shared memory "     \
+      "buffer being full, per buffer."),                                       \
   F(traced_buf_write_wrap_count,          kIndexed, kInfo,     kTrace, Scope::kMachineAndTrace,    ""), \
   F(traced_buf_v2s_packets_seen,          kIndexed, kInfo,     kTrace, Scope::kMachineAndTrace,         \
        "Shadow mode: total packets read."),                                    \
@@ -340,6 +365,15 @@ namespace perfetto::trace_processor::stats {
       "time clock. Both clocks exist in snapshots, but never together or "     \
       "via a common intermediate clock. Ensure ClockSnapshots link all used "  \
       "clocks to the trace time clock."),                                      \
+  F(clock_sync_unrelatable_clock_domains, kSingle, kError, kAnalysis, Scope::kMachineAndTrace,         \
+      "A file's clock domain could not be related to the trace time clock, so "\
+      "its events were dropped. The two are different real clock domains (the "\
+      "args record the source and trace-time clock ids, e.g. BOOTTIME=6 "      \
+      "against a REALTIME=1 trace time) with nothing connecting them, and "    \
+      "trace_processor does not assume different real clocks are aligned. "    \
+      "Provide a relationship - a ClockSnapshot, a remote_clock_sync, or a "   \
+      "perfetto_manifest clock anchor - or attribute the file to a machine "   \
+      "that shares a clock with the rest of the trace."),                      \
   F(clock_sync_mixed_clock_sources,         kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace,      \
       "A non-primary trace file used both the primary trace's clock "          \
       "snapshots and its own for timestamp conversion. Timestamps "            \
@@ -354,7 +388,7 @@ namespace perfetto::trace_processor::stats {
       "results. This can happen when a sequence-scoped clock (64-127) is "    \
       "used before the ClockSnapshot defining it arrives, and the sorter "     \
       "has already started flushing."),                                        \
-  F(clock_sync_cache_miss,                kSingle,  kInfo,     kAnalysis, Scope::kMachineAndTrace, ""), \
+  F(clock_sync_cache_miss,                kSingle,  kInfo,     kAnalysis, Scope::kGlobal, ""), \
   F(process_tracker_errors,               kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace, ""), \
   F(namespaced_thread_missing_process,    kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace,      \
       "A namespaced thread association was received but the corresponding "    \

@@ -227,6 +227,7 @@ enum AppExitReasonCode {
   APP_EXIT_REASON_FREEZER = 14;
   APP_EXIT_REASON_PACKAGE_STATE_CHANGE = 15;
   APP_EXIT_REASON_PACKAGE_UPDATED = 16;
+  APP_EXIT_REASON_MEMORY_LIMITER = 17;
 }
 
 enum AppExitSubReasonCode {
@@ -268,17 +269,36 @@ enum AppExitSubReasonCode {
   APP_EXIT_SUBREASON_ANR_TYPE_BROADCAST_OF_INTENT = 35;
   APP_EXIT_SUBREASON_ANR_TYPE_CONTENT_PROVIDER_NOT_RESPONDING = 36;
   APP_EXIT_SUBREASON_ANR_TYPE_EXECUTING_SERVICE = 37;
+  APP_EXIT_SUBREASON_ANR_TYPE_FOREGROUND_SERVICE_TIMEOUT = 38;
   APP_EXIT_SUBREASON_ANR_TYPE_FOREGROUND_SHORT_SERVICE_TIMEOUT = 39;
+  APP_EXIT_SUBREASON_ANR_TYPE_GPU_HANG = 40;
   APP_EXIT_SUBREASON_ANR_TYPE_INPUT_DISPATCHING_TIMEOUT = 41;
   APP_EXIT_SUBREASON_ANR_TYPE_INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW = 42;
+  APP_EXIT_SUBREASON_ANR_TYPE_JOB_SERVICE_BIND = 43;
+  APP_EXIT_SUBREASON_ANR_TYPE_JOB_SERVICE_NOTIFICATION_NOT_PROVIDED = 44;
   APP_EXIT_SUBREASON_ANR_TYPE_JOB_SERVICE_START = 45;
+  APP_EXIT_SUBREASON_ANR_TYPE_JOB_SERVICE_STOP = 46;
   APP_EXIT_SUBREASON_ANR_TYPE_START_FOREGROUND_SERVICE = 47;
+  APP_EXIT_SUBREASON_ANR_TYPE_SYSTEM_SERVER_WATCHDOG_TIMEOUT = 48;
   APP_EXIT_SUBREASON_EXCESSIVE_ENQUEUED_BROADCASTS_COUNT = 49;
+  APP_EXIT_SUBREASON_VOLUME_MOUNT = 50;
+  APP_EXIT_SUBREASON_VOLUME_UNMOUNT = 51;
+  APP_EXIT_SUBREASON_PACKAGE_HIDDEN = 52;
+  APP_EXIT_SUBREASON_PACKAGE_DELETED = 53;
+  APP_EXIT_SUBREASON_PACKAGE_MOVED = 54;
+  APP_EXIT_SUBREASON_APP_DATA_CLEARED = 55;
+  APP_EXIT_SUBREASON_STORAGE_SESSION_RESET = 56;
+  APP_EXIT_SUBREASON_ACTIVITY_LAUNCH_FAILURE = 57;
+  APP_EXIT_SUBREASON_RESTART_ACTIVITY_PROCESS_TIMEOUT = 58;
+  APP_EXIT_SUBREASON_RAPID_ACTIVITY_LAUNCH = 59;
+  APP_EXIT_SUBREASON_CONFIG_RESET_RESTART = 60;
+  APP_EXIT_SUBREASON_PROVIDER_CLIENT_REPORTED_DEATH = 61;
 }
 
 enum Importance {
-  option allow_alias = true;
-
+  // No allow_alias: pbzero generates an enum->name switch in the header, and a
+  // duplicate value (the old IMPORTANCE_BACKGROUND == IMPORTANCE_CACHED == 400)
+  // is a duplicate-case error under -Werror once a C++ consumer includes it.
   IMPORTANCE_UNKNOWN = 0;
   IMPORTANCE_FOREGROUND = 100;
   IMPORTANCE_FOREGROUND_SERVICE = 125;
@@ -291,7 +311,6 @@ enum Importance {
   IMPORTANCE_TOP_SLEEPING = 325;
   IMPORTANCE_CANT_SAVE_STATE = 350;
   IMPORTANCE_CACHED = 400;
-  IMPORTANCE_BACKGROUND = 400;
   IMPORTANCE_EMPTY = 500;
   IMPORTANCE_GONE = 1000;
 }
@@ -328,6 +347,8 @@ enum HostingTypeId {
   HOSTING_TYPE_SYSTEM = 12;
   HOSTING_TYPE_TOP_ACTIVITY = 13;
   HOSTING_TYPE_EMPTY = 14;
+  HOSTING_TYPE_STARTED_SERVICE = 15;
+  HOSTING_TYPE_BOUND_SERVICE = 16;
 }
 
 enum UnfreezeReason {
@@ -374,6 +395,12 @@ enum TriggerType {
   TRIGGER_TYPE_JOB = 4;
 }
 
+enum HostingZygoteVariant {
+  HOSTING_ZYGOTE_VARIANT_UNKNOWN = 0;
+  HOSTING_ZYGOTE_VARIANT_LEGACY = 1;
+  HOSTING_ZYGOTE_VARIANT_NATIVE = 2;
+}
+
 enum OomChangeReasonEnum {
   OOM_ADJ_REASON_NONE = 0;
   OOM_ADJ_REASON_ACTIVITY = 1;
@@ -402,6 +429,14 @@ enum OomChangeReasonEnum {
   OOM_ADJ_REASON_RECONFIGURATION = 24;
   OOM_ADJ_REASON_SERVICE_BINDER_CALL = 25;
   OOM_ADJ_REASON_BATCH_UPDATE_REQUEST = 26;
+}
+
+enum ServiceRestartReason {
+  SERVICE_RESTART_REASON_UNKNOWN = 0;
+  SERVICE_RESTART_REASON_START_REQUESTED = 1;
+  SERVICE_RESTART_REASON_CONNECTION = 2;
+  SERVICE_RESTART_REASON_FORCED = 3;
+  SERVICE_RESTART_REASON_PERSISTENT = 4;
 }
 
 message AndroidBroadcastEvent {
@@ -503,6 +538,18 @@ message AndroidProcessStartEvent {
 
   // The trigger type for the process start.
   optional TriggerType trigger_type = 8;
+
+  // Whether the process was spawned from the native or legacy zygote variant.
+  optional HostingZygoteVariant hosting_zygote_variant = 9;
+
+  // The startSeq of the process.
+  optional int64 start_seq = 10;
+
+  // The hosting authority of the process.
+  optional string hosting_authority = 11;
+
+  // Whether the provider is stable.
+  optional bool is_provider_stable = 12;
 }
 
 // This can be delayed for up to 15s in some cases. It should typically
@@ -602,6 +649,28 @@ message AndroidServiceStateChangedEvent {
   optional int32 bind_id = 5;
   // Type of foreground service.
   optional int32 foreground_service_type = 6;
+  // UID of the app accessing the service.
+  optional int32 caller_uid = 7;
+  // PID of the app accessing the service.
+  optional int32 caller_pid = 8;
+  // Why the service was (re)started.
+  optional ServiceRestartReason reason_enum = 9;
+  // Bitmask of the binding's Context.BIND_* flags (e.g. BIND_FOREGROUND_SERVICE).
+  optional int64 bind_flags = 10;
+
+  // Whether this event binds or unbinds the connection. Used to reconstruct
+  // the live service-binding graph from the event stream. DISCONNECT is a
+  // teardown that did not go through an explicit unbind (process death,
+  // cleanup); the importer treats it as a binding removal.
+  enum Action {
+    ACTION_UNKNOWN = 0;
+    ACTION_BIND = 1;
+    ACTION_UNBIND = 2;
+    ACTION_DISCONNECT = 3;
+  }
+  optional Action action = 11;
+  // Identifier for the start request.
+  optional int32 start_id = 12;
 }
 
 message AndroidProviderStateChangedEvent {
@@ -617,11 +686,61 @@ message AndroidProviderStateChangedEvent {
   optional int32 caller_pid = 5;
   // Whether the connection is stable.
   optional int32 is_stable = 6;
+  // Identifier for the binding.
+  optional int32 bind_id = 7;
+
+  // Whether this event binds or unbinds the connection. Used to reconstruct
+  // the live provider-binding graph from the event stream. DISCONNECT is a
+  // teardown that did not go through an explicit unbind (process death,
+  // cleanup); the importer treats it as a binding removal.
+  enum Action {
+    ACTION_UNKNOWN = 0;
+    ACTION_BIND = 1;
+    ACTION_UNBIND = 2;
+    ACTION_DISCONNECT = 3;
+  }
+  optional Action action = 8;
+}
+
+message AndroidActivityStateChangedEvent {
+  // UID of the app hosting the activity.
+  optional int32 uid = 1;
+  // PID of the app hosting the activity.
+  optional int32 pid = 2;
+  // Component name of the activity.
+  optional string component_name = 3;
+
+  enum ActivityState {
+    STATE_UNKNOWN = 0;
+    INITIALIZING = 1;
+    STARTED = 2;
+    RESUMED = 3;
+    PAUSING = 4;
+    PAUSED = 5;
+    STOPPING = 6;
+    STOPPED = 7;
+    FINISHING = 8;
+    DESTROYING = 9;
+    DESTROYED = 10;
+    RESTARTING_PROCESS = 11;
+  }
+  // The state transition.
+  optional ActivityState state = 4;
+  // Reason for the state transition.
+  optional string reason = 5;
+  // Task ID the activity belongs to.
+  optional int32 task_id = 6;
+}
+
+message AndroidOomAdjusterPassEvent {
+  optional bool is_full_update = 1;
+  optional int32 target_uid = 2;
+  optional OomChangeReasonEnum reason = 3;
 }
 
 message FrameworksBaseTrackEvent {
   // Usable range: [2004, 2006], [2008, 2099].
-  // Next id: 2017.
+  // Next id: 2019.
   extend perfetto.protos.TrackEvent {
     // MessageQueue messages.
     optional AndroidMessageQueue message_queue = 2004;
@@ -652,5 +771,11 @@ message FrameworksBaseTrackEvent {
     // Foreground service state changed event.
     optional AndroidServiceStateChangedEvent fg_service_state_changed_event =
         2016;
+
+    // Activity state changed event.
+    optional AndroidActivityStateChangedEvent activity_state_changed_event =
+        2017;
+    // OomAdjuster pass event.
+    optional AndroidOomAdjusterPassEvent oom_adjuster_pass_event = 2018;
   }
 }

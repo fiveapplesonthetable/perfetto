@@ -75,6 +75,7 @@
 #include "src/trace_processor/importers/proto/additional_modules.h"
 #include "src/trace_processor/importers/proto/deobfuscation_tracker.h"
 #include "src/trace_processor/importers/proto/heap_graph_tracker.h"
+#include "src/trace_processor/importers/proto/track_event_module.h"
 #include "src/trace_processor/importers/simpleperf_proto/simpleperf_proto_tokenizer.h"
 #include "src/trace_processor/importers/systrace/systrace_trace_parser.h"
 #include "src/trace_processor/metrics/all_chrome_metrics.descriptor.h"
@@ -85,6 +86,7 @@
 #include "src/trace_processor/perfetto_sql/engine/perfetto_sql_connection.h"
 #include "src/trace_processor/perfetto_sql/stdlib/stdlib.h"
 #include "src/trace_processor/plugins/ancestor/ancestor.h"
+#include "src/trace_processor/plugins/android_framework_track_event/android_framework_track_event.h"
 #include "src/trace_processor/plugins/args/args.h"
 #include "src/trace_processor/plugins/art_heap_graph_functions/art_heap_graph_functions.h"
 #include "src/trace_processor/plugins/art_process_metadata_importer/art_process_metadata_importer.h"
@@ -118,6 +120,7 @@
 #include "src/trace_processor/plugins/perf_counter/perf_counter.h"
 #include "src/trace_processor/plugins/perfetto_manifest/perfetto_manifest.h"
 #include "src/trace_processor/plugins/pprof_functions/pprof_functions.h"
+#include "src/trace_processor/plugins/process_state_importer/process_state_importer.h"
 #include "src/trace_processor/plugins/slice_mipmap_operator/slice_mipmap_operator.h"
 #include "src/trace_processor/plugins/span_join_operator/span_join_operator.h"
 #include "src/trace_processor/plugins/sql_stats_table/sql_stats_table.h"
@@ -316,7 +319,9 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   // issues, so instead each plugin exposes an explicit Register* function that
   // we call here before GetPluginSet() builds its cached set. Remove these
   // explicit calls once the static-init based registration is restored.
+  process_state_importer::RegisterPlugin();
   ancestor::RegisterPlugin();
+  android_framework_track_event::RegisterPlugin();
   args::RegisterPlugin();
   art_heap_graph_functions::RegisterPlugin();
   art_process_metadata_importer::RegisterPlugin();
@@ -403,6 +408,14 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
         RegisterAdditionalModules(mctx, tctx);
         for (auto& p : plugins_) {
           p->RegisterProtoImporterModules(mctx, tctx);
+        }
+        // track_module is published by RegisterAdditionalModules above.
+        if (mctx->track_module) {
+          auto* ext_ctx =
+              mctx->track_module->mutable_extension_parser_context();
+          for (auto& p : plugins_) {
+            p->RegisterTrackEventExtensions(ext_ctx, tctx);
+          }
         }
       };
 
