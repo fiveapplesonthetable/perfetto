@@ -50,7 +50,9 @@ import {Popup, PopupPosition} from '../../widgets/popup';
 import {type ProfileDescriptor, ProfileType} from './common';
 import {
   buildOomeCallstackMetrics,
-  loadOomeErrorMsg,
+  loadOomeDetails,
+  renderOomeDetails,
+  type OomeDetails,
 } from './oome_callstack_common';
 
 const DOCS_NATIVE_HEAP_PROFILER =
@@ -178,7 +180,7 @@ export class HeapProfileFlamegraphDetailsPanel
 {
   private readonly props: Props;
   private flamegraphModalDismissed = false;
-  private oomeErrorMsg?: string;
+  private oomeDetails?: OomeDetails;
 
   // TODO(lalitm): we should be able remove this around the 26Q2 timeframe
   // We moved serialization from being attached to selections to instead being
@@ -228,7 +230,7 @@ export class HeapProfileFlamegraphDetailsPanel
 
   async load() {
     if (this.props.type === ProfileType.OOME_CALLSTACK) {
-      this.oomeErrorMsg = await loadOomeErrorMsg(this.trace.engine, this.ts);
+      this.oomeDetails = await loadOomeDetails(this.trace.engine, this.ts);
       m.redraw();
     }
 
@@ -261,8 +263,7 @@ export class HeapProfileFlamegraphDetailsPanel
               label: this.profileDescriptor.label,
               help: profileHelp(this.profileDescriptor),
             }),
-            this.oomeErrorMsg &&
-              m('span.pf-heap-profile-oome-error', this.oomeErrorMsg),
+            renderOomeDetails(this.oomeDetails),
           ),
           buttons: m(Stack, {orientation: 'horizontal', spacing: 'large'}, [
             m('span', `Snapshot time: `, m(Timestamp, {trace: this.trace, ts})),

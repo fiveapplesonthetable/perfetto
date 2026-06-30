@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type {OomeDetails} from '../dev.perfetto.HeapProfile/oome_callstack_common';
+
+export type {OomeDetails};
+
 export interface HeapInfo {
   name: string;
   java: number;
@@ -46,6 +50,7 @@ export interface DuplicateArrayGroup {
 export interface OomeData {
   upid: number;
   ts: bigint;
+  details: OomeDetails;
 }
 
 export interface OverviewData {
@@ -68,6 +73,8 @@ export interface OverviewData {
   dmabufRssSize: bigint | null;
   /** The process uptime at the time of the heap dump. */
   processUptime: bigint | null;
+  /** OOME details, if the dump was triggered by an OutOfMemoryError. */
+  oome: OomeDetails | undefined;
 }
 
 export type PrimOrRef =

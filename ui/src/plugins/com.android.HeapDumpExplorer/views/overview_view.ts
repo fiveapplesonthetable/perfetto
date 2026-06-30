@@ -31,6 +31,10 @@ import {
   type GridRow,
 } from '../../../widgets/grid';
 import {removeFalsyValues} from '../../../base/array_utils';
+import {
+  OOME_DETAILS_TITLE,
+  renderOomeDetailsGrid,
+} from '../../dev.perfetto.HeapProfile/oome_callstack_common';
 
 const HEAP_SCHEMA: SchemaRegistry = {
   query: {
@@ -368,6 +372,12 @@ function OverviewView(): m.Component<OverviewViewAttrs> {
             ],
           }),
         ]),
+        overview.oome !== undefined
+          ? m('div', {class: 'pf-hde-card pf-hde-mt-4'}, [
+              m('h3', {class: 'pf-hde-sub-heading'}, OOME_DETAILS_TITLE),
+              renderOomeDetailsGrid(overview.oome),
+            ])
+          : null,
         overview.duplicateBitmaps && overview.duplicateBitmaps.length > 0
           ? renderDuplicateSection(
               'Duplicate Bitmaps',
