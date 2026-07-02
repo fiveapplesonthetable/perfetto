@@ -56,3 +56,9 @@ perfetto_proto_library("semantic_type_@TYPE@") {
     "zero",
   ]
 }
+
+perfetto_proto_library("field_options_@TYPE@") {
+  proto_generators = [ "zero" ]
+  sources = [ "field_options.proto" ]
+  import_dirs = [ "${perfetto_protobuf_src_dir}" ]
+}

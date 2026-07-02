@@ -256,6 +256,19 @@ class DescriptorPool {
                                             std::string_view enum_name,
                                             int32_t value) const;
 
+  // Value of the option named |option_name| set on |field|, or nullopt if
+  // unset. |option_name| is an extension of google.protobuf.FieldOptions.
+  std::optional<std::string> FieldOptionString(
+      const FieldDescriptor& field,
+      std::string_view option_name) const;
+
+  // Appends the name of each single-bit flag set in |mask| to |*out| (views
+  // into the pool's storage), for the flags enum at |enum_descriptor_idx|.
+  // Returns the set bits that matched no flag.
+  int64_t FlagSetToViews(uint32_t enum_descriptor_idx,
+                         int64_t mask,
+                         std::vector<std::string_view>* out) const;
+
  private:
   base::Status AddNestedProtoDescriptors(
       const std::string& file_name,

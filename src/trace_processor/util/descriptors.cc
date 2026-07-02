@@ -610,6 +610,55 @@ std::optional<std::string> DescriptorPool::FindEnumString(
   return descriptors_[*cache.descriptor_idx_].FindEnumString(value);
 }
 
+std::optional<std::string> DescriptorPool::FieldOptionString(
+    const FieldDescriptor& field,
+    std::string_view option_name) const {
+  if (field.options().empty()) {
+    return std::nullopt;
+  }
+  auto opt_idx = FindDescriptorIdx(".google.protobuf.FieldOptions");
+  if (!opt_idx) {
+    return std::nullopt;
+  }
+  const auto* opt =
+      descriptors_[*opt_idx].FindFieldByName(std::string(option_name));
+  if (!opt) {
+    return std::nullopt;
+  }
+  protozero::ProtoDecoder decoder(field.options().data(),
+                                  field.options().size());
+  auto f = decoder.FindField(opt->number());
+  if (!f.valid()) {
+    return std::nullopt;
+  }
+  return f.as_std_string();
+}
+
+int64_t DescriptorPool::FlagSetToViews(
+    uint32_t enum_descriptor_idx,
+    int64_t mask,
+    std::vector<std::string_view>* out) const {
+  const ProtoDescriptor& desc = descriptors_[enum_descriptor_idx];
+  if (desc.type() != ProtoDescriptor::Type::kEnum) {
+    return mask;
+  }
+  const auto& names_by_value = desc.enum_values_by_number();
+  uint64_t unmatched = 0;
+  for (auto bits = static_cast<uint64_t>(mask); bits != 0; bits &= bits - 1) {
+    uint64_t flag = bits & ~(bits - 1);  // lowest set bit
+    // int32 enum values: only bits 0..31 can match (bit 31 = INT32_MIN).
+    auto it = flag < (uint64_t{1} << 32)
+                  ? names_by_value.find(static_cast<int32_t>(flag))
+                  : names_by_value.end();
+    if (it != names_by_value.end()) {
+      out->push_back(it->second);
+    } else {
+      unmatched |= flag;
+    }
+  }
+  return static_cast<int64_t>(unmatched);
+}
+
 std::vector<uint8_t> DescriptorPool::SerializeAsDescriptorSet() const {
   protozero::HeapBuffered<protos::pbzero::DescriptorSet> descs;
   for (const auto& desc : descriptors()) {
