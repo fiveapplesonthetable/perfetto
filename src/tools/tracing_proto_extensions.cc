@@ -492,11 +492,13 @@ base::Status ValidateRegistry(const Registry& reg) {
   if (reg.scope != "perfetto.protos.TrackEvent" &&
       reg.scope != "perfetto.protos.TracePacket" &&
       reg.scope != "perfetto.protos.InternedData" &&
-      reg.scope != "perfetto.protos.TrackEvent.State") {
+      reg.scope != "perfetto.protos.TrackEvent.State" &&
+      reg.scope != "google.protobuf.FieldOptions") {
     return base::ErrStatus(
         "Invalid scope '%s' in '%s'; expected one of: "
         "perfetto.protos.TrackEvent, perfetto.protos.TracePacket, "
-        "perfetto.protos.InternedData, perfetto.protos.TrackEvent.State",
+        "perfetto.protos.InternedData, perfetto.protos.TrackEvent.State, "
+        "google.protobuf.FieldOptions",
         reg.scope.c_str(), reg.source_path.c_str());
   }
 

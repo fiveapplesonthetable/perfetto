@@ -183,6 +183,45 @@
           "range": [2000, 9999]
         }
       ]
+    },
+    {
+      "scope": "google.protobuf.FieldOptions",
+      "comment": [
+        "Custom field annotations (extensions of google.protobuf.FieldOptions).",
+        "The number space is protobuf's, so allocations use its internal-use",
+        "block (50000-99999). trace_processor reads these by name, so the number",
+        "only governs allocation, not consumption."
+      ],
+      "range": [50001, 99999],
+      "allocations": [
+        {
+          "name": "perfetto_metrics",
+          "range": [50001, 50002],
+          "contact": "perfetto-dev@googlegroups.com",
+          "description": "Metric field options (unit, improvementDirection)",
+          "proto": "protos/perfetto/metrics/custom_options.proto"
+        },
+        {
+          "name": "unallocated",
+          "comment": ["The next allocation goes here. Shrink and take from here."],
+          "range": [50003, 59999]
+        },
+        {
+          "name": "android_system",
+          "description": "Android OS platform field annotations (System image)",
+          "comment": [
+            "Sub-registry lives in the Android tree; covers e.g. the winscope",
+            "typedef option and the frameworks/base flags_enum annotation."
+          ],
+          "registry": "/system/extras/tracing/system_tracing_protos.json",
+          "repo": "android-internal",
+          "range": [60000, 69999]
+        },
+        {
+          "name": "unallocated",
+          "range": [70000, 99999]
+        }
+      ]
     }
   ]
 }
