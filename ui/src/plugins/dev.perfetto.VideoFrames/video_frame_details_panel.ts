@@ -16,6 +16,7 @@ import './video_frames.scss';
 import m from 'mithril';
 import {ensureIsInstance} from '../../base/assert';
 import {Time} from '../../base/time';
+import {NUM} from '../../trace_processor/query_result';
 import {Timestamp} from '../../components/widgets/timestamp';
 import type {TrackEventDetailsPanel} from '../../public/details_panel';
 import type {TrackEventSelection} from '../../public/selection';
@@ -95,12 +96,36 @@ export class VideoFrameDetailsPanel implements TrackEventDetailsPanel {
     );
   }
 
+  private async jumpToSurfaceFlingerFrame() {
+    const frame = this.player.currentFrame;
+    if (frame === undefined) return;
+    const result = await this.player.trace.engine.query(`
+      select id from actual_frame_timeline_slice
+      where extract_arg(arg_set_id, 'Surface frame token') is null
+      order by abs((ts + dur) - ${frame.ts})
+      limit 1
+    `);
+    if (result.numRows() === 0) return;
+    const {id} = result.firstRow({id: NUM});
+    this.player.trace.selection.selectSqlEvent(
+      'actual_frame_timeline_slice',
+      id,
+      {scrollToSelection: true},
+    );
+  }
+
   private renderControls(): m.Children {
     const p = this.player;
     const idx = p.currentIdx;
     const total = p.frames.length;
     return m(
       ButtonBar,
+      m(Button, {
+        label: 'Jump to SF frame',
+        icon: 'arrow_forward',
+        compact: true,
+        onclick: () => this.jumpToSurfaceFlingerFrame(),
+      }),
       m(Button, {
         icon: 'skip_previous',
         compact: true,
