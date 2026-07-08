@@ -147,6 +147,9 @@ void VideoFrameModule::ParseVideoFrame(protozero::ConstBytes bytes,
     if (frame.has_pts_us()) {
       row.pts_us = static_cast<int64_t>(frame.pts_us());
     }
+    if (frame.has_frame_timeline_vsync_id()) {
+      row.frame_timeline_vsync_id = frame.frame_timeline_vsync_id();
+    }
   } else if (frame.has_codec_config()) {
     payload = frame.codec_config();
     row.codec = frame.has_codec() ? static_cast<int32_t>(frame.codec()) : 0;

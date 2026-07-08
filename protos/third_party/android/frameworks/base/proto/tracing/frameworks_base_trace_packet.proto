@@ -78,6 +78,12 @@ message VideoFrame {
   // RFC 6381 codec string (e.g. "avc1.42c00b"), passed straight to
   // WebCodecs VideoDecoder.configure. Set on the codec_config packet only.
   optional string codec_string = 9;
+
+  // Frame-timeline vsync id (the DisplayFrame token) of the composite this
+  // frame captured, letting consumers link the frame to the frame timeline
+  // exactly instead of matching timestamps. Set per au_data packet when the
+  // producer can supply it.
+  optional int64 frame_timeline_vsync_id = 10;
 }
 
 // Per-stream failure indicator. One is emitted per failure on a stream;

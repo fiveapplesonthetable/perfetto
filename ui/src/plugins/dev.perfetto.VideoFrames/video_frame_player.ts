@@ -14,7 +14,13 @@
 
 import m from 'mithril';
 import type {Trace} from '../../public/trace';
-import {BLOB, LONG, NUM, STR_NULL} from '../../trace_processor/query_result';
+import {
+  BLOB,
+  LONG,
+  LONG_NULL,
+  NUM,
+  STR_NULL,
+} from '../../trace_processor/query_result';
 
 // Max in-flight decoder inputs before the feed loop awaits, to bound the
 // decoder's queue and held-frame memory.
@@ -32,6 +38,9 @@ export interface FrameInfo {
   frameNumber: number;
   isKey: boolean;
   ptsUs: number;
+  // Frame-timeline vsync id (DisplayFrame token) of the captured composite,
+  // for linking to the frame timeline. Undefined if the trace didn't carry it.
+  vsyncId?: bigint;
 }
 
 // Decoder setup, cached once per stream.
@@ -129,7 +138,8 @@ export class VideoFramePlayer {
              COALESCE(is_key_frame, 0) AS isKey,
              COALESCE(pts_us, 0) AS ptsUs,
              COALESCE(is_config, 0) AS isConfig,
-             codec_string AS codecString
+             codec_string AS codecString,
+             frame_timeline_vsync_id AS vsyncId
       FROM __intrinsic_video_frames
       WHERE display_id = ${this.displayId}
       ORDER BY ts
@@ -142,6 +152,7 @@ export class VideoFramePlayer {
       ptsUs: NUM,
       isConfig: NUM,
       codecString: STR_NULL,
+      vsyncId: LONG_NULL,
     });
     for (; it.valid(); it.next()) {
       if (it.codecString !== null) this.codecString = it.codecString;
@@ -155,6 +166,7 @@ export class VideoFramePlayer {
         frameNumber: it.frameNumber,
         isKey: it.isKey !== 0,
         ptsUs: it.ptsUs,
+        vsyncId: it.vsyncId ?? undefined,
       });
     }
 

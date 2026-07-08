@@ -39,6 +39,7 @@ ANDROID_VIDEO_FRAMES_TABLE = Table(
         C('is_key_frame', CppOptional(CppInt32())),
         C('pts_us', CppOptional(CppInt64())),
         C('is_config', CppOptional(CppInt32())),
+        C('frame_timeline_vsync_id', CppOptional(CppInt64())),
     ],
     tabledoc=TableDoc(
         doc='''
@@ -63,6 +64,10 @@ ANDROID_VIDEO_FRAMES_TABLE = Table(
             'pts_us': 'For access units: codec presentation timestamp (us).',
             'is_config': '1 if this row carries codec_config '
                          '(decoder setup), not a displayable frame.',
+            'frame_timeline_vsync_id': 'Frame-timeline vsync id (DisplayFrame '
+                                       'token) of the captured composite, for '
+                                       'linking to the frame timeline; NULL if '
+                                       'the producer did not supply it.',
         }))
 
 # Keep this list sorted.

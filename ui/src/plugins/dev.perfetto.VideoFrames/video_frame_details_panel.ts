@@ -61,6 +61,14 @@ export class VideoFrameDetailsPanel implements TrackEventDetailsPanel {
         right: m(Timestamp, {trace: p.trace, ts: Time.fromRaw(frame.ts)}),
       }),
     ];
+    if (frame.vsyncId !== undefined) {
+      detailRows.push(
+        m(TreeNode, {
+          left: 'Frame timeline vsync id',
+          right: `${frame.vsyncId}`,
+        }),
+      );
+    }
     for (const err of p.errors) {
       detailRows.push(m(TreeNode, {left: 'Stream error', right: err}));
     }
