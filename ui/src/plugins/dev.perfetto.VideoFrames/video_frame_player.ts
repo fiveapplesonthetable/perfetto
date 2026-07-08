@@ -32,12 +32,15 @@ export interface FrameInfo {
   frameNumber: number;
   isKey: boolean;
   ptsUs: number;
+  // Codec config that decodes this frame (a stream can carry several).
+  configId?: number;
+  codecString?: string;
 }
 
-// Decoder setup, cached once per stream.
+// Decoder setup for one codec config, cached by config id.
 interface Setup {
   codecString: string; // RFC 6381, e.g. "avc1.42c029"
-  config: Uint8Array; // Annex-B SPS/PPS, prepended to the first decoded chunk
+  config: Uint8Array; // Annex-B SPS/PPS, prepended to each keyframe chunk
 }
 
 // A decoded frame queued for paint, tagged with its index into `frames`.
@@ -75,9 +78,7 @@ export class VideoFramePlayer {
   // the details panel. Empty = healthy.
   errors: string[] = [];
   private framesLoaded = false;
-  private configId?: number;
-  private codecString?: string;
-  private setup?: Setup;
+  private readonly setupCache = new Map<number, Setup>();
 
   // Render target, mounted/unmounted by the details panel.
   private canvas?: HTMLCanvasElement;
@@ -143,10 +144,14 @@ export class VideoFramePlayer {
       isConfig: NUM,
       codecString: STR_NULL,
     });
+    const configs: {ts: bigint; id: number; codecString?: string}[] = [];
     for (; it.valid(); it.next()) {
-      if (it.codecString !== null) this.codecString = it.codecString;
       if (it.isConfig) {
-        this.configId = it.id;
+        configs.push({
+          ts: it.ts,
+          id: it.id,
+          codecString: it.codecString ?? undefined,
+        });
         continue;
       }
       this.frames.push({
@@ -155,7 +160,22 @@ export class VideoFramePlayer {
         frameNumber: it.frameNumber,
         isKey: it.isKey !== 0,
         ptsUs: it.ptsUs,
+        codecString: it.codecString ?? undefined,
+        configId: undefined,
       });
+    }
+    // Each frame decodes against the most recent config at or before it (or
+    // the first, since a config's ts can trail the first frame).
+    for (const f of this.frames) {
+      let cfg = configs.length > 0 ? configs[0] : undefined;
+      for (const c of configs) {
+        if (c.ts <= f.ts) cfg = c;
+        else break;
+      }
+      if (cfg !== undefined) {
+        f.configId = cfg.id;
+        if (f.codecString === undefined) f.codecString = cfg.codecString;
+      }
     }
 
     // Per-stream failures: import-log rows for this display_id; name = reason.
@@ -229,9 +249,9 @@ export class VideoFramePlayer {
     idx: number,
   ): Promise<{outs: VideoFrame[]; k: number} | undefined> {
     if (typeof VideoDecoder === 'undefined') return undefined;
-    const setup = await this.loadSetup();
-    if (setup === undefined) return undefined;
     const k = this.nearestKey(idx);
+    const setup = await this.setupFor(this.frames[k]);
+    if (setup === undefined) return undefined;
     const range = this.frames.slice(k, idx + 1);
     const datas = await this.fetchAuData(range.map((f) => f.id));
     const outs: VideoFrame[] = [];
@@ -241,7 +261,7 @@ export class VideoFramePlayer {
     });
     decoder.configure(decoderConfig(setup));
     for (let i = 0; i < range.length; i++) {
-      decoder.decode(chunkFor(setup, range[i], datas[i], i === 0));
+      decoder.decode(chunkFor(range[i], datas[i], i === 0 ? setup.config : undefined));
     }
     await decoder.flush().catch(() => undefined);
     if (decoder.state !== 'closed') decoder.close();
@@ -316,7 +336,7 @@ export class VideoFramePlayer {
     if (typeof VideoDecoder === 'undefined' || this.canvas === undefined) {
       return undefined;
     }
-    const setup = await this.loadSetup();
+    const setup = await this.setupFor(this.frames[k]);
     if (setup === undefined || token !== this.token) return undefined;
     const queue: QueuedFrame[] = [];
     // n-th output is frame k+n. Counted independently of queue.length,
@@ -409,8 +429,6 @@ export class VideoFramePlayer {
     session: PlaySession,
     k: number,
   ): Promise<void> {
-    const setup = this.setup;
-    if (setup === undefined) return;
     // Fetch a batch at a time so peak JS memory is O(batch), not O(stream).
     for (let base = k; base < this.frames.length; base += FETCH_BATCH) {
       if (token !== this.token) break;
@@ -421,9 +439,12 @@ export class VideoFramePlayer {
         if (!(await this.waitForDecoderCapacity(token, session.decoder))) {
           return;
         }
-        session.decoder.decode(
-          chunkFor(setup, batch[i], datas[i], base + i === k),
-        );
+        // Prepend each keyframe's config so config changes reach the decoder.
+        const frame = batch[i];
+        const config = frame.isKey
+          ? (await this.setupFor(frame))?.config
+          : undefined;
+        session.decoder.decode(chunkFor(frame, datas[i], config));
       }
     }
     // flush() rejects if the decoder was already closed (end-of-stream or
@@ -452,13 +473,17 @@ export class VideoFramePlayer {
     return k;
   }
 
-  private async loadSetup(): Promise<Setup | undefined> {
-    if (this.setup !== undefined) return this.setup;
-    if (this.configId === undefined || this.codecString === undefined) return;
-    const [config] = await this.fetchAuData([this.configId]);
-    if (config.length === 0) return;
-    this.setup = {codecString: this.codecString, config};
-    return this.setup;
+  // Setup for the config a given frame decodes against, cached by config id.
+  private async setupFor(frame: FrameInfo): Promise<Setup | undefined> {
+    const {configId, codecString} = frame;
+    if (configId === undefined || codecString === undefined) return undefined;
+    const cached = this.setupCache.get(configId);
+    if (cached !== undefined) return cached;
+    const [config] = await this.fetchAuData([configId]);
+    if (config.length === 0) return undefined;
+    const setup: Setup = {codecString, config};
+    this.setupCache.set(configId, setup);
+    return setup;
   }
 
   private async fetchAuData(ids: ReadonlyArray<number>): Promise<Uint8Array[]> {
@@ -486,18 +511,17 @@ export class VideoFramePlayer {
   }
 }
 
-// The first chunk per stream carries the codec_config (SPS/PPS) prepended,
-// since those NALs were emitted out-of-band.
+// Keyframes get their codec_config (SPS/PPS) prepended, since those NALs are
+// emitted out-of-band; delta frames pass through as-is.
 function chunkFor(
-  setup: Setup,
   frame: FrameInfo,
   bytes: Uint8Array,
-  isFirst: boolean,
+  config: Uint8Array | undefined,
 ): EncodedVideoChunk {
   return new EncodedVideoChunk({
     type: frame.isKey ? 'key' : 'delta',
     timestamp: frame.ptsUs,
-    data: isFirst ? concat(setup.config, bytes) : bytes,
+    data: config !== undefined ? concat(config, bytes) : bytes,
   });
 }
 
