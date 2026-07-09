@@ -17,6 +17,8 @@ import m from 'mithril';
 import {ensureIsInstance} from '../../base/assert';
 import {Time} from '../../base/time';
 import {Timestamp} from '../../components/widgets/timestamp';
+import {NUM} from '../../trace_processor/query_result';
+import {Anchor} from '../../widgets/anchor';
 import type {TrackEventDetailsPanel} from '../../public/details_panel';
 import type {TrackEventSelection} from '../../public/selection';
 import {Button, ButtonBar} from '../../widgets/button';
@@ -64,6 +66,22 @@ export class VideoFrameDetailsPanel implements TrackEventDetailsPanel {
         right: m(Timestamp, {trace: p.trace, ts: Time.fromRaw(frame.ts)}),
       }),
     ];
+    if (frame.vsyncId !== undefined) {
+      const vsyncId = frame.vsyncId;
+      detailRows.push(
+        m(TreeNode, {
+          left: 'Frame timeline vsync id',
+          // Clickable (highlighted like the Timestamp): jump to the
+          // SurfaceFlinger DisplayFrame (frame-timeline slice) this frame was
+          // composited in.
+          right: m(
+            Anchor,
+            {onclick: () => this.jumpToDisplayFrame(vsyncId)},
+            `${vsyncId}`,
+          ),
+        }),
+      );
+    }
     for (const err of p.errors) {
       detailRows.push(m(TreeNode, {left: 'Stream error', right: err}));
     }
@@ -96,6 +114,23 @@ export class VideoFrameDetailsPanel implements TrackEventDetailsPanel {
         ),
       ),
     );
+  }
+
+  // Selects and scrolls to the SurfaceFlinger DisplayFrame (frame-timeline
+  // slice) with this composite token, so you can jump from a captured video
+  // frame to the composite that produced it.
+  private async jumpToDisplayFrame(vsyncId: bigint) {
+    const trace = this.player.trace;
+    const res = await trace.engine.query(`
+      SELECT id
+      FROM actual_frame_timeline_slice
+      WHERE display_frame_token = ${vsyncId} AND layer_name IS NULL
+      ORDER BY ts
+      LIMIT 1
+    `);
+    if (res.numRows() === 0) return;
+    const id = res.firstRow({id: NUM}).id;
+    trace.selection.selectSqlEvent('slice', id, {scrollToSelection: true});
   }
 
   private renderControls(): m.Children {
