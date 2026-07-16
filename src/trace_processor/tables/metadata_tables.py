@@ -227,6 +227,18 @@ PROCESS_TABLE = Table(
             cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE,
             cpp_access_duration=CppAccessDuration.POST_FINALIZATION,
         ),
+        C(
+            'package_uid',
+            CppOptional(CppUint32()),
+            sql_access=SqlAccess.HIGH_PERF,
+            cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE,
+        ),
+        C(
+            'defining_uid',
+            CppOptional(CppUint32()),
+            sql_access=SqlAccess.HIGH_PERF,
+            cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE,
+        ),
         C('machine_id', CppTableId(MACHINE_TABLE)),
     ],
     wrapping_sql_view=WrappingSqlView(view_name='process',),
@@ -289,6 +301,12 @@ PROCESS_TABLE = Table(
             'arg_set_id':
                 ColumnDoc(
                     'Extra args for this process.', joinable='args.arg_set_id'),
+            'package_uid':
+                'Uid of the package the process belongs to (from the Android '
+                'framework AndroidProcessStartEvent).',
+            'defining_uid':
+                'Defining uid of the process (from the Android framework '
+                'AndroidProcessStartEvent).',
             'machine_id':
                 '''
                   Machine identifier, non-null for processes on a remote

@@ -223,6 +223,12 @@ CREATE PERFETTO VIEW process(
   cmdline STRING,
   -- Extra args for this process.
   arg_set_id ARGSETID,
+  -- Uid of the package the process belongs to (from the Android framework
+  -- AndroidProcessStartEvent).
+  package_uid LONG,
+  -- Defining uid of the process (from the Android framework
+  -- AndroidProcessStartEvent).
+  defining_uid LONG,
   -- Machine identifier
   machine_id JOINID(machine.id)
 )
