@@ -49,6 +49,7 @@ export const defaultPlugins = [
   'com.google.PixelCpmTrace',
   'com.google.PixelMemory',
   'dev.perfetto.AggregateProfiles',
+  'dev.perfetto.PprofMerge',
   'dev.perfetto.AutoPinAndExpandTracks',
   'dev.perfetto.BookmarkletApi',
   'dev.perfetto.CoarseCpu',

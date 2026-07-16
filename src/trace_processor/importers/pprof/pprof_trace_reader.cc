@@ -34,6 +34,7 @@
 #include "src/trace_processor/importers/common/create_mapping_params.h"
 #include "src/trace_processor/importers/common/mapping_tracker.h"
 #include "src/trace_processor/importers/common/stack_profile_tracker.h"
+#include "src/trace_processor/importers/common/trace_file_tracker.h"
 #include "src/trace_processor/importers/common/virtual_memory_mapping.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/profiler_tables_py.h"
@@ -283,6 +284,26 @@ base::Status PprofTraceReader::ParseProfile() {
     }
   }
 
+  // Attribute every profile from this input to its source file, so that
+  // multiple pprofs loaded together (e.g. from an archive) stay distinguishable
+  // instead of all collapsing onto the single "pprof_file" scope. Gzipped
+  // members are parsed under an unnamed decompression file, so walk up the
+  // file-nesting chain to the nearest named ancestor (the archive member). Fall
+  // back to "pprof_file" for inputs without any usable file name.
+  StringId scope_id = pprof_file_string_id_;
+  const auto& trace_files = context_->storage->trace_file_table();
+  auto cur = context_->trace_file_tracker->CurrentFile();
+  while (cur.has_value()) {
+    auto row = trace_files[*cur];
+    std::optional<StringId> name = row.name();
+    if (name.has_value() && !name->is_null() &&
+        storage->GetString(*name).size() > 0) {
+      scope_id = *name;
+      break;
+    }
+    cur = row.parent_id();
+  }
+
   // Parse sample types and create aggregate_profile entries
   std::vector<tables::AggregateProfileTable::Id> profile_ids;
   for (auto it = profile.sample_type(); it; ++it) {
@@ -298,7 +319,7 @@ base::Status PprofTraceReader::ParseProfile() {
     std::string type_str = storage->GetString(type_str_id).ToStdString();
     auto profile_id =
         storage->mutable_aggregate_profile_table()
-            ->Insert({pprof_file_string_id_,
+            ->Insert({scope_id,
                       storage->InternString(("pprof " + type_str).c_str()),
                       type_str_id, unit_str_id})
             .id;
