@@ -62,6 +62,12 @@ ANDROID_TRACK_EVENT_PROCESS_TABLE = Table(
         C('process_start_delay_ms',
           CppOptional(CppInt64()),
           cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C('reason',
+          CppOptional(CppString()),
+          cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
+        C('sub_reason',
+          CppOptional(CppString()),
+          cpp_access=CppAccess.READ_AND_HIGH_PERF_WRITE),
     ],
     tabledoc=TableDoc(
         doc='Per-process lifecycle from Android framework TrackEvents.',
@@ -70,7 +76,8 @@ ANDROID_TRACK_EVENT_PROCESS_TABLE = Table(
             'upid':
                 'The process this row describes.',
             'start_seq_id':
-                'start_seq assigned when the process started.',
+                'Framework start sequence; matches the start and death '
+                'events of the same process instance, even across pid reuse.',
             'package_uid':
                 'The host package uid.',
             'caller_uid':
@@ -91,6 +98,10 @@ ANDROID_TRACK_EVENT_PROCESS_TABLE = Table(
                 'Milliseconds to reach bind application.',
             'process_start_delay_ms':
                 'Milliseconds to finish starting the process.',
+            'reason':
+                'AppExitReasonCode from AndroidProcessDiedEvent.',
+            'sub_reason':
+                'AppExitSubReasonCode from AndroidProcessDiedEvent.',
         },
     ),
 )

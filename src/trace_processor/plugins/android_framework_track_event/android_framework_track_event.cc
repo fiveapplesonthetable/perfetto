@@ -44,10 +44,13 @@ using AndroidProcessStartEvent =
     ::com::android::internal::pbzero::AndroidProcessStartEvent;
 using AndroidBinderDiedEvent =
     ::com::android::internal::pbzero::AndroidBinderDiedEvent;
+using AndroidProcessDiedEvent =
+    ::com::android::internal::pbzero::AndroidProcessDiedEvent;
 using AndroidTrackEventProcessTable = tables::AndroidTrackEventProcessTable;
 
-// Records AndroidProcessStartEvent and AndroidBinderDiedEvent into
-// __intrinsic_android_track_event_process.
+// Records AndroidProcessStartEvent, AndroidProcessDiedEvent and
+// AndroidBinderDiedEvent into __intrinsic_android_track_event_process. A
+// process instance's start and death events are matched by |start_seq_id|.
 class Parser : public TrackEventExtensionParser {
  public:
   Parser(TrackEventExtensionParserContext* extension_parser_context,
@@ -57,6 +60,7 @@ class Parser : public TrackEventExtensionParser {
         trace_context_(context),
         table_(table) {
     RegisterTrackEventExtension(FBTE::kProcessStartEventFieldNumber);
+    RegisterTrackEventExtension(FBTE::kProcessDiedEventFieldNumber);
     RegisterTrackEventExtension(FBTE::kBinderDiedEventFieldNumber);
   }
   ~Parser() override = default;
@@ -67,6 +71,9 @@ class Parser : public TrackEventExtensionParser {
     switch (field.id()) {
       case FBTE::kProcessStartEventFieldNumber:
         HandleProcessStart(field.Cast<FBTE::kProcessStartEvent>(), ts);
+        break;
+      case FBTE::kProcessDiedEventFieldNumber:
+        HandleProcessDied(field.Cast<FBTE::kProcessDiedEvent>(), ts);
         break;
       case FBTE::kBinderDiedEventFieldNumber:
         HandleBinderDied(field.Cast<FBTE::kBinderDiedEvent>(), ts);
@@ -91,30 +98,53 @@ class Parser : public TrackEventExtensionParser {
     }
   }
 
-  AndroidTrackEventProcessTable::RowReference GetOrInsertRow(UniquePid upid) {
-    auto it_and_ins =
-        upid_to_row_.Insert(upid, AndroidTrackEventProcessTable::Id{0});
-    if (it_and_ins.second) {
+  // Returns (creating if needed) the row for process instance |start_seq_id|.
+  AndroidTrackEventProcessTable::RowReference GetOrInsertRow(
+      int64_t start_seq_id,
+      UniquePid upid) {
+    auto ins =
+        seq_to_row_.Insert(start_seq_id, AndroidTrackEventProcessTable::Id{0});
+    if (ins.second) {
       AndroidTrackEventProcessTable::Row row;
       row.upid = upid;
-      *it_and_ins.first = table_->Insert(row).id;
+      row.start_seq_id = start_seq_id;
+      *ins.first = table_->Insert(row).id;
     }
-    return (*table_)[*it_and_ins.first];
+    return (*table_)[*ins.first];
+  }
+
+  // Returns the existing row for |start_seq_id|, or nullopt if its start was
+  // not seen.
+  std::optional<AndroidTrackEventProcessTable::RowReference> FindRow(
+      int64_t start_seq_id) {
+    auto* id = seq_to_row_.Find(start_seq_id);
+    if (!id) {
+      return std::nullopt;
+    }
+    return (*table_)[*id];
+  }
+
+  // Ends the process instance at |ts| if it has not already been ended.
+  void CloseProcess(AndroidTrackEventProcessTable::RowReference row,
+                    int64_t ts,
+                    uint32_t pid) {
+    if (row.fw_end_ts().has_value()) {
+      return;
+    }
+    row.set_fw_end_ts(ts);
+    trace_context_->process_tracker->EndThread(ts, pid);
   }
 
   void HandleProcessStart(protozero::ConstBytes data, int64_t ts) {
     AndroidProcessStartEvent::Decoder evt(data);
-    if (!evt.has_pid()) {
+    if (!evt.has_pid() || !evt.has_start_seq_id()) {
       return;
     }
     UniquePid upid = trace_context_->process_tracker->GetOrCreateProcess(
         static_cast<uint32_t>(evt.pid()));
     SetProcessMetadata(upid, data);
 
-    auto row = GetOrInsertRow(upid);
-    if (evt.has_start_seq_id()) {
-      row.set_start_seq_id(evt.start_seq_id());
-    }
+    auto row = GetOrInsertRow(evt.start_seq_id(), upid);
     if (evt.has_package_uid()) {
       row.set_package_uid(evt.package_uid());
     }
@@ -149,26 +179,47 @@ class Parser : public TrackEventExtensionParser {
     }
   }
 
+  // Binder died carries no exit reason: just end the instance if still active.
   void HandleBinderDied(protozero::ConstBytes data, int64_t ts) {
     AndroidBinderDiedEvent::Decoder evt(data);
-    if (!evt.has_pid()) {
+    if (!evt.has_pid() || !evt.has_start_seq_id()) {
       return;
     }
+    if (auto row = FindRow(evt.start_seq_id())) {
+      CloseProcess(*row, ts, static_cast<uint32_t>(evt.pid()));
+    }
+  }
 
-    std::optional<UniqueTid> utid =
-        trace_context_->process_tracker->GetThreadOrNull(
-            static_cast<uint32_t>(evt.pid()));
-    if (!utid) {
+  // Process died carries the exit reason: record it even if the instance was
+  // already ended (e.g. by a binder-died), and end the instance if active.
+  void HandleProcessDied(protozero::ConstBytes data, int64_t ts) {
+    AndroidProcessDiedEvent::Decoder evt(data);
+    if (!evt.has_pid() || !evt.has_start_seq_id()) {
       return;
     }
-    std::optional<UniquePid> upid =
-        trace_context_->storage->thread_table()[*utid].upid();
-    if (!upid) {
+    auto row = FindRow(evt.start_seq_id());
+    if (!row) {
       return;
     }
-    GetOrInsertRow(*upid).set_fw_end_ts(ts);
-    trace_context_->process_tracker->EndThread(
-        ts, static_cast<uint32_t>(evt.pid()));
+    if (evt.has_reason()) {
+      row->set_reason(InternEnum(reason_cache_,
+                                 ".com.android.internal.AppExitReasonCode",
+                                 static_cast<int32_t>(evt.reason())));
+    }
+    if (evt.has_sub_reason()) {
+      row->set_sub_reason(InternEnum(
+          sub_reason_cache_, ".com.android.internal.AppExitSubReasonCode",
+          static_cast<int32_t>(evt.sub_reason())));
+    }
+    // The died event carries the package and defining uids (but not the
+    // caller uid, which only the start event has); populate them too.
+    if (evt.has_package_uid()) {
+      row->set_package_uid(evt.package_uid());
+    }
+    if (evt.has_defining_uid()) {
+      row->set_defining_uid(evt.defining_uid());
+    }
+    CloseProcess(*row, ts, static_cast<uint32_t>(evt.pid()));
   }
 
   StringId InternEnum(DescriptorPool::CachedDescriptor& cache,
@@ -183,8 +234,10 @@ class Parser : public TrackEventExtensionParser {
   TraceProcessorContext* trace_context_;
   DescriptorPool::CachedDescriptor trigger_type_cache_;
   DescriptorPool::CachedDescriptor hosting_type_cache_;
+  DescriptorPool::CachedDescriptor reason_cache_;
+  DescriptorPool::CachedDescriptor sub_reason_cache_;
   AndroidTrackEventProcessTable* table_;
-  base::FlatHashMap<UniquePid, AndroidTrackEventProcessTable::Id> upid_to_row_;
+  base::FlatHashMap<int64_t, AndroidTrackEventProcessTable::Id> seq_to_row_;
 };
 
 class AndroidFrameworkTrackEventPlugin

@@ -313,6 +313,292 @@ class AndroidParser(TestSuite):
           100,"com.example.app",10001,42,10002,10003,10004,2000,5000
         """))
 
+  def test_android_framework_track_event_process_death(self):
+    return DiffTestBlueprint(
+        trace=Path('android_framework_track_event_process_death.textproto'),
+        query="""
+        SELECT p.pid, t.start_seq_id, t.fw_start_ts, t.fw_end_ts, t.reason,
+               t.sub_reason
+        FROM __intrinsic_android_track_event_process t
+        JOIN process p USING (upid)
+        ORDER BY t.start_seq_id;
+        """,
+        out=Csv("""
+          "pid","start_seq_id","fw_start_ts","fw_end_ts","reason","sub_reason"
+          100,1,1000,2000,"APP_EXIT_REASON_CRASH","APP_EXIT_SUBREASON_TOO_MANY_CACHED"
+          200,2,1500,2500,"APP_EXIT_REASON_ANR","[NULL]"
+        """))
+
+  # Cross-source pid reuse: ftrace sees a native process on pid 500 live and
+  # die (track events never see it - it is not an Android app), then an app
+  # reuses pid 500. sched_process_free ends the native upid and frees the pid,
+  # so the track-event start must attach to a NEW upid (the app), never the
+  # dead native process.
+  def test_android_framework_track_event_ftrace_pid_reuse(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 1000
+          process_tree {
+            processes { pid: 500 ppid: 1 cmdline: "native.daemon" }
+          }
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 2000
+              pid: 500
+              sched_process_free { pid: 500 comm: "native.daemon" prio: 120 }
+            }
+          }
+        }
+        packet {
+          timestamp: 3000
+          track_descriptor { uuid: 1 name: "framework" }
+        }
+        packet {
+          timestamp: 3000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_start"
+            [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+              uid: 10001
+              pid: 500
+              process_name: "com.example.app"
+              start_seq_id: 7
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT p.pid, p.name, iif(p.end_ts IS NULL, 0, 1) AS ended,
+               t.start_seq_id
+        FROM process p
+        LEFT JOIN __intrinsic_android_track_event_process t USING (upid)
+        WHERE p.pid = 500
+        ORDER BY p.upid;
+        """,
+        out=Csv("""
+          "pid","name","ended","start_seq_id"
+          500,"native.daemon",1,"[NULL]"
+          500,"com.example.app",0,7
+        """))
+
+  # Case #2 (ftrace present): the process already exists from ftrace, so the
+  # track-event start must ATTACH to that upid, not create a second process row.
+  def test_android_framework_track_event_associates_existing_process(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 1000
+          process_tree {
+            processes { pid: 100 ppid: 1 cmdline: "com.example.app" }
+          }
+        }
+        packet {
+          timestamp: 2000
+          track_descriptor { uuid: 1 name: "framework" }
+        }
+        packet {
+          timestamp: 2000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_start"
+            [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+              uid: 10001
+              pid: 100
+              process_name: "com.example.app"
+              start_seq_id: 5
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT p.pid, p.name,
+               (SELECT count(*) FROM process WHERE pid = 100) AS process_rows,
+               t.start_seq_id, t.fw_start_ts
+        FROM __intrinsic_android_track_event_process t
+        JOIN process p USING (upid);
+        """,
+        out=Csv("""
+          "pid","name","process_rows","start_seq_id","fw_start_ts"
+          100,"com.example.app",1,5,2000
+        """))
+
+  # Case #1 (no ftrace): the track events are the only lifecycle source. Two
+  # apps reusing pid 100 must get distinct upids - the process-died event ends
+  # the first instance (freeing the pid) so the second start creates a new one.
+  def test_android_framework_track_event_track_only_pid_reuse(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 1000
+          track_descriptor { uuid: 1 name: "framework" }
+        }
+        packet {
+          timestamp: 1000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_start"
+            [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+              uid: 10001 pid: 100 process_name: "app.a" start_seq_id: 1
+            }
+          }
+        }
+        packet {
+          timestamp: 2000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_died"
+            [com.android.internal.FrameworksBaseTrackEvent.process_died_event] {
+              uid: 10001 pid: 100 process_name: "app.a" start_seq_id: 1
+            }
+          }
+        }
+        packet {
+          timestamp: 3000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_start"
+            [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+              uid: 10002 pid: 100 process_name: "app.b" start_seq_id: 2
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT p.pid, p.name, iif(p.end_ts IS NULL, 0, 1) AS ended,
+               t.start_seq_id, t.fw_start_ts, t.fw_end_ts
+        FROM __intrinsic_android_track_event_process t
+        JOIN process p USING (upid)
+        ORDER BY t.start_seq_id;
+        """,
+        out=Csv("""
+          "pid","name","ended","start_seq_id","fw_start_ts","fw_end_ts"
+          100,"app.a",1,1,1000,2000
+          100,"app.b",0,2,3000,"[NULL]"
+        """))
+
+  # Case #2 death: the framework reports the death (binder_died) AND ftrace
+  # frees the pid later. The process must end exactly once (the second
+  # EndThread is a no-op) - one process row, ended, with fw_end_ts recorded.
+  def test_android_framework_track_event_death_with_ftrace_free(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 500
+          process_tree {
+            processes { pid: 100 ppid: 1 cmdline: "com.example.app" }
+          }
+        }
+        packet {
+          timestamp: 1000
+          track_descriptor { uuid: 1 name: "framework" }
+        }
+        packet {
+          timestamp: 1000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_start"
+            [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+              uid: 10001 pid: 100 process_name: "com.example.app" start_seq_id: 3
+            }
+          }
+        }
+        packet {
+          timestamp: 2000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "binder_died"
+            [com.android.internal.FrameworksBaseTrackEvent.binder_died_event] {
+              uid: 10001 pid: 100 process_name: "com.example.app" start_seq_id: 3
+            }
+          }
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 2500
+              pid: 100
+              sched_process_free { pid: 100 comm: "com.example.app" prio: 120 }
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT p.pid, p.name, iif(p.end_ts IS NULL, 0, 1) AS ended,
+               (SELECT count(*) FROM process WHERE pid = 100) AS process_rows,
+               t.fw_start_ts, t.fw_end_ts
+        FROM __intrinsic_android_track_event_process t
+        JOIN process p USING (upid);
+        """,
+        out=Csv("""
+          "pid","name","ended","process_rows","fw_start_ts","fw_end_ts"
+          100,"com.example.app",1,1,1000,2000
+        """))
+
+  # The uid columns are read from BOTH events: the start event carries all
+  # three (package/caller/defining), the died event carries package + defining
+  # (no caller). Each source populates what it has.
+  def test_android_framework_track_event_uids_from_start_and_death(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 1000
+          track_descriptor { uuid: 1 name: "framework" }
+        }
+        packet {
+          timestamp: 1000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_start"
+            [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+              uid: 10001 pid: 100 process_name: "app" start_seq_id: 1
+              caller_uid: 222
+            }
+          }
+        }
+        packet {
+          timestamp: 2000
+          trusted_packet_sequence_id: 1
+          track_event {
+            type: TYPE_INSTANT
+            track_uuid: 1
+            name: "process_died"
+            [com.android.internal.FrameworksBaseTrackEvent.process_died_event] {
+              uid: 10001 pid: 100 process_name: "app" start_seq_id: 1
+              package_uid: 111 defining_uid: 333
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT start_seq_id, package_uid, caller_uid, defining_uid
+        FROM __intrinsic_android_track_event_process;
+        """,
+        out=Csv("""
+          "start_seq_id","package_uid","caller_uid","defining_uid"
+          1,111,222,333
+        """))
+
   def test_android_framework_track_event_enum(self):
     return DiffTestBlueprint(
         trace=TextProto(r"""
@@ -352,6 +638,7 @@ class AndroidParser(TestSuite):
             type: TYPE_INSTANT
             [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
               pid: 100
+              start_seq_id: 1
               trigger_type: TRIGGER_TYPE_JOB
               hosting_type: HOSTING_TYPE_SERVICE
             }

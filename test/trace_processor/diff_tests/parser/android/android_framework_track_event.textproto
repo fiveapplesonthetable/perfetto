@@ -32,8 +32,8 @@ packet {
     }
   }
 }
-# A later process start for the same pid must NOT overwrite the earlier
-# fw_start_ts.
+# A later start for the same instance (same start_seq_id) must NOT overwrite
+# the earlier fw_start_ts.
 packet {
   timestamp: 3000
   trusted_packet_sequence_id: 1
@@ -45,10 +45,11 @@ packet {
       uid: 10001
       pid: 100
       process_name: "com.example.app"
+      start_seq_id: 42
     }
   }
 }
-# Binder died: records fw_end_ts for the process.
+# Binder died: records fw_end_ts for the instance (matched by start_seq_id).
 packet {
   timestamp: 5000
   trusted_packet_sequence_id: 1
@@ -60,6 +61,7 @@ packet {
       uid: 10001
       pid: 100
       process_name: "com.example.app"
+      start_seq_id: 42
     }
   }
 }
