@@ -197,6 +197,10 @@ tools/trace_video_conv.py TRACE.perfetto-trace -o out.mp4 --speed 0.5
 # Two traces side by side, each captioned (defaults to the file names).
 tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
     -o compare.mp4 --title Before --title2 After
+
+# Pixel diff of two traces: only what changed on screen stays bright.
+tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
+    -o diff.mp4 --diff
 ```
 
 | Option | Description |
@@ -211,5 +215,7 @@ tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
 | `--display-id2` | Which stream to use from the `--compare` trace. |
 | `--start2`, `--end2` | Clip the `--compare` trace to a time range. |
 | `--query2` | Clip the `--compare` trace to a SQL-selected region. |
+| `--diff` | With `--compare`, output a pixel-difference video (matching pixels go black, only what changed between the two captures stays bright) instead of the side-by-side. |
+| `--diff-contrast` | Contrast boost applied to the `--diff` output to make changes pop (default: `4`). |
 | `--title`, `--title2` | Captions for the first and second videos (default: the file names). |
 | `--trace-processor` | Path to a local `trace_processor` build (otherwise one is downloaded). |

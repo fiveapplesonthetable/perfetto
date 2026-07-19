@@ -21,8 +21,10 @@ an .mp4 with ffmpeg's libav (PyAV): the coded access units are copied verbatim
 (no re-encode) and each is given its real presentation time, so the output
 preserves the trace's exact, variable per-frame timing. A clip starts exactly at
 the requested timestamp and ends at the requested end. Works for H.264 and HEVC.
-With --compare it lays two traces' videos side by side, each captioned; the
-side-by-side composite is re-encoded, but each single-clip export is lossless.
+With --compare it lays two traces' videos side by side, each captioned, or with
+--diff blends them into a pixel-difference video where only what changed on
+screen stays bright. These composites are re-encoded; each single-clip export is
+lossless.
 
 Requires the PyAV package (`pip install av`). ffmpeg on the PATH is only needed
 for the re-encode paths (--compare, and clips that need a 'No video frames'
@@ -47,6 +49,10 @@ Examples:
   # two traces side by side, each clipped independently, with captions
   trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
       -o cmp.mp4 --title Before --title2 After
+
+  # pixel diff of two traces: only what changed on screen stays bright
+  trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
+      -o diff.mp4 --diff
 """
 
 import argparse
@@ -333,18 +339,22 @@ def blank_card(font, fontsize, enable):
           f"boxborderw={max(fontsize // 3, 8)}:enable='{enable}'")
 
 
-def fill_filters(font, height, lead, content_end, total):
+def fill_filters(font, height, lead, content_end, total, card=True):
   """The ffmpeg filters that pad a clip's frameless window parts with a card: a
   black lead-in before the first frame, the frozen last frame after the last.
-  Both pads go in one tpad (chaining two tpads drops part of the second)."""
+  Both pads go in one tpad (chaining two tpads drops part of the second). Pass
+  card=False to pad without the caption text - a pixel diff wants bare padding,
+  since any overlaid text would itself read as a change."""
   cardsize = max(round(height * 0.05), 20)
   tpad, cards = [], []
   if lead > 1e-3:
     tpad.append(f'start_mode=add:start_duration={lead:.3f}:color=black')
-    cards.append(blank_card(font, cardsize, f'lt(t,{lead:.3f})'))
+    if card:
+      cards.append(blank_card(font, cardsize, f'lt(t,{lead:.3f})'))
   if total - content_end > 1e-3:
     tpad.append(f'stop_mode=clone:stop_duration={total - content_end:.3f}')
-    cards.append(blank_card(font, cardsize, f'gte(t,{content_end:.3f})'))
+    if card:
+      cards.append(blank_card(font, cardsize, f'gte(t,{content_end:.3f})'))
   return [f'tpad={":".join(tpad)}'] + cards if tpad else []
 
 
@@ -426,6 +436,42 @@ def mux_compare(left, right, titles, speed, out_path):
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+def mux_diff(left, right, speed, contrast, out_path):
+  """Blend two clips into a pixel-difference video: pixels that match go black
+  and only what changed between the two captures stays bright. Both are muxed
+  over the same [start, end] window (frameless parts padded so the two stay
+  aligned in time), put on one fps grid and scaled to a common size so they line
+  up frame-for-frame and pixel-for-pixel, then differenced and contrast-boosted
+  so the changes pop. Use it to spot exactly what moved between a before/after."""
+  tmp = tempfile.mkdtemp()
+  try:
+    l_mp4 = os.path.join(tmp, 'l.mp4')
+    r_mp4 = os.path.join(tmp, 'r.mp4')
+    l_lead, l_end, l_win = clip_span(left, l_mp4, speed)
+    r_lead, r_end, r_win = clip_span(right, r_mp4, speed)
+    total = max(l_win, r_win)
+    dims = probe_dims(l_mp4)
+    width, height = dims if dims else (1280, 720)
+
+    def side(idx, lead, content_end):
+      chain = [
+          f'[{idx}:v]fps={COMPARE_FPS}', f'scale={width}:{height}', 'setsar=1'
+      ]
+      chain += fill_filters(None, height, lead, content_end, total, card=False)
+      return ','.join(chain)
+
+    graph = (f'{side(0, l_lead, l_end)}[a];'
+             f'{side(1, r_lead, r_end)}[b];'
+             f'[a][b]blend=all_mode=difference,eq=contrast={contrast}[v]')
+    run_ffmpeg([
+        '-i', l_mp4, '-i', r_mp4, '-filter_complex', graph, '-map', '[v]',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+        out_path
+    ])
+  finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def parse_args():
   ap = argparse.ArgumentParser(
       description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -470,6 +516,17 @@ def parse_args():
   g2.add_argument('--end2', type=int, help='clip end for --compare (ts, ns)')
   g2.add_argument('--query2', help='clip query for --compare')
   g2.add_argument('--title2', help='caption for the second video')
+  g2.add_argument(
+      '--diff',
+      action='store_true',
+      help='with --compare, output a pixel-difference video (only what changed '
+      'between the two captures stays bright) instead of the side-by-side')
+  g2.add_argument(
+      '--diff-contrast',
+      type=float,
+      default=4.0,
+      help='contrast boost for the --diff output, to make changes pop '
+      '(default: 4)')
   return ap.parse_args()
 
 
@@ -481,6 +538,10 @@ def main():
     die(f'No such trace: {args.trace}')
   if args.speed <= 0:
     die('--speed must be > 0')
+  if args.diff and not args.compare:
+    die('--diff needs --compare (it diffs two traces).')
+  if args.diff_contrast <= 0:
+    die('--diff-contrast must be > 0')
 
   if args.list:
     config = TraceProcessorConfig(bin_path=args.trace_processor)
@@ -504,12 +565,17 @@ def main():
   if args.compare:
     clip2 = Clip(args.display_id2, args.start2, args.end2, args.query2)
     right = load_clip(args.trace_processor, args.compare, clip2)
-    titles = (args.title or os.path.basename(args.trace), args.title2 or
-              os.path.basename(args.compare))
-    mux_compare(left, right, titles, args.speed, args.output)
-    print(
-        f'Wrote {args.output}: {len(left.sel)} + {len(right.sel)} frames side '
-        f'by side ({titles[0]} | {titles[1]})')
+    if args.diff:
+      mux_diff(left, right, args.speed, args.diff_contrast, args.output)
+      print(f'Wrote {args.output}: pixel diff of {len(left.sel)} vs '
+            f'{len(right.sel)} frames')
+    else:
+      titles = (args.title or os.path.basename(args.trace), args.title2 or
+                os.path.basename(args.compare))
+      mux_compare(left, right, titles, args.speed, args.output)
+      print(
+          f'Wrote {args.output}: {len(left.sel)} + {len(right.sel)} frames side '
+          f'by side ({titles[0]} | {titles[1]})')
   else:
     work = tempfile.mkdtemp()
     try:
