@@ -21,8 +21,9 @@ an .mp4 with ffmpeg's libav (PyAV): the coded access units are copied verbatim
 (no re-encode) and each is given its real presentation time, so the output
 preserves the trace's exact, variable per-frame timing. A clip starts exactly at
 the requested timestamp and ends at the requested end. Works for H.264 and HEVC.
-With --compare it lays two traces' videos side by side, each captioned; the
-side-by-side composite is re-encoded, but each single-clip export is lossless.
+With one or more --compare it tiles several videos into one (row, column, or
+grid), each captioned - from different traces or different streams of the same
+trace. These composites are re-encoded; each single-clip export is lossless.
 
 Requires the PyAV package (`pip install av`). ffmpeg on the PATH is only needed
 for the re-encode paths (--compare, and clips that need a 'No video frames'
@@ -44,13 +45,20 @@ Examples:
   # slow motion (0.5x) or 2x faster
   trace_video_conv.py trace.perfetto-trace -o out.mp4 --speed 0.5
 
-  # two traces side by side, each clipped independently, with captions
+  # two traces side by side, each captioned
   trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
       -o cmp.mp4 --title Before --title2 After
+
+  # n-way: tile several videos in a grid, each with its own clip and caption
+  trace_video_conv.py a.perfetto-trace --title A --layout grid \
+      --compare 'trace=b.perfetto-trace;title=B' \
+      --compare 'trace=c.perfetto-trace;query=SELECT ts,dur FROM slice;title=C' \
+      --compare 'trace=a.perfetto-trace;display=1;title=A display 1' -o grid.mp4
 """
 
 import argparse
 import collections
+import math
 import os
 import shutil
 import statistics
@@ -379,46 +387,76 @@ def clip_span(clip, mp4, speed):
   return lead, content_end, max(window, content_end)
 
 
-def mux_compare(left, right, titles, speed, out_path):
-  """Stack two clips side by side, each captioned, over each side's requested
-  [start, end] window. Real frames play at their real times; any frameless part
-  of the window - before the first frame, or after the last - shows a 'No video
-  frames' card, so both sides fill the same span (e.g. two 5 s ranges both run
-  5 s even if one starts late and ends early)."""
+def grid_shape(n, layout):
+  """(cols, rows) the n panels tile into. 'row' is one row, 'col' one column,
+  'grid' the nearest-square that fits."""
+  if layout == 'row':
+    return n, 1
+  if layout == 'col':
+    return 1, n
+  cols = math.ceil(math.sqrt(n))
+  return cols, math.ceil(n / cols)
+
+
+def tile_filter(n, cols, rows, cell_w, cell_h):
+  """The ffmpeg filter that assembles n same-sized panels into cols x rows."""
+  if rows == 1:
+    return f'hstack=inputs={n}[v]'
+  if cols == 1:
+    return f'vstack=inputs={n}[v]'
+  # xstack needs an explicit pixel position per panel; cells are uniform, and a
+  # partial last row is padded with black via fill.
+  cells = '|'.join(f'{(i % cols) * cell_w}_{(i // cols) * cell_h}'
+                   for i in range(n))
+  return f'xstack=inputs={n}:layout={cells}:fill=black[v]'
+
+
+def mux_tile(panels, speed, layout, out_path):
+  """Tile n captioned clips into one video for an n-way comparison. Each clip
+  plays over its own requested [start, end] window; any frameless part - before
+  the first frame or after the last - shows a 'No video frames' card, so every
+  panel fills the same span. Panels are scaled to a common cell so they line up.
+  `panels` is a list of (Loaded clip, title); `layout` is row / col / grid."""
   font = find_font()
   tmp = tempfile.mkdtemp()
   titlefiles = []
   try:
-    l_mp4 = os.path.join(tmp, 'l.mp4')
-    r_mp4 = os.path.join(tmp, 'r.mp4')
-    l_lead, l_end, l_win = clip_span(left, l_mp4, speed)
-    r_lead, r_end, r_win = clip_span(right, r_mp4, speed)
-    total = max(l_win, r_win)
-    # textfile= avoids escaping title text (paths, colons, quotes) in the graph.
-    title_l = write_temp(titles[0], '.txt')
-    title_r = write_temp(titles[1], '.txt')
-    titlefiles = [title_l, title_r]
-    dims = probe_dims(l_mp4)
-    height = dims[1] if dims else 720
-    band = max(round(height * 0.045), 22)  # thin caption bar, in pixels
+    mp4s, spans = [], []
+    for i, (clip, _) in enumerate(panels):
+      path = os.path.join(tmp, f'{i}.mp4')
+      spans.append(clip_span(clip, path, speed))
+      mp4s.append(path)
+    total = max(win for _, _, win in spans)
+    # Uniform cell, sized from the first clip, so hstack/xstack line up exactly.
+    dims = probe_dims(mp4s[0])
+    cell_w, cell_h = dims if dims else (1280, 720)
+    band = max(round(cell_h * 0.045), 22)  # thin caption bar, in pixels
     fontsize = max(round(band * 0.55), 12)
 
     def side(idx, title_file, lead, content_end):
       chain = [
-          f'[{idx}:v]fps={COMPARE_FPS}', f'scale=-2:{height}',
+          f'[{idx}:v]fps={COMPARE_FPS}', f'scale={cell_w}:{cell_h}', 'setsar=1',
           f'pad=iw:ih+{band}:0:{band}:{HEADER_COLOR}',
           caption(title_file, font, fontsize, band)
       ]
-      chain += fill_filters(font, height, lead, content_end, total)
+      chain += fill_filters(font, cell_h, lead, content_end, total)
       return ','.join(chain)
 
-    graph = (f'{side(0, title_l, l_lead, l_end)}[l];'
-             f'{side(1, title_r, r_lead, r_end)}[r];'
-             f'[l][r]hstack=inputs=2[v]')
-    run_ffmpeg([
-        '-i', l_mp4, '-i', r_mp4, '-filter_complex', graph, '-map', '[v]',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-        out_path
+    chains, refs = [], ''
+    for i, (_, title) in enumerate(panels):
+      # textfile= avoids escaping title text (paths, colons, quotes) in the graph.
+      tf = write_temp(title, '.txt')
+      titlefiles.append(tf)
+      lead, content_end, _ = spans[i]
+      chains.append(f'{side(i, tf, lead, content_end)}[p{i}]')
+      refs += f'[p{i}]'
+    cols, rows = grid_shape(len(panels), layout)
+    graph = (';'.join(chains) + ';' + refs +
+             tile_filter(len(panels), cols, rows, cell_w, cell_h + band))
+    inputs = [arg for path in mp4s for arg in ('-i', path)]
+    run_ffmpeg(inputs + [
+        '-filter_complex', graph, '-map', '[v]', '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out_path
     ])
   finally:
     for f in titlefiles:
@@ -458,19 +496,44 @@ def parse_args():
       '(must return ts, optionally dur)')
   g.add_argument('--title', help='caption for the first video (compare mode)')
 
-  g2 = ap.add_argument_group('compare (two traces side by side)')
+  g2 = ap.add_argument_group('compare (tile two or more videos into one)')
   g2.add_argument(
       '--compare',
-      metavar='TRACE',
-      help='second trace; its video is placed to the right')
+      metavar='PANEL',
+      action='append',
+      default=[],
+      help="add a comparison panel (repeatable). Either a trace path, or a "
+      "';'-separated spec of trace=,display=,start=,end=,query=,title= "
+      "(e.g. 'trace=after.pt;query=SELECT ts,dur FROM slice;title=After')")
   g2.add_argument(
-      '--display-id2', type=int, help='stream to use from --compare')
+      '--layout',
+      choices=('row', 'col', 'grid'),
+      default='row',
+      help='arrange the panels in a row, a column, or a grid (default: row)')
+  # Back-compat shorthands for a single --compare given as a bare trace path.
   g2.add_argument(
-      '--start2', type=int, help='clip start for --compare (ts, ns)')
-  g2.add_argument('--end2', type=int, help='clip end for --compare (ts, ns)')
-  g2.add_argument('--query2', help='clip query for --compare')
-  g2.add_argument('--title2', help='caption for the second video')
+      '--display-id2', type=int, help='stream to use from a bare --compare')
+  g2.add_argument(
+      '--start2', type=int, help='clip start for a bare --compare (ts, ns)')
+  g2.add_argument('--end2', type=int, help='clip end for a bare --compare (ts, ns)')
+  g2.add_argument('--query2', help='clip query for a bare --compare')
+  g2.add_argument('--title2', help='caption for a bare --compare')
   return ap.parse_args()
+
+
+def parse_panel(value):
+  """A --compare value -> spec dict. Either a bare trace path, or ';'-separated
+  key=value pairs among trace, display, start, end, query, title."""
+  if '=' not in value:
+    return {'trace': value}
+  spec = {}
+  for part in value.split(';'):
+    if part.strip():
+      key, _, val = part.partition('=')
+      spec[key.strip()] = val
+  if 'trace' not in spec:
+    die("--compare spec needs a 'trace=' (e.g. 'trace=after.pt;title=After').")
+  return spec
 
 
 def main():
@@ -502,14 +565,28 @@ def main():
   left = load_clip(args.trace_processor, args.trace, clip)
 
   if args.compare:
-    clip2 = Clip(args.display_id2, args.start2, args.end2, args.query2)
-    right = load_clip(args.trace_processor, args.compare, clip2)
-    titles = (args.title or os.path.basename(args.trace), args.title2 or
-              os.path.basename(args.compare))
-    mux_compare(left, right, titles, args.speed, args.output)
-    print(
-        f'Wrote {args.output}: {len(left.sel)} + {len(right.sel)} frames side '
-        f'by side ({titles[0]} | {titles[1]})')
+    panels = [(left, args.title or os.path.basename(args.trace))]
+    for value in args.compare:
+      spec = parse_panel(value)
+      # A single bare-path --compare picks up the back-compat *2 shorthands.
+      if len(args.compare) == 1 and set(spec) == {'trace'}:
+        spec.update({
+            k: v for k, v in (('display', args.display_id2),
+                              ('start', args.start2), ('end', args.end2),
+                              ('query', args.query2), ('title', args.title2))
+            if v is not None
+        })
+      trace = spec['trace']
+      pclip = Clip(
+          int(spec['display']) if 'display' in spec else None,
+          int(spec['start']) if 'start' in spec else None,
+          int(spec['end']) if 'end' in spec else None,
+          spec.get('query'))
+      loaded = load_clip(args.trace_processor, trace, pclip)
+      panels.append((loaded, spec.get('title') or os.path.basename(trace)))
+    mux_tile(panels, args.speed, args.layout, args.output)
+    print(f'Wrote {args.output}: {len(panels)} videos tiled ('
+          + ' | '.join(title for _, title in panels) + ')')
   else:
     work = tempfile.mkdtemp()
     try:

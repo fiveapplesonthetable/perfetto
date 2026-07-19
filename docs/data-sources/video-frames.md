@@ -197,6 +197,12 @@ tools/trace_video_conv.py TRACE.perfetto-trace -o out.mp4 --speed 0.5
 # Two traces side by side, each captioned (defaults to the file names).
 tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
     -o compare.mp4 --title Before --title2 After
+
+# N-way: tile several videos (repeat --compare) in a row, column, or grid. Each
+# panel is a trace path or a 'trace=…;display=…;start=…;end=…;query=…;title=…' spec.
+tools/trace_video_conv.py a.perfetto-trace --title A --layout grid -o grid.mp4 \
+    --compare 'trace=b.perfetto-trace;title=B' \
+    --compare 'trace=a.perfetto-trace;display=1;title=A display 1'
 ```
 
 | Option | Description |
@@ -207,9 +213,8 @@ tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
 | `--start`, `--end` | Clip to a time range, in trace `ts` nanoseconds. |
 | `--query` | Clip to the region a SQL query selects (returns `ts`, optionally `dur`). |
 | `--speed` | Playback speed of the output: `2` = twice as fast, `0.5` = slow motion. |
-| `--compare` | A second trace, placed to the right for a side-by-side comparison. |
-| `--display-id2` | Which stream to use from the `--compare` trace. |
-| `--start2`, `--end2` | Clip the `--compare` trace to a time range. |
-| `--query2` | Clip the `--compare` trace to a SQL-selected region. |
-| `--title`, `--title2` | Captions for the first and second videos (default: the file names). |
+| `--compare` | Add a comparison panel (repeatable). A trace path, or a `';'`-separated `trace=…;display=…;start=…;end=…;query=…;title=…` spec. |
+| `--layout` | Arrange the panels in a `row` (default), `col`umn, or `grid`. |
+| `--title`, `--title2` | Captions for the first and (bare) second videos (default: the file names). |
+| `--display-id2`, `--start2`, `--end2`, `--query2` | Shorthands for a single bare-path `--compare` (stream, time range, query). |
 | `--trace-processor` | Path to a local `trace_processor` build (otherwise one is downloaded). |
