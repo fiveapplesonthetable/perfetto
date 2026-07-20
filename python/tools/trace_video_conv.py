@@ -305,6 +305,19 @@ def mux(cfg_frames, sel, start_ts, end_ts, codec_string, speed, out_path):
       out.mux(p)
     out.close()
     inp.close()
+    # The codec config (SPS/PPS) is what libav writes into the avcC/hvcC box.
+    # Without it the .mp4 is unusable; libav either errors here or, on some
+    # versions, flushes a broken file that fails only when reopened. Reopen to
+    # confirm it parses, so the failure surfaces here with a clear cause rather
+    # than later in probe/playback.
+    with av.open(out_path):
+      pass
+  except av.error.FFmpegError as e:
+    if os.path.exists(out_path):
+      os.unlink(out_path)
+    die(f'could not build a valid .mp4 ({e}). The video stream is missing its '
+        'codec config (SPS/PPS), so the frames cannot be decoded. A ring-buffer '
+        'capture can drop or truncate the config packet when the buffer wraps.')
   finally:
     os.unlink(raw)
   return n
