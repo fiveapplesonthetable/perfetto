@@ -33,7 +33,8 @@ function resolveBucketColors(
   if (series === undefined) return option;
   for (const s of series) {
     const data = s.data as
-      ReadonlyArray<{itemStyle?: Record<string, unknown>}> | undefined;
+      | ReadonlyArray<{itemStyle?: Record<string, unknown>}>
+      | undefined;
     if (data === undefined) continue;
     for (const item of data) {
       const style = item.itemStyle;

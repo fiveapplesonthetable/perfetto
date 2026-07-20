@@ -183,7 +183,13 @@ export interface SummarySectionAttrs extends m.Attributes {
 
 // Column keys that the table can be sorted by.
 type SortKey =
-  'id' | 'name' | 'duration' | 'compute' | 'memory' | 'registers' | 'grid_size';
+  | 'id'
+  | 'name'
+  | 'duration'
+  | 'compute'
+  | 'memory'
+  | 'registers'
+  | 'grid_size';
 
 // Returns the sortable primitive for `key` from a row.
 function getSortableValue(

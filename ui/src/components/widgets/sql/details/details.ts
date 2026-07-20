@@ -336,7 +336,12 @@ type ResolvedArray = {
 class ScalarValueSchema {
   constructor(
     public kind:
-      'timestamp' | 'duration' | 'arg_set_id' | 'value' | 'url' | 'boolean',
+      | 'timestamp'
+      | 'duration'
+      | 'arg_set_id'
+      | 'value'
+      | 'url'
+      | 'boolean',
     public sourceExpression: string,
     public params?: ScalarValueParams,
   ) {}

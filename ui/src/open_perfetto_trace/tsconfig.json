@@ -1,24 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": [
-    ".",
-    "../types/vite.d.ts"
-  ],
+  "include": [ "." ],
   "exclude": [
     "../gen/"
   ],
   "compilerOptions": {
-    "rootDir": "..",
     "outDir": "../../out/tsc/open_perfetto_trace",
-    "types": ["*"],
     "lib": [
-      "dom",
-      "es2024",
-      "dom.iterable",
+      "dom",                               // Need to be explicitly mentioned now since we're overriding default included libs.
+      "es2021",                            // Need this to use Promise.allSettled, replaceAll, etc
     ],
-    "paths": {
-      "*" : ["./*", "../../node_modules/@tsundoku/micromodal_types/*"]
-    },
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
   }

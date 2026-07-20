@@ -1937,7 +1937,8 @@ function ScatterChartDemo(): m.Component<{
   legendPosition: LegendPosition;
 }> {
   let brushRange:
-    {xMin: number; xMax: number; yMin: number; yMax: number} | undefined;
+    | {xMin: number; xMax: number; yMin: number; yMax: number}
+    | undefined;
 
   return {
     view: ({attrs}) => {
@@ -2259,7 +2260,8 @@ function SQLScatterChartDemo(): m.Component<{
 }> {
   let loader: SQLScatterChartLoader | undefined;
   let brushRange:
-    {xMin: number; xMax: number; yMin: number; yMax: number} | undefined;
+    | {xMin: number; xMax: number; yMin: number; yMax: number}
+    | undefined;
 
   return {
     view: ({attrs}) => {

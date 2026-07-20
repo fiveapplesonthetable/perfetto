@@ -47,7 +47,9 @@ export interface MemoryOverviewPageAttrs {
 
 type ProcWithMem = readonly ProcMemStat[];
 
-export class MemoryOverviewPage implements m.Component<MemoryOverviewPageAttrs> {
+export class MemoryOverviewPage
+  implements m.Component<MemoryOverviewPageAttrs>
+{
   private readonly slot = new QuerySlot<ProcWithMem>();
 
   view({attrs}: m.Vnode<MemoryOverviewPageAttrs>) {

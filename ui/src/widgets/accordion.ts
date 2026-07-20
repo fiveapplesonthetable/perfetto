@@ -49,7 +49,9 @@ export interface AccordionSectionAttrs {
   readonly defaultOpen?: boolean;
 }
 
-export class AccordionSection implements m.ClassComponent<AccordionSectionAttrs> {
+export class AccordionSection
+  implements m.ClassComponent<AccordionSectionAttrs>
+{
   private isOpen = false;
   private pendingScrollOpen = false;
 

@@ -268,8 +268,8 @@ class PackageListSection implements m.ClassComponent<PackageListSectionAttrs> {
         ],
         rowData: packageList.map((pkg) => {
           const flags = [
-            (pkg.debuggable ?? 0) ? 'debuggable' : '',
-            (pkg.profileableFromShell ?? 0) ? 'profileable' : '',
+            pkg.debuggable ?? 0 ? 'debuggable' : '',
+            pkg.profileableFromShell ?? 0 ? 'profileable' : '',
           ]
             .filter(Boolean)
             .join(' ');
@@ -314,7 +314,9 @@ function formatCurrentMode(mode: number | null): string {
   return mode !== null ? String(mode) : 'Unknown';
 }
 
-class AndroidGameInterventionList implements m.ClassComponent<AndroidGameInterventionListAttrs> {
+class AndroidGameInterventionList
+  implements m.ClassComponent<AndroidGameInterventionListAttrs>
+{
   view({attrs}: m.CVnode<AndroidGameInterventionListAttrs>) {
     const data = attrs.data;
     if (data === undefined || data.length === 0) {
@@ -392,7 +394,9 @@ interface AndroidAflagsSectionAttrs {
   aflagErrors: string[];
 }
 
-class AndroidAflagsSection implements m.ClassComponent<AndroidAflagsSectionAttrs> {
+class AndroidAflagsSection
+  implements m.ClassComponent<AndroidAflagsSectionAttrs>
+{
   private selectedTs?: bigint;
 
   view({attrs}: m.CVnode<AndroidAflagsSectionAttrs>) {

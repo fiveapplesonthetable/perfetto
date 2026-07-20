@@ -180,7 +180,9 @@ export interface HistogramQueryConfig {
 
 /** Union of all query config types. */
 export type QueryConfig =
-  AggregatedQueryConfig | PointsQueryConfig | HistogramQueryConfig;
+  | AggregatedQueryConfig
+  | PointsQueryConfig
+  | HistogramQueryConfig;
 
 // ---------------------------------------------------------------------------
 // ChartSource

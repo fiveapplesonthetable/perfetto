@@ -29,7 +29,9 @@ interface QueryHistoryComponentAttrs {
 
 export {setHistoryActiveTab} from './history_store';
 
-export class QueryHistoryComponent implements m.ClassComponent<QueryHistoryComponentAttrs> {
+export class QueryHistoryComponent
+  implements m.ClassComponent<QueryHistoryComponentAttrs>
+{
   oninit(vnode: m.CVnode<QueryHistoryComponentAttrs>) {
     historyStore.requestRefresh(vnode.attrs.refreshSignal ?? 0);
   }

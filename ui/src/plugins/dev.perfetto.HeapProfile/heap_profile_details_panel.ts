@@ -173,7 +173,9 @@ interface Props {
   type: ProfileType;
 }
 
-export class HeapProfileFlamegraphDetailsPanel implements TrackEventDetailsPanel {
+export class HeapProfileFlamegraphDetailsPanel
+  implements TrackEventDetailsPanel
+{
   private readonly props: Props;
   private flamegraphModalDismissed = false;
   private oomeErrorMsg?: string;

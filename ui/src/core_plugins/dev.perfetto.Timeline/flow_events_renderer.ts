@@ -45,7 +45,8 @@ const FOCUSED_FLOW_INTENSITY = 55;
 const DEFAULT_FLOW_INTENSITY = 70;
 
 type VerticalEdgeOrPoint =
-  ({kind: 'vertical_edge'} & Point2D) | ({kind: 'point'} & Point2D);
+  | ({kind: 'vertical_edge'} & Point2D)
+  | ({kind: 'point'} & Point2D);
 
 export interface TrackInfo {
   readonly node: TrackNode;

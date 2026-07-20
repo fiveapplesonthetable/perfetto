@@ -143,7 +143,10 @@ export function maybeShowErrorDialog(err: ErrorDetails) {
 
 class ErrorDialogComponent implements m.ClassComponent<ErrorDetails> {
   private traceState:
-    'NOT_AVAILABLE' | 'NOT_UPLOADED' | 'UPLOADING' | 'UPLOADED';
+    | 'NOT_AVAILABLE'
+    | 'NOT_UPLOADED'
+    | 'UPLOADING'
+    | 'UPLOADED';
   private traceType: string = 'No trace loaded';
   private traceData?: ArrayBuffer | File;
   private traceUrl?: string;
@@ -440,7 +443,9 @@ interface TraceParseErrorAttrs {
   readonly message: string;
 }
 
-class TraceParseErrorComponent implements m.ClassComponent<TraceParseErrorAttrs> {
+class TraceParseErrorComponent
+  implements m.ClassComponent<TraceParseErrorAttrs>
+{
   view({attrs}: m.Vnode<TraceParseErrorAttrs>): m.Children {
     const {variant, message} = attrs;
     const details = extractTraceParseDetails(message);

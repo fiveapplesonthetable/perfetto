@@ -48,7 +48,9 @@ export interface AndroidInputLifecycleTabAttrs {
   activeExtensions: InputLifecycleExtension[];
 }
 
-export class AndroidInputLifecycleTab implements m.ClassComponent<AndroidInputLifecycleTabAttrs> {
+export class AndroidInputLifecycleTab
+  implements m.ClassComponent<AndroidInputLifecycleTabAttrs>
+{
   view({attrs}: m.Vnode<AndroidInputLifecycleTabAttrs>): m.Children {
     if (attrs.loading) {
       return m(

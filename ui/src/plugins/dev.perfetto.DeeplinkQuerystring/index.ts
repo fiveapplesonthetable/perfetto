@@ -78,11 +78,13 @@ export default class implements PerfettoPlugin {
 function zoomPendingDeeplink(trace: Trace, visStart: string, visEnd: string) {
   const visualStart = Time.fromRaw(BigInt(visStart));
   const visualEnd = Time.fromRaw(BigInt(visEnd));
-  if (!(
-    visualStart < visualEnd &&
-    trace.traceInfo.start <= visualStart &&
-    visualEnd <= trace.traceInfo.end
-  )) {
+  if (
+    !(
+      visualStart < visualEnd &&
+      trace.traceInfo.start <= visualStart &&
+      visualEnd <= trace.traceInfo.end
+    )
+  ) {
     return;
   }
   trace.timeline.panSpanIntoView(visualStart, visualEnd, {align: 'zoom'});

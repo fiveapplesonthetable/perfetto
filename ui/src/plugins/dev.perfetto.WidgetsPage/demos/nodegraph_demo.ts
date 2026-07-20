@@ -332,7 +332,8 @@ function renderSortNode(
           onchange: (e: Event) => {
             updateNode({
               sortOrder: (e.target as HTMLSelectElement).value as
-                'ASC' | 'DESC',
+                | 'ASC'
+                | 'DESC',
             });
           },
         },

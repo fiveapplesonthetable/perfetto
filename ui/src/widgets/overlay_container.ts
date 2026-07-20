@@ -21,7 +21,9 @@ export interface OverlayContainerAttrs {
   readonly fillHeight?: boolean;
 }
 
-export class OverlayContainer implements m.ClassComponent<OverlayContainerAttrs> {
+export class OverlayContainer
+  implements m.ClassComponent<OverlayContainerAttrs>
+{
   view({attrs, children}: m.Vnode<OverlayContainerAttrs>) {
     const {fillHeight = false} = attrs as OverlayContainerAttrs;
     return m(

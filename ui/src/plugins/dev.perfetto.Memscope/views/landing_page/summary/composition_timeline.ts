@@ -64,7 +64,9 @@ export interface CompositionTimelineAttrs {
   readonly belowChart?: m.Children;
 }
 
-export class CompositionTimeline implements m.ClassComponent<CompositionTimelineAttrs> {
+export class CompositionTimeline
+  implements m.ClassComponent<CompositionTimelineAttrs>
+{
   private readonly slot = new QuerySlot<TimelineData>();
 
   onremove() {

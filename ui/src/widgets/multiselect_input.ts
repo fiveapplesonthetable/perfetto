@@ -73,7 +73,9 @@ export interface MultiselectInputAttrs extends HTMLAttrs {
   readonly placeholder?: string;
 }
 
-export class MultiselectInput implements m.ClassComponent<MultiselectInputAttrs> {
+export class MultiselectInput
+  implements m.ClassComponent<MultiselectInputAttrs>
+{
   private currentTextValue = '';
   private selectedItemIndex = 0;
   private popupIsOpen = false;

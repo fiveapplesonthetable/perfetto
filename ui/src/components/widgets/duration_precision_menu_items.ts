@@ -21,7 +21,9 @@ interface DurationPrecisionMenuItemAttrs {
   trace: Trace;
 }
 
-export class DurationPrecisionMenuItem implements m.ClassComponent<DurationPrecisionMenuItemAttrs> {
+export class DurationPrecisionMenuItem
+  implements m.ClassComponent<DurationPrecisionMenuItemAttrs>
+{
   view({attrs}: m.Vnode<DurationPrecisionMenuItemAttrs>) {
     function renderMenuItem(value: DurationPrecision, label: string) {
       return m(MenuItem, {

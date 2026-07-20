@@ -243,7 +243,9 @@ interface TransformMenuItemAttrs {
   formSubmitLabel: string;
 }
 
-class ConfigureTransformMenu implements m.ClassComponent<TransformMenuItemAttrs> {
+class ConfigureTransformMenu
+  implements m.ClassComponent<TransformMenuItemAttrs>
+{
   private paramState: {value: string; error: boolean}[] = [];
   private readonly uuid = uuidv4();
 

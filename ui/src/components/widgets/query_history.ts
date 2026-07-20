@@ -30,7 +30,9 @@ export interface QueryHistoryComponentAttrs {
   setQuery: (query: string) => void;
 }
 
-export class QueryHistoryComponent implements m.ClassComponent<QueryHistoryComponentAttrs> {
+export class QueryHistoryComponent
+  implements m.ClassComponent<QueryHistoryComponentAttrs>
+{
   view({attrs}: m.CVnode<QueryHistoryComponentAttrs>) {
     const {trace, runQuery, setQuery, ...rest} = attrs;
     const unstarred: HistoryItemComponentAttrs[] = [];
@@ -65,7 +67,9 @@ export interface HistoryItemComponentAttrs {
   setQuery: (query: string) => void;
 }
 
-export class HistoryItemComponent implements m.ClassComponent<HistoryItemComponentAttrs> {
+export class HistoryItemComponent
+  implements m.ClassComponent<HistoryItemComponentAttrs>
+{
   view(vnode: m.Vnode<HistoryItemComponentAttrs>): m.Child {
     const query = vnode.attrs.entry.query;
     return m(

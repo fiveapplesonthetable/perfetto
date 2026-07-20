@@ -467,7 +467,8 @@ describe('templateSpecToMetricsState', () => {
     const state = templateSpecToMetricsState(spec);
 
     const configs = state.dimensionConfigs as
-      Record<string, Record<string, unknown>> | undefined;
+      | Record<string, Record<string, unknown>>
+      | undefined;
     expect(configs).toBeDefined();
     expect(configs?.process_name?.displayName).toBe('Process');
     expect(configs?.process_name?.displayHelp).toBe('The process name');
@@ -1687,7 +1688,8 @@ describe('metricSpecToMetricsState', () => {
     const state = metricSpecToMetricsState(spec);
 
     const configs = state.dimensionConfigs as
-      Record<string, Record<string, unknown>> | undefined;
+      | Record<string, Record<string, unknown>>
+      | undefined;
     expect(configs).toBeDefined();
     expect(configs?.process_name?.displayName).toBe('Process');
     expect(configs?.process_name?.displayHelp).toBe('Target process');

@@ -43,7 +43,12 @@ export function withDirection<T>(
 }
 
 export type SortableValue =
-  string | number | bigint | null | Uint8Array | undefined;
+  | string
+  | number
+  | bigint
+  | null
+  | Uint8Array
+  | undefined;
 
 function columnTypeKind(a: SortableValue): number {
   if (a === undefined) {

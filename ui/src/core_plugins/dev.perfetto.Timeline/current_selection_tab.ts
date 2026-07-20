@@ -34,7 +34,9 @@ export interface CurrentSelectionTabAttrs {
   readonly trace: TraceImpl;
 }
 
-export class CurrentSelectionTab implements m.ClassComponent<CurrentSelectionTabAttrs> {
+export class CurrentSelectionTab
+  implements m.ClassComponent<CurrentSelectionTabAttrs>
+{
   private readonly fadeContext = new FadeContext();
 
   view({attrs}: m.Vnode<CurrentSelectionTabAttrs>): m.Children {

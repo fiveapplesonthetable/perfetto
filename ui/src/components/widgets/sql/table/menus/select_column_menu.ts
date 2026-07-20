@@ -79,7 +79,9 @@ function onColumnSelectedClickHandler(
 }
 
 // Core implementation of the selectable column list.
-class SelectColumnMenuImpl implements m.ClassComponent<SelectColumnMenuImplAttrs> {
+class SelectColumnMenuImpl
+  implements m.ClassComponent<SelectColumnMenuImplAttrs>
+{
   // When the menu elements are updated (e.g. when filtering), the popup
   // can flicker a lot. To prevent that, we fix the size of the popup
   // after the first layout.
@@ -146,7 +148,9 @@ class SelectColumnMenuImpl implements m.ClassComponent<SelectColumnMenuImplAttrs
   }
 }
 
-export class SelectColumnMenu implements m.ClassComponent<SelectColumnMenuAttrs> {
+export class SelectColumnMenu
+  implements m.ClassComponent<SelectColumnMenuAttrs>
+{
   private searchText = '';
   columns?: {key: string; column: TableColumn}[];
 

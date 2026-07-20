@@ -53,7 +53,9 @@ interface DistinctValuesSubmenuAttrs {
   readonly onApply: (selectedValues: Set<SqlValue>) => void;
 }
 
-export class DistinctValuesSubmenu implements m.ClassComponent<DistinctValuesSubmenuAttrs> {
+export class DistinctValuesSubmenu
+  implements m.ClassComponent<DistinctValuesSubmenuAttrs>
+{
   private selectedValues = new Set<SqlValue>();
   private searchQuery = '';
   private static readonly MAX_VISIBLE_ITEMS = 100;
@@ -203,7 +205,9 @@ interface TextFilterSubmenuAttrs {
   readonly onApply: (value: string | number) => void;
 }
 
-export class TextFilterSubmenu implements m.ClassComponent<TextFilterSubmenuAttrs> {
+export class TextFilterSubmenu
+  implements m.ClassComponent<TextFilterSubmenuAttrs>
+{
   private inputValue = '';
 
   view({attrs}: m.Vnode<TextFilterSubmenuAttrs>) {
