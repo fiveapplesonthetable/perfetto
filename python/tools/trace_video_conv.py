@@ -290,7 +290,11 @@ def mux(cfg_frames, sel, start_ts, end_ts, codec_string, speed, out_path):
   try:
     inp = av.open(raw, format=codec_format(codec_string))
     src = inp.streams.video[0]
-    out = av.open(out_path, 'w')
+    # +faststart moves the moov atom ahead of the media data. Without it libav
+    # writes moov last, which local players tolerate but streaming players
+    # (Chrome's progressive playback, Google Drive's web preview) will not begin
+    # on. It is a header relocation only: the coded frames stay byte-identical.
+    out = av.open(out_path, 'w', options={'movflags': '+faststart'})
     dst = out.add_stream_from_template(src)  # copies codec params (avcC/hvcC)
     dst.time_base = tb
     packets = [p for p in inp.demux(src) if p.size > 0]
