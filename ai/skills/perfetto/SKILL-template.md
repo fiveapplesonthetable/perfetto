@@ -65,7 +65,21 @@ workload is GPU-bound or host-bound:
     with host-side attribution, read
     [timeline_occupancy.md]($SKILL_ROOT/workflows/gpu/timeline_occupancy.md).
 
-## 4. Are you trying to do ad-hoc trace analysis?
+## 4. Are you trying to work with a screen recording (display video)?
+
+If a trace has the `android.display.video` data source (a screen recording), the
+video is tied frame-by-frame to the trace timeline, so you can move both ways
+between the screen and the trace:
+
+*   **See the screen at a time or event, find when a screen state was up, or join
+    it with other data:** To go from a timestamp or an event (a query) to the
+    frame that was on screen (a PNG to look at), from a screen state or on-screen
+    text back to the time it happened, or to join a screen state's time range with
+    any other query (jank, memory, …) — as well as to capture such a trace,
+    extract clips, or compare two traces — read
+    [display_video.md]($SKILL_ROOT/workflows/display_video/display_video.md).
+
+## 5. Are you trying to do ad-hoc trace analysis?
 
 If you want to load a trace and write custom PerfettoSQL queries:
 

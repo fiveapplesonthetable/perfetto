@@ -83,6 +83,7 @@ DEFAULT_SKILLS_SRC = REPO_ROOT / 'ai' / 'skills'
 SKILL_NAME = 'perfetto'
 EXTENSIONS_SRC = REPO_ROOT / 'ai' / 'extensions'
 TRACE_PROCESSOR_SRC = REPO_ROOT / 'tools' / 'trace_processor'
+TRACE_VIDEO_CONV_SRC = REPO_ROOT / 'python' / 'tools' / 'trace_video_conv.py'
 # The manifest whose `version` field we treat as the bundle's version (all
 # manifests carry the same value, stamped by roll-prebuilts).
 VERSION_MANIFEST = EXTENSIONS_SRC / 'claude-code' / 'marketplace.json'
@@ -100,20 +101,58 @@ def _emit_skill(skill_src: Path, dest_dir: Path) -> str:
   """Emit the single `perfetto` skill into dest_dir.
 
   Copies the skill tree verbatim except for the source-only transform
-  SKILL-template.md -> SKILL.md (rename), and adds the trace_processor
-  wrapper at bin/trace_processor so `$SKILL_ROOT/bin/trace_processor`
+  SKILL-template.md -> SKILL.md (rename), and adds the bundled tools under
+  bin/ (trace_processor, trace_video_conv.py) so `$SKILL_ROOT/bin/...`
   resolves in every install. Returns the emitted skill name.
   """
   out_dir = dest_dir / SKILL_NAME
   shutil.copytree(skill_src, out_dir, ignore=_EMIT_IGNORE)
   # Router: SKILL-template.md -> SKILL.md (verbatim, no content rewrite).
   shutil.copy(skill_src / SKILL_TEMPLATE, out_dir / 'SKILL.md')
-  # The bundled wrapper, inside the skill so it survives every install
-  # method (plugin subdir, agents-install copytree, index.json fetch).
+  # The bundled tools, inside the skill so they survive every install method
+  # (plugin subdir, agents-install copytree, index.json fetch): the
+  # trace_processor wrapper, and trace_video_conv.py for the display-video
+  # workflow (both referenced as $SKILL_ROOT/bin/...).
   (out_dir / 'bin').mkdir()
   shutil.copy(TRACE_PROCESSOR_SRC, out_dir / 'bin' / 'trace_processor')
   (out_dir / 'bin' / 'trace_processor').chmod(0o755)
+  vc_dst = out_dir / 'bin' / 'trace_video_conv.py'
+  shutil.copy(TRACE_VIDEO_CONV_SRC, vc_dst)
+  _bundle_video_conv_import(vc_dst)
+  vc_dst.chmod(0o755)
   return SKILL_NAME
+
+
+# In the repo, trace_video_conv.py puts the checkout's python/ on sys.path and
+# imports `python.perfetto`. In the bundle there is no checkout, and the skill
+# directory itself is named `perfetto` — leaving that sys.path setup in would
+# shadow the pip `perfetto` package. So replace the whole block with a plain
+# import of the pip package.
+_VIDEO_CONV_IMPORT_SRC = """\
+# `python.perfetto.*` needs the repo root on sys.path; that package's own
+# absolute `perfetto.*` imports need python/ on it too.
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(ROOT_DIR)
+sys.path.append(os.path.join(ROOT_DIR, 'python'))
+
+from python.perfetto.trace_processor import TraceProcessor
+from python.perfetto.trace_processor import TraceProcessorConfig"""
+
+_VIDEO_CONV_IMPORT_BUNDLED = """\
+# Bundled next to the skill (no Perfetto checkout): use the pip `perfetto` package.
+from perfetto.trace_processor import TraceProcessor
+from perfetto.trace_processor import TraceProcessorConfig"""
+
+
+def _bundle_video_conv_import(path: Path) -> None:
+  text = path.read_text()
+  if _VIDEO_CONV_IMPORT_SRC not in text:
+    raise SystemExit(
+        'build_ai_agents: trace_video_conv.py import block changed; update '
+        '_VIDEO_CONV_IMPORT_SRC in build_ai_agents.py to match.')
+  path.write_text(text.replace(_VIDEO_CONV_IMPORT_SRC,
+                               _VIDEO_CONV_IMPORT_BUNDLED))
 
 
 def _write_index(skills_dir: Path) -> None:

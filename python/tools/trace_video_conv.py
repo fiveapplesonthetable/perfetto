@@ -36,10 +36,19 @@ Examples:
   # list the video streams in the trace
   trace_video_conv.py trace.perfetto-trace --list
 
+  # a screenshot (PNG) of the frame on screen at a ts, or at what a query selects
+  trace_video_conv.py trace.perfetto-trace --screenshot shot.png --start 90697190
+  trace_video_conv.py trace.perfetto-trace --screenshot shot.png \
+      --query "SELECT ts FROM slice WHERE name = 'my_cuj'"
+
   # clip to a time range (trace ts, ns), or to whatever a query selects
   trace_video_conv.py trace.perfetto-trace -o clip.mp4 --start 90697190 --end 90697200
   trace_video_conv.py trace.perfetto-trace -o clip.mp4 \
       --query "SELECT ts, dur FROM slice WHERE name = 'my_cuj'"
+
+  # burn the live trace ts under each frame (so a video-capable agent reads both
+  # the content and the exact frame ts from the .mp4)
+  trace_video_conv.py trace.perfetto-trace -o clip.mp4 --query "..." --timestamps
 
   # slow motion (0.5x) or 2x faster
   trace_video_conv.py trace.perfetto-trace -o out.mp4 --speed 0.5
@@ -260,6 +269,64 @@ def codec_format(codec_string):
   return 'hevc' if cs.startswith(('hvc', 'hev')) else 'h264'
 
 
+def write_png(path, rgb):
+  """Write an HxWx3 uint8 RGB numpy array as a PNG (no Pillow dependency)."""
+  import struct
+  import zlib
+  h, w = rgb.shape[0], rgb.shape[1]
+  data = rgb.astype('uint8').tobytes()
+  stride = w * 3
+  raw = bytearray()
+  for y in range(h):
+    raw.append(0)  # filter type 0 (none)
+    raw += data[y * stride:(y + 1) * stride]
+
+  def chunk(typ, payload):
+    return (struct.pack('>I', len(payload)) + typ + payload +
+            struct.pack('>I', zlib.crc32(typ + payload) & 0xffffffff))
+
+  with open(path, 'wb') as f:
+    f.write(b'\x89PNG\r\n\x1a\n')
+    f.write(chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)))
+    f.write(chunk(b'IDAT', zlib.compress(bytes(raw), 6)))
+    f.write(chunk(b'IEND', b''))
+
+
+def screenshot(loaded, out_path):
+  """Save the frame that was on screen at the clip's start as a PNG. `loaded.sel`
+  runs from a seeding key frame up to the requested point, and the encoder emits
+  no B-frames, so the last decoded picture is exactly the frame shown there."""
+  import av
+  raw = write_temp(build_stream(loaded.cfg, loaded.sel), '.bin')
+  pic = None
+  try:
+    with av.open(raw, format=codec_format(loaded.codec)) as container:
+      for pic in container.decode(video=0):
+        pass
+  finally:
+    os.unlink(raw)
+  if pic is None:
+    die('could not decode a frame for the screenshot.')
+  write_png(out_path, pic.reformat(format='rgb24').to_ndarray())
+
+
+def resolve_point(bin_path, trace, start, query):
+  """The single trace ts a screenshot is taken at: --start, or the earliest ts a
+  --query selects."""
+  if start is not None:
+    return start
+  if not query:
+    die('--screenshot needs a point: pass --start TS or --query.')
+  config = TraceProcessorConfig(bin_path=bin_path)
+  with TraceProcessor(trace=trace, config=config) as tp:
+    rows = list(tp.query(query))
+  if not rows:
+    die('--query returned no rows; nothing to screenshot.')
+  if not hasattr(rows[0], 'ts'):
+    die("--query must return a 'ts' column.")
+  return min(r.ts for r in rows)
+
+
 def mux(cfg_frames, sel, start_ts, end_ts, codec_string, speed, out_path):
   """Wrap the coded frames in an .mp4 with their exact per-frame timing and no
   re-encode, via ffmpeg's libav (PyAV): copy the coded access units and give each
@@ -312,6 +379,32 @@ def mux(cfg_frames, sel, start_ts, end_ts, codec_string, speed, out_path):
 
 # A thin dark header bar (Perfetto's chrome colour) with left-aligned text.
 HEADER_COLOR = '0x1A2633'
+# The live-timestamp row colour (light green), for --timestamps.
+TS_COLOR = '0x9FE0A0'
+
+
+def overlay_ts(in_mp4, rebase, speed, out_path):
+  """Re-encode `in_mp4` with a row under the video showing the frame's live trace
+  ts (ns). The clip is muxed so playback time t maps to trace ts `rebase +
+  t*1e9*speed`; drawtext prints that, split into whole seconds and 9-digit
+  sub-second ns because eif casts to 32-bit and a trace ns overflows it."""
+  dims = probe_dims(in_mp4)
+  height = dims[1] if dims else 720
+  band = max(round(height * 0.05), 24)
+  fontsize = max(round(band * 0.5), 14)
+  font = find_font()
+  font_opt = f"fontfile='{font}':" if font else ''
+  v = f'({rebase})+t*{round(1e9 * speed)}'
+  sec = '%{eif\\:floor((' + v + ')/1000000000)\\:d}'
+  sub = '%{eif\\:mod(' + v + '\\,1000000000)\\:d\\:9}'
+  vf = (f'pad=iw:ih+{band}:0:0:{HEADER_COLOR},'
+        f"drawtext={font_opt}text='ts {sec}{sub}':fontcolor={TS_COLOR}:"
+        f'fontsize={fontsize}:x=(w-tw)/2:y=h-{band}+({band}-th)/2')
+  run_ffmpeg([
+      '-i', in_mp4, '-vf', vf, '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart', out_path
+  ])
+
 
 # Shared grid the two sides are resampled onto for the (re-encoded) side-by-side.
 COMPARE_FPS = 60
@@ -436,6 +529,17 @@ def parse_args():
       action='store_true',
       help='list the video streams in the trace and exit')
   ap.add_argument(
+      '--screenshot',
+      metavar='PNG',
+      help='save a single frame - the one on screen at --start (or the earliest '
+      'ts a --query selects) - as a PNG, instead of extracting an .mp4')
+  ap.add_argument(
+      '--timestamps',
+      action='store_true',
+      help='burn the live trace ts (ns) of each frame onto the .mp4, in a row '
+      'under the video, so a video-capable agent can read both the content and '
+      'the exact frame timestamp (re-encodes the clip)')
+  ap.add_argument(
       '--trace-processor',
       metavar='PATH',
       help='local trace_processor(_shell) build '
@@ -488,15 +592,28 @@ def main():
       list_streams(tp)
     return 0
 
-  if not args.output:
-    die('-o/--output is required (or use --list).')
-
-  # PyAV is needed only to write the .mp4 (not for --list), so it is imported
+  # PyAV is needed only to write the output (not for --list), so it is imported
   # lazily and is not a dependency of the perfetto package.
   try:
     import av  # noqa: F401
   except ImportError:
-    die('writing the .mp4 needs PyAV (ffmpeg bindings): pip install av')
+    die('writing the output needs PyAV (ffmpeg bindings): pip install av')
+
+  if args.screenshot:
+    try:
+      import numpy  # noqa: F401  (the frame is decoded to a numpy array)
+    except ImportError:
+      die('--screenshot needs numpy: pip install numpy')
+    point = resolve_point(args.trace_processor, args.trace, args.start,
+                          args.query)
+    loaded = load_clip(args.trace_processor, args.trace,
+                       Clip(args.display_id, point, point, None))
+    screenshot(loaded, args.screenshot)
+    print(f'Wrote {args.screenshot}: frame at ts {point}')
+    return 0
+
+  if not args.output:
+    die('-o/--output is required (or use --list / --screenshot).')
 
   clip = Clip(args.display_id, args.start, args.end, args.query)
   left = load_clip(args.trace_processor, args.trace, clip)
@@ -515,13 +632,19 @@ def main():
     try:
       clip_mp4 = os.path.join(work, 'clip.mp4')
       lead, content_end, total = clip_span(left, clip_mp4, args.speed)
+      staged = clip_mp4
       if lead > 1e-3 or total - content_end > 1e-3:
-        fill_card(clip_mp4, lead, content_end, total, args.output)
+        staged = os.path.join(work, 'carded.mp4')
+        fill_card(clip_mp4, lead, content_end, total, staged)
+      if args.timestamps:
+        rebase = left.start if left.start is not None else left.sel[0].ts
+        overlay_ts(staged, rebase, args.speed, args.output)
       else:
-        shutil.move(clip_mp4, args.output)  # no gaps: keep the lossless remux
+        shutil.move(staged, args.output)  # no timestamps: keep it as-is
     finally:
       shutil.rmtree(work, ignore_errors=True)
-    print(f'Wrote {args.output}: {len(left.sel)} frames')
+    print(f'Wrote {args.output}: {len(left.sel)} frames'
+          + (' (with a trace-ts row)' if args.timestamps else ''))
   return 0
 
 

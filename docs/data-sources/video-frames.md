@@ -171,11 +171,12 @@ the speed selector to play back slower (down to 0.1×) or faster (up to
 
 ![Playing a display-video capture back with the video-frames track pinned at the top: in the details panel the decoded preview advances from the settings screen to the launcher while the frame number and timestamp update.](../images/video_frames/05-playback.gif)
 
-### Exporting to an .mp4 from the command line
+### Extracting video and frames from the command line
 
-`tools/trace_video_conv.py` pulls the captured video out of a trace into an
-`.mp4` using ffmpeg (the encoded frames are copied as-is, not re-encoded).
-It needs `ffmpeg` on the `PATH`; `trace_processor` is downloaded
+`tools/trace_video_conv.py` pulls the captured video out of a trace — as an
+`.mp4` clip, or as a single-frame `.png` screenshot. For clips the encoded frames
+are copied as-is (not re-encoded). It needs `ffmpeg` on the `PATH` for the
+re-encode paths (`--compare`, `--timestamps`); `trace_processor` is downloaded
 automatically, or pass `--trace-processor` to use a local build.
 
 ```bash
@@ -190,6 +191,15 @@ tools/trace_video_conv.py TRACE.perfetto-trace -o out.mp4
 tools/trace_video_conv.py TRACE.perfetto-trace -o clip.mp4 --start <ts> --end <ts>
 tools/trace_video_conv.py TRACE.perfetto-trace -o clip.mp4 \
     --query "SELECT ts, dur FROM slice WHERE name = 'my_cuj'"
+
+# Screenshot: the single frame on screen at a ts, or at what a query selects.
+tools/trace_video_conv.py TRACE.perfetto-trace --screenshot shot.png --start <ts>
+tools/trace_video_conv.py TRACE.perfetto-trace --screenshot shot.png \
+    --query "SELECT ts FROM slice WHERE name = 'my_cuj'"
+
+# Burn each frame's trace ts under the video (so a tool/agent reading the .mp4
+# has the exact trace time of every frame).
+tools/trace_video_conv.py TRACE.perfetto-trace -o clip.mp4 --start <ts> --end <ts> --timestamps
 
 # Slow motion (0.5x) or 2x faster.
 tools/trace_video_conv.py TRACE.perfetto-trace -o out.mp4 --speed 0.5
@@ -206,6 +216,8 @@ tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
 | `--display-id` | Which stream to use, for a trace with more than one display. |
 | `--start`, `--end` | Clip to a time range, in trace `ts` nanoseconds. |
 | `--query` | Clip to the region a SQL query selects (returns `ts`, optionally `dur`). |
+| `--screenshot` | Save a single frame as a `.png` — the one on screen at `--start`, or at the earliest `ts` a `--query` returns. |
+| `--timestamps` | Burn each frame's trace `ts` (ns) in a row under the `.mp4`, so the exact frame time travels with the video. |
 | `--speed` | Playback speed of the output: `2` = twice as fast, `0.5` = slow motion. |
 | `--compare` | A second trace, placed to the right for a side-by-side comparison. |
 | `--display-id2` | Which stream to use from the `--compare` trace. |
