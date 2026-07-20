@@ -13,14 +13,8 @@
 // limitations under the License.
 
 import m from 'mithril';
-import type {EChartsCoreOption} from 'echarts/core';
-import {formatNumber} from './chart_utils';
-import {
-  EChartView,
-  type EChartEventHandler,
-  type EChartClickParams,
-} from './echart_view';
-import {buildLegendOption, buildTooltipOption} from './chart_option_builder';
+import {PieChartSvg} from '../charts_svg/pie_chart_svg';
+
 import type {LegendPosition} from './common';
 
 /**
@@ -99,101 +93,6 @@ export interface PieChartAttrs {
 
 export class PieChart implements m.ClassComponent<PieChartAttrs> {
   view({attrs}: m.Vnode<PieChartAttrs>) {
-    const {data, height, fillParent, className} = attrs;
-
-    const validSlices = data?.slices.filter((s) => s.value > 0) ?? [];
-    const isEmpty = data !== undefined && validSlices.length === 0;
-    const option =
-      validSlices.length > 0 ? buildPieOption(attrs, validSlices) : undefined;
-
-    return m(EChartView, {
-      option,
-      height,
-      fillParent,
-      className,
-      empty: isEmpty,
-      eventHandlers: buildPieEventHandlers(attrs, validSlices),
-    });
+    return m(PieChartSvg, attrs);
   }
-}
-
-function buildPieOption(
-  attrs: PieChartAttrs,
-  slices: readonly PieChartSlice[],
-): EChartsCoreOption {
-  const {
-    formatValue = (v: number) => formatNumber(v),
-    showLegend = true,
-    legendPosition = 'right',
-    showLabels = false,
-    innerRadiusRatio = 0,
-  } = attrs;
-  const legendOnRight = showLegend && legendPosition === 'right';
-
-  const pieData = slices.map((s) => ({
-    name: s.label,
-    value: s.value,
-    itemStyle: s.color !== undefined ? {color: s.color} : undefined,
-  }));
-
-  const outerPct = legendOnRight ? 65 : 75;
-  const outerRadius = `${outerPct}%`;
-  const innerRadius = `${Math.round(outerPct * innerRadiusRatio)}%`;
-
-  return {
-    animation: false,
-    tooltip: buildTooltipOption({
-      trigger: 'item' as const,
-      formatter: (params: {
-        name?: string;
-        value?: number;
-        percent?: number;
-      }) => {
-        const name = params.name ?? '';
-        const value = params.value ?? 0;
-        const pct = params.percent?.toFixed(1) ?? '0';
-        return [name, `Value: ${formatValue(value)}`, `${pct}%`].join('<br>');
-      },
-    }),
-    legend: showLegend ? buildLegendOption(legendPosition) : {show: false},
-    series: [
-      {
-        type: 'pie',
-        radius: [innerRadius, outerRadius],
-        center: legendOnRight ? ['35%', '50%'] : ['50%', '50%'],
-        data: pieData,
-        label: {
-          show: showLabels,
-          formatter: '{d}%',
-          fontSize: 10,
-        },
-        emphasis: {
-          scaleSize: 5,
-        },
-        itemStyle: {
-          borderWidth: 2,
-        },
-      },
-    ],
-  };
-}
-
-function buildPieEventHandlers(
-  attrs: PieChartAttrs,
-  slices: readonly PieChartSlice[],
-): ReadonlyArray<EChartEventHandler> {
-  if (!attrs.onSliceClick || slices.length === 0) return [];
-  const onSliceClick = attrs.onSliceClick;
-  return [
-    {
-      eventName: 'click',
-      handler: (params) => {
-        const p = params as EChartClickParams;
-        const idx = p.dataIndex;
-        if (idx !== undefined && idx >= 0 && idx < slices.length) {
-          onSliceClick(slices[idx]);
-        }
-      },
-    },
-  ];
 }

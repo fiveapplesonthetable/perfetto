@@ -74,6 +74,10 @@ import {
   type BoxplotData,
 } from '../../../components/widgets/charts/boxplot';
 import {
+  ViolinSvg,
+  type ViolinData,
+} from '../../../components/widgets/charts_svg/violin_svg';
+import {
   SQLBoxplotLoader,
   type BoxplotLoaderConfig,
 } from '../../../components/widgets/charts/boxplot_loader';
@@ -102,8 +106,6 @@ import {
 import type {App} from '../../../public/app';
 import {EnumOption, renderWidgetShowcase} from '../widgets_page_utils';
 import type {Trace} from '../../../public/trace';
-import {LineChartSvg} from '../../../components/widgets/charts_svg/line_chart_svg';
-import {HistogramSvg} from '../../../components/widgets/charts_svg/histogram_svg';
 import {ProportionBar} from '../../../components/widgets/charts/proportion_bar';
 import {
   FlamegraphChart,
@@ -164,8 +166,8 @@ export function renderCharts(app: App): m.Children {
       '.pf-widget-intro',
       m('h1', 'Charts'),
       m('p', [
-        'ECharts-based chart components for visualizing data. ',
-        'Includes Bar, Line, Pie/Donut, Histogram, Scatter, Treemap, Sankey, CDF, Boxplot, Heatmap, and Stat Card charts.',
+        'SVG chart components for visualizing data. ',
+        'Includes Bar, Line, Pie/Donut, Histogram, Scatter, Treemap, Sankey, CDF, Boxplot, Violin, Heatmap, and Stat Card charts.',
       ]),
     ),
 
@@ -206,49 +208,6 @@ export function renderCharts(app: App): m.Children {
           'right',
           'bottom',
         ] as const),
-      },
-    }),
-
-    // LineChartSvg section
-    m('h2', {style: {marginTop: '32px'}}, 'LineChartSvg'),
-    renderWidgetShowcase({
-      renderWidget: (opts) => {
-        return m(LineChartDemo, {
-          height: opts.height,
-          brushMode: opts.brushMode,
-          logScale: opts.logScale,
-          showPoints: opts.showPoints,
-          multiSeries: opts.multiSeries,
-          stacked: opts.stacked,
-          gridLines: opts.gridLines,
-          legendPosition: opts.legendPosition,
-          markers: opts.markers,
-          useSvg: true,
-        });
-      },
-      initialOpts: {
-        height: 250,
-        brushMode: new EnumOption('filter', [
-          'off',
-          'filter',
-          'select',
-        ] as const),
-        logScale: false,
-        showPoints: true,
-        multiSeries: false,
-        stacked: false,
-        gridLines: new EnumOption('none', [
-          'none',
-          'horizontal',
-          'vertical',
-          'both',
-        ] as const),
-        legendPosition: new EnumOption('top', [
-          'top',
-          'right',
-          'bottom',
-        ] as const),
-        markers: false,
       },
     }),
 
@@ -325,33 +284,6 @@ export function renderCharts(app: App): m.Children {
           brushMode: opts.brushMode,
           logScale: opts.logScale,
           integer: opts.integer,
-          useSvg: false,
-        });
-      },
-      initialOpts: {
-        bucketCount: 20,
-        height: 250,
-        brushMode: new EnumOption('filter', [
-          'off',
-          'filter',
-          'select',
-        ] as const),
-        logScale: false,
-        integer: false,
-      },
-    }),
-
-    // HistogramSvg section
-    m('h2', {style: {marginTop: '32px'}}, 'HistogramSvg'),
-    renderWidgetShowcase({
-      renderWidget: (opts) => {
-        return m(HistogramDemo, {
-          bucketCount: opts.bucketCount,
-          height: opts.height,
-          brushMode: opts.brushMode,
-          logScale: opts.logScale,
-          integer: opts.integer,
-          useSvg: true,
         });
       },
       initialOpts: {
@@ -449,6 +381,22 @@ export function renderCharts(app: App): m.Children {
         height: 300,
         horizontal: false,
         gridLines: new EnumOption('none', [
+          'none',
+          'horizontal',
+          'vertical',
+          'both',
+        ] as const),
+      },
+    }),
+
+    // ViolinChart section
+    m('h2', {style: {marginTop: '32px'}}, 'ViolinChart'),
+    renderWidgetShowcase({
+      renderWidget: (opts) =>
+        m(ViolinChartDemo, {height: opts.height, gridLines: opts.gridLines}),
+      initialOpts: {
+        height: 300,
+        gridLines: new EnumOption('horizontal', [
           'none',
           'horizontal',
           'vertical',
@@ -635,38 +583,6 @@ function renderSQLDemos(app: App): m.Children[] {
         ] as const),
       },
     }),
-    m('h3', {style: {marginTop: '32px'}}, 'SQLLineChartLoader (Svg)'),
-    renderWidgetShowcase({
-      renderWidget: (opts) => {
-        return m(SQLLineChartDemo, {
-          trace,
-          height: opts.height,
-          brushMode: opts.brushMode,
-          showPoints: opts.showPoints,
-          maxPoints: opts.maxPoints,
-          scaleAxes: opts.scaleAxes,
-          gridLines: opts.gridLines,
-          useSvg: true,
-        });
-      },
-      initialOpts: {
-        height: 250,
-        brushMode: new EnumOption('filter', [
-          'off',
-          'filter',
-          'select',
-        ] as const),
-        showPoints: true,
-        maxPoints: 200,
-        scaleAxes: true,
-        gridLines: new EnumOption('none', [
-          'none',
-          'horizontal',
-          'vertical',
-          'both',
-        ] as const),
-      },
-    }),
     m('h3', {style: {marginTop: '32px'}}, 'SQLPieChartLoader'),
     renderWidgetShowcase({
       renderWidget: (opts) => {
@@ -702,29 +618,6 @@ function renderSQLDemos(app: App): m.Children[] {
           height: opts.height,
           brushMode: opts.brushMode,
           logScale: opts.logScale,
-        });
-      },
-      initialOpts: {
-        bucketCount: 20,
-        height: 250,
-        brushMode: new EnumOption('filter', [
-          'off',
-          'filter',
-          'select',
-        ] as const),
-        logScale: false,
-      },
-    }),
-    m('h3', {style: {marginTop: '32px'}}, 'SQLHistogramLoader (Svg)'),
-    renderWidgetShowcase({
-      renderWidget: (opts) => {
-        return m(SQLHistogramDemo, {
-          trace,
-          bucketCount: opts.bucketCount,
-          height: opts.height,
-          brushMode: opts.brushMode,
-          logScale: opts.logScale,
-          useSvg: true,
         });
       },
       initialOpts: {
@@ -808,34 +701,6 @@ function renderSQLDemos(app: App): m.Children[] {
           maxPoints: opts.maxPoints,
           brushMode: opts.brushMode,
           gridLines: opts.gridLines,
-        });
-      },
-      initialOpts: {
-        height: 250,
-        maxPoints: 500,
-        brushMode: new EnumOption('filter', [
-          'off',
-          'filter',
-          'select',
-        ] as const),
-        gridLines: new EnumOption('none', [
-          'none',
-          'horizontal',
-          'vertical',
-          'both',
-        ] as const),
-      },
-    }),
-    m('h3', {style: {marginTop: '32px'}}, 'SQLCdfLoader (Svg)'),
-    renderWidgetShowcase({
-      renderWidget: (opts) => {
-        return m(SQLCdfDemo, {
-          trace,
-          height: opts.height,
-          maxPoints: opts.maxPoints,
-          brushMode: opts.brushMode,
-          gridLines: opts.gridLines,
-          useSvg: true,
         });
       },
       initialOpts: {
@@ -958,7 +823,6 @@ function HistogramDemo(): m.Component<{
   brushMode: 'off' | 'filter' | 'select';
   logScale: boolean;
   integer: boolean;
-  useSvg?: boolean;
 }> {
   const continuousData = generateNormalData(1000, 50, 15);
   const integerData = generateNormalData(1000, 50, 15, true);
@@ -982,7 +846,7 @@ function HistogramDemo(): m.Component<{
       };
       const {data} = loader.use(config);
       return m('div', [
-        m(attrs.useSvg ? HistogramSvg : Histogram, {
+        m(Histogram, {
           data,
           height: attrs.height,
           xAxisLabel: attrs.integer ? 'Thread Count' : 'Value',
@@ -1258,7 +1122,6 @@ function SQLHistogramDemo(): m.Component<{
   height: number;
   brushMode: 'off' | 'filter' | 'select';
   logScale: boolean;
-  useSvg?: boolean;
 }> {
   let loader: SQLHistogramLoader | undefined;
   let brushedRange: {start: number; end: number} | undefined;
@@ -1285,7 +1148,7 @@ function SQLHistogramDemo(): m.Component<{
       const {data, isPending} = loader.use(config);
 
       return m('div', [
-        m(attrs.useSvg ? HistogramSvg : Histogram, {
+        m(Histogram, {
           data,
           height: attrs.height,
           xAxisLabel: 'Duration (ns)',
@@ -1349,7 +1212,6 @@ function SQLLineChartDemo(): m.Component<{
   maxPoints: number;
   scaleAxes: boolean;
   gridLines: string;
-  useSvg?: boolean;
 }> {
   let loader: SQLLineChartLoader | undefined;
   let brushedRange: {start: number; end: number} | undefined;
@@ -1393,7 +1255,7 @@ function SQLLineChartDemo(): m.Component<{
       };
 
       return m('div', [
-        m(attrs.useSvg ? LineChartSvg : LineChart, sqlLineChartProps),
+        m(LineChart, sqlLineChartProps),
         m(
           'pre',
           {
@@ -1543,7 +1405,6 @@ function LineChartDemo(): m.Component<{
   gridLines: string;
   legendPosition: LegendPosition;
   markers?: boolean;
-  useSvg?: boolean;
 }> {
   let brushRange: {start: number; end: number} | undefined;
 
@@ -1583,7 +1444,7 @@ function LineChartDemo(): m.Component<{
       };
 
       return m('div', [
-        m(attrs.useSvg ? LineChartSvg : LineChart, lineChartProps),
+        m(LineChart, lineChartProps),
         m(
           'pre',
           {
@@ -2500,6 +2361,45 @@ function BoxplotChartDemo(): m.Component<{
 }
 
 // ---------------------------------------------------------------------------
+// Static sample data for ViolinChart demo
+// ---------------------------------------------------------------------------
+
+const VIOLIN_SAMPLE_DATA: ViolinData = (() => {
+  const rng = seededRandom(77);
+  const gauss = () =>
+    Math.sqrt(-2 * Math.log(Math.max(rng(), 1e-9))) *
+    Math.cos(2 * Math.PI * rng());
+  const groups = ['Chrome', 'SurfaceFlinger', 'SystemUI', 'Launcher'].map(
+    (label, gi) => ({
+      label,
+      // The first group is intentionally bimodal to show off the KDE shape
+      // (a boxplot would hide the two modes).
+      values: Array.from({length: 120}, () => {
+        const mode = gi === 0 && rng() > 0.5 ? 26 : 10 + gi * 4;
+        return Math.max(0.5, mode + gauss() * (2 + gi));
+      }),
+    }),
+  );
+  return {groups};
+})();
+
+function ViolinChartDemo(): m.Component<{
+  height: number;
+  gridLines: string;
+}> {
+  return {
+    view: ({attrs}) =>
+      m(ViolinSvg, {
+        data: VIOLIN_SAMPLE_DATA,
+        height: attrs.height,
+        categoryLabel: 'Process',
+        valueLabel: 'Frame time (ms)',
+        gridLines: toGridLines(attrs.gridLines),
+      }),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Static sample data for HeatmapChart demo
 // ---------------------------------------------------------------------------
 
@@ -2630,7 +2530,6 @@ function SQLCdfDemo(): m.Component<{
   maxPoints: number;
   brushMode: 'off' | 'filter' | 'select';
   gridLines: string;
-  useSvg?: boolean;
 }> {
   let loader: SQLCdfLoader | undefined;
   let brushedRange: {start: number; end: number} | undefined;
@@ -2673,7 +2572,7 @@ function SQLCdfDemo(): m.Component<{
       };
 
       return m('div', [
-        m(attrs.useSvg ? LineChartSvg : LineChart, cdfProps),
+        m(LineChart, cdfProps),
         m(
           'pre',
           {

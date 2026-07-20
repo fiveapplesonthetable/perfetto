@@ -13,15 +13,9 @@
 // limitations under the License.
 
 import m from 'mithril';
-import type {EChartsCoreOption} from 'echarts/core';
-import {extractBrushRect, formatNumber} from './chart_utils';
-import {EChartView, type EChartEventHandler} from './echart_view';
+import {ScatterSvg} from '../charts_svg/scatter_svg';
+
 import type {LegendPosition} from './common';
-import {
-  buildChartOption,
-  buildLegendOption,
-  buildSelectionMarkArea,
-} from './chart_option_builder';
 
 /**
  * A single data point in a scatter chart.
@@ -168,195 +162,22 @@ export interface ScatterChartAttrs {
    * Defaults to no grid lines.
    */
   readonly gridLines?: 'horizontal' | 'vertical' | 'both';
+
+  /**
+   * Optional vertical highlight bands as [start, end] ranges on the X axis
+   * (data coordinates), drawn behind the points to shade regions of interest
+   * (e.g. jank intervals). Omitted/empty by default, so this is a no-op for
+   * callers that don't set it.
+   */
+  readonly highlightBands?: ReadonlyArray<{
+    readonly start: number;
+    readonly end: number;
+    readonly color?: string;
+  }>;
 }
 
 export class Scatterplot implements m.ClassComponent<ScatterChartAttrs> {
   view({attrs}: m.Vnode<ScatterChartAttrs>) {
-    const {data, height, fillParent, className, onBrush} = attrs;
-
-    const isEmpty =
-      data !== undefined &&
-      (data.series.length === 0 ||
-        data.series.every((s) => s.points.length === 0));
-    const option =
-      data !== undefined && !isEmpty
-        ? buildScatterOption(attrs, data)
-        : undefined;
-
-    return m(EChartView, {
-      option,
-      height,
-      fillParent,
-      className,
-      empty: isEmpty,
-      eventHandlers: buildScatterEventHandlers(attrs),
-      activeBrushType: onBrush !== undefined ? 'rect' : undefined,
-    });
+    return m(ScatterSvg, attrs);
   }
-}
-
-function buildScatterOption(
-  attrs: ScatterChartAttrs,
-  data: ScatterChartData,
-): EChartsCoreOption {
-  const {
-    xAxisLabel,
-    yAxisLabel,
-    formatXValue,
-    formatYValue,
-    logScaleX = false,
-    logScaleY = false,
-    showLegend,
-    symbolSize = 8,
-    symbolSizeRange = [5, 30],
-  } = attrs;
-  const fmtX = formatXValue ?? formatNumber;
-  const fmtY = formatYValue ?? formatNumber;
-  const displayLegend = showLegend ?? data.series.length > 1;
-
-  // Compute size range for normalization if any points have sizes
-  let minSize = Infinity;
-  let maxSize = -Infinity;
-  for (const s of data.series) {
-    for (const p of s.points) {
-      if (p.size !== undefined) {
-        minSize = Math.min(minSize, p.size);
-        maxSize = Math.max(maxSize, p.size);
-      }
-    }
-  }
-  const hasSizes = minSize !== Infinity;
-  const sizeRange = maxSize - minSize || 1;
-
-  const series = data.series.map((s, i) => {
-    const base: Record<string, unknown> = {
-      type: 'scatter' as const,
-      name: s.name,
-      // ECharts scatter series requires data as arrays with positional indices:
-      // [0]: x value (number)
-      // [1]: y value (number)
-      // [2]: size value (number | null) - used for bubble sizing
-      // [3]: label (string | undefined) - used for tooltip display
-      // This positional format is mandated by ECharts API for scatter/bubble.
-      data: s.points.map((p) => {
-        const pointData: [number, number, ...unknown[]] = [p.x, p.y];
-        if (p.size !== undefined) {
-          pointData.push(p.size);
-        } else if (p.label !== undefined) {
-          // Placeholder null so label is always at index 3
-          pointData.push(null);
-        }
-        if (p.label !== undefined) pointData.push(p.label);
-        return {
-          value: pointData,
-          itemStyle: p.color !== undefined ? {color: p.color} : undefined,
-        };
-      }),
-      symbolSize: hasSizes
-        ? (value: Array<number | null>) => {
-            const size = value.length > 2 ? value[2] : undefined;
-            if (size === undefined || size === null) return symbolSize;
-            const normalized = (size - minSize) / sizeRange;
-            return (
-              symbolSizeRange[0] +
-              normalized * (symbolSizeRange[1] - symbolSizeRange[0])
-            );
-          }
-        : symbolSize,
-      itemStyle: s.color !== undefined ? {color: s.color} : undefined,
-      emphasis: {
-        itemStyle: {borderWidth: 2},
-      },
-    };
-
-    // Render selection highlight on the first series only.
-    if (i === 0 && attrs.selection !== undefined) {
-      const sel = attrs.selection;
-      base.markArea = buildSelectionMarkArea([
-        [
-          {xAxis: sel.xMin, yAxis: sel.yMin},
-          {xAxis: sel.xMax, yAxis: sel.yMax},
-        ],
-      ]);
-    }
-    return base;
-  });
-
-  const option = buildChartOption({
-    xAxis: {
-      type: logScaleX ? 'log' : 'value',
-      name: xAxisLabel,
-      formatter:
-        formatXValue !== undefined
-          ? (v) => formatXValue(v as number)
-          : undefined,
-      // When brush is enabled, always scale axes to data range so that after
-      // filtering the axes fit the selected region rather than anchoring at 0.
-      scale: attrs.onBrush !== undefined || attrs.scaleAxes,
-      showSplitLine:
-        attrs.gridLines === 'vertical' || attrs.gridLines === 'both',
-    },
-    yAxis: {
-      type: logScaleY ? 'log' : 'value',
-      name: yAxisLabel,
-      formatter:
-        formatYValue !== undefined
-          ? (v) => formatYValue(v as number)
-          : undefined,
-      scale: attrs.onBrush !== undefined || attrs.scaleAxes,
-      showSplitLine:
-        attrs.gridLines === 'horizontal' || attrs.gridLines === 'both',
-    },
-    tooltip: {
-      trigger: 'item' as const,
-      formatter: (params: {
-        seriesName?: string;
-        value?: [number, number, (number | null)?, string?];
-        color?: string;
-        marker?: string;
-      }) => {
-        const value = params.value;
-        if (value === undefined) return '';
-        const [x, y, size, label] = value;
-        const lines = [
-          `${params.marker ?? ''} ${params.seriesName ?? ''}`,
-          `X: ${fmtX(x)}`,
-          `Y: ${fmtY(y)}`,
-        ];
-        if (size !== undefined && size !== null) {
-          lines.push(`Size: ${formatNumber(size)}`);
-        }
-        if (label !== undefined) lines.push(label);
-        return lines.join('<br>');
-      },
-    },
-    brush: attrs.onBrush
-      ? {xAxisIndex: 0, yAxisIndex: 0, brushType: 'rect' as const}
-      : undefined,
-    legend: displayLegend
-      ? buildLegendOption(attrs.legendPosition)
-      : {show: false},
-  });
-
-  (option as Record<string, unknown>).series = series;
-  return option;
-}
-
-function buildScatterEventHandlers(
-  attrs: ScatterChartAttrs,
-): ReadonlyArray<EChartEventHandler> {
-  if (!attrs.onBrush) return [];
-  const onBrush = attrs.onBrush;
-
-  return [
-    {
-      eventName: 'brushEnd',
-      handler: (params) => {
-        const range = extractBrushRect(params);
-        if (range !== undefined) {
-          onBrush(range);
-        }
-      },
-    },
-  ];
 }

@@ -16,9 +16,10 @@ import m from 'mithril';
 import {type duration, Time, type time} from '../../base/time';
 import type {Engine} from '../../trace_processor/engine';
 import {LONG, NUM} from '../../trace_processor/query_result';
-import {EChartView} from '../../components/widgets/charts/echart_view';
-import type {EChartsCoreOption} from 'echarts/core';
-import {buildChartOption} from '../../components/widgets/charts/chart_option_builder';
+import {
+  Scatterplot,
+  type ScatterChartSeries,
+} from '../../components/widgets/charts/scatterplot';
 
 const INPUT_CATEGORY = 'Input';
 const PRESENTED_CATEGORY = 'Presented';
@@ -238,129 +239,44 @@ export function buildScrollOffsetsGraph(
     PRESENTED_JANKY_CATEGORY,
   );
 
-  const option = buildScrollGraphOption(
-    inputData,
-    presentedData,
-    predictorData,
-    jankIntervals,
-  );
-
-  return m(EChartView, {
-    option,
-    height: 300,
-  });
-}
-
-function buildScrollGraphOption(
-  inputData: ScrollDeltaPlotDatum[],
-  presentedData: ScrollDeltaPlotDatum[],
-  predictorData: ScrollDeltaPlotDatum[],
-  jankIntervals: JankIntervalPlotDetails[],
-): EChartsCoreOption {
-  // Convert jank intervals to markArea data format
-  // Each area needs two coordinate pairs: [start, end]
-  // When only xAxis is specified, the area spans the full Y range
-  const markAreaData = jankIntervals.map((jank) => [
-    {xAxis: jank.start_ts / 10e8},
-    {xAxis: jank.end_ts / 10e8},
-  ]);
-
-  // Build series for each category
-  const series: unknown[] = [];
-
-  // Jank markArea configuration - will be attached to the first data series
-  // Uses a semi-transparent gray for subtle highlight
-  const jankMarkArea =
-    markAreaData.length > 0
-      ? {
-          silent: true,
-          itemStyle: {
-            color: 'rgba(128, 128, 128, 0.3)',
-          },
-          label: {
-            show: false,
-          },
-          data: markAreaData,
-        }
-      : undefined;
-
-  // Input series
-  // Attach markArea to this series so it renders properly
+  const toPoints = (data: ScrollDeltaPlotDatum[]) =>
+    data.map((d) => ({
+      x: d.ts,
+      y: d.offset,
+      label:
+        `Delta: ${d.delta.toFixed(2)}, Trace Id: ${d.scrollUpdateId}` +
+        (d.predictorJank !== 'N/A'
+          ? `, Predictor Jank: ${d.predictorJank}`
+          : ''),
+    }));
+  const series: ScatterChartSeries[] = [];
   if (inputData.length > 0) {
-    series.push({
-      name: INPUT_CATEGORY,
-      type: 'scatter',
-      data: inputData.map((d) => [d.ts, d.offset, d]),
-      symbolSize: 6,
-      markArea: jankMarkArea,
-    });
-  } else if (jankMarkArea !== undefined) {
-    // Fallback: if no input data, use a dummy series for markArea
-    series.push({
-      type: 'scatter',
-      data: [[0, 0]],
-      symbolSize: 0,
-      markArea: jankMarkArea,
-    });
+    series.push({name: INPUT_CATEGORY, points: toPoints(inputData)});
   }
-
-  // Presented series
   if (presentedData.length > 0) {
-    series.push({
-      name: PRESENTED_CATEGORY,
-      type: 'scatter',
-      data: presentedData.map((d) => [d.ts, d.offset, d]),
-      symbolSize: 6,
-    });
+    series.push({name: PRESENTED_CATEGORY, points: toPoints(presentedData)});
   }
-
-  // Predictor jank series
   if (predictorData.length > 0) {
     series.push({
       name: PRESENTED_JANKY_CATEGORY,
-      type: 'scatter',
-      data: predictorData.map((d) => [d.ts, d.offset, d]),
-      symbolSize: 8,
+      points: toPoints(predictorData),
     });
   }
 
-  const option = buildChartOption({
-    grid: {bottom: 40, left: 60, right: 20, top: 30},
-    xAxis: {
-      type: 'value',
-      name: 'Raw Timestamp',
-      scale: true,
-    },
-    yAxis: {
-      type: 'value',
-      name: 'Offset (pixels)',
-      scale: true,
-    },
-    tooltip: {
-      trigger: 'item' as const,
-      formatter: (params: {data?: [number, number, ScrollDeltaPlotDatum]}) => {
-        const d = params.data?.[2];
-        if (!d) return '';
-        const lines = [
-          `Delta: ${d.delta.toFixed(2)}`,
-          `Trace Id: ${d.scrollUpdateId}`,
-        ];
-        if (d.predictorJank !== 'N/A') {
-          lines.push(`Predictor Jank: ${d.predictorJank}`);
-        }
-        return lines.join('<br>');
-      },
-    },
+  return m(Scatterplot, {
+    data: {series},
+    height: 300,
+    xAxisLabel: 'Raw Timestamp',
+    yAxisLabel: 'Offset (pixels)',
+    showLegend: true,
+    scaleAxes: true,
+    // Shade the jank intervals behind the points (start_ts/end_ts are in ns;
+    // the point timestamps use the same /10e8 conversion).
+    highlightBands: jankIntervals.map((j) => ({
+      start: j.start_ts / 10e8,
+      end: j.end_ts / 10e8,
+    })),
   });
-
-  // Add legend
-  (option as Record<string, unknown>).legend = {
-    data: [INPUT_CATEGORY, PRESENTED_CATEGORY, PRESENTED_JANKY_CATEGORY],
-    bottom: 0,
-  };
-  (option as Record<string, unknown>).series = series;
-
-  return option;
 }
 
 function buildOffsetData(
