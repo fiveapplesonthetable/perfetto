@@ -47,6 +47,12 @@ Examples:
   # two traces side by side, each clipped independently, with captions
   trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
       -o cmp.mp4 --title Before --title2 After
+
+  # a contact sheet (PNG) of frames tiled together, to skim a whole capture
+  trace_video_conv.py trace.perfetto-trace -o sheet.png --contact-sheet
+  # one tile per query row, labelled with the row's name (e.g. per startup)
+  trace_video_conv.py trace.perfetto-trace -o startups.png --contact-sheet \
+      --query "SELECT ts, name FROM slice WHERE name GLOB 'launching: *'"
 """
 
 import argparse
@@ -75,8 +81,10 @@ Frame = collections.namedtuple('Frame', 'ts is_key is_config pts data')
 # A per-trace selection: which display, and how to clip it.
 Clip = collections.namedtuple('Clip', 'display_id start end query')
 # A loaded clip: config + selected frames, the requested [start, end] window (ns,
-# or None), the codec string, and the stream's last frame ts.
-Loaded = collections.namedtuple('Loaded', 'cfg sel start end codec last_ts')
+# or None), the codec string, the stream's last frame ts, and - when clipped by a
+# --query - that query's per-row (ts, name) for one-tile-per-row contact sheets.
+Loaded = collections.namedtuple('Loaded',
+                                'cfg sel start end codec last_ts rows')
 
 FONT_CANDIDATES = [
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
@@ -202,6 +210,13 @@ def load_clip(bin_path, trace, clip):
       die(f'No displayable frames for display {display_id} in {trace}.')
     start_ts, end_ts = resolve_region(tp, clip)
     sel = select_range(frames, start_ts, end_ts)
+    query_rows = None
+    if clip.query:
+      # Keep each row (not just the merged span) so a contact sheet can show one
+      # tile per row, labelled with the row's `name` column when it has one.
+      query_rows = [(r.ts,
+                     str(r.name) if getattr(r, 'name', None) is not None
+                     else None) for r in tp.query(clip.query)]
     rows = tp.query(f'SELECT codec_string FROM {VIDEO_TABLE} '
                     f'WHERE display_id = {display_id} '
                     'AND codec_string IS NOT NULL LIMIT 1')
@@ -214,7 +229,8 @@ def load_clip(bin_path, trace, clip):
         'likely recorded without the video bytes.')
   # last_ts is the stream's final frame; an --end past it is a real gap (capture
   # stopped), not the last frame simply staying on screen.
-  return Loaded(cfg_frames, sel, start_ts, end_ts, codec_string, frames[-1].ts)
+  return Loaded(cfg_frames, sel, start_ts, end_ts, codec_string, frames[-1].ts,
+                query_rows)
 
 
 def find_font():
@@ -367,7 +383,7 @@ def clip_span(clip, mp4, speed):
   [content_end, window] is a frameless tail. When --end lands within the frames
   the last frame is held to it (lossless); only an --end past the stream's last
   frame leaves a real tail gap to card."""
-  cfg, sel, start, end, codec, last_ts = clip
+  cfg, sel, start, end, codec, last_ts, _ = clip
   lead = (sel[0].ts - start) / 1e9 / speed \
       if start is not None and start < sel[0].ts else 0.0
   tail_gap = end is not None and end > last_ts
@@ -426,6 +442,133 @@ def mux_compare(left, right, titles, speed, out_path):
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+# Contact sheet: each decoded frame is scaled to this height (px); width follows
+# the aspect ratio. Labels are burned on with ffmpeg's drawtext.
+SHEET_TILE_H = 300
+SHEET_PAD = 4
+SHEET_BG = 24
+
+
+def _write_png(path, rgb):
+  """Write an HxWx3 uint8 RGB array as a PNG (no Pillow dependency)."""
+  import struct
+  import zlib
+  h, w = rgb.shape[0], rgb.shape[1]
+  data = rgb.astype('uint8').tobytes()
+  stride = w * 3
+  raw = bytearray()
+  for y in range(h):
+    raw.append(0)  # filter type 0 (none)
+    raw += data[y * stride:(y + 1) * stride]
+
+  def chunk(typ, payload):
+    return (struct.pack('>I', len(payload)) + typ + payload +
+            struct.pack('>I', zlib.crc32(typ + payload) & 0xffffffff))
+
+  with open(path, 'wb') as f:
+    f.write(b'\x89PNG\r\n\x1a\n')
+    f.write(chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)))
+    f.write(chunk(b'IDAT', zlib.compress(bytes(raw), 6)))
+    f.write(chunk(b'IEND', b''))
+
+
+def sheet_picks(loaded, tiles):
+  """(frame indices into loaded.sel, per-tile label) for the contact sheet. With
+  a --query, one tile per row (the frame on screen at the row's ts, labelled with
+  the row's name or its time); otherwise `tiles` frames spread across the clip."""
+  sel = loaded.sel
+  base = loaded.start if loaded.start is not None else sel[0].ts
+
+  def at(ts):  # index of the frame on screen at ts (last one starting at/before)
+    k = 0
+    while k + 1 < len(sel) and sel[k + 1].ts <= ts:
+      k += 1
+    return k
+
+  if loaded.rows:
+    picks = [at(ts) for ts, _ in loaded.rows]
+    labels = [name or f'{(sel[k].ts - base) / 1e6:.0f}ms'
+              for k, (_, name) in zip(picks, loaded.rows)]
+  else:
+    n = max(1, min(tiles, len(sel)))
+    step = (len(sel) - 1) / (n - 1) if n > 1 else 0
+    picks = sorted({round(i * step) for i in range(n)})
+    labels = [f'{(sel[k].ts - base) / 1e6:.0f}ms' for k in picks]
+  return picks, labels
+
+
+def contact_sheet(loaded, tiles, cols, out_path):
+  """Decode the sampled frames, tile them into one labelled PNG, and write it - a
+  contact sheet to skim a whole capture at a glance, or one tile per --query row.
+  Returns the number of tiles written."""
+  import av
+  import numpy as np
+
+  picks, labels = sheet_picks(loaded, tiles)
+  want = set(picks)
+  raw = write_temp(build_stream(loaded.cfg, loaded.sel), '.bin')
+  decoded = {}
+  try:
+    with av.open(raw, format=codec_format(loaded.codec)) as c:
+      last = max(want)
+      for i, pic in enumerate(c.decode(video=0)):
+        if i in want:
+          tw = max(1, round(SHEET_TILE_H * pic.width / pic.height))
+          decoded[i] = pic.reformat(
+              width=tw, height=SHEET_TILE_H, format='rgb24').to_ndarray()
+        if i >= last:
+          break
+  finally:
+    os.unlink(raw)
+  order = [(decoded[p], lbl) for p, lbl in zip(picks, labels) if p in decoded]
+  if not order:
+    die('could not decode any frame for the contact sheet.')
+
+  th, tw = order[0][0].shape[:2]
+  n = len(order)
+  cols = cols or min(n, 6)
+  rows = (n + cols - 1) // cols
+  p = SHEET_PAD
+  canvas = np.full((rows * (th + p) + p, cols * (tw + p) + p, 3), SHEET_BG,
+                   np.uint8)
+  placed = []  # (x, y, label) for the label pass
+  for j, (img, label) in enumerate(order):
+    r, c = divmod(j, cols)
+    y, x = p + r * (th + p), p + c * (tw + p)
+    canvas[y:y + th, x:x + tw] = img
+    placed.append((x + 4, y + 4, label))
+  _write_png(out_path, canvas)
+  label_sheet(out_path, placed, max(round(th * 0.05), 12))
+  return n
+
+
+def label_sheet(png_path, placed, fontsize):
+  """Burn each tile's label onto the sheet with ffmpeg drawtext (handles any text
+  and reuses the TTF font). Skipped with a warning if ffmpeg isn't on PATH."""
+  if not placed or not shutil.which('ffmpeg'):
+    if placed:
+      print('note: ffmpeg not found; contact sheet written without labels.',
+            file=sys.stderr)
+    return
+  font = find_font()
+  font_opt = f"fontfile='{font}':" if font else ''
+  tmp = tempfile.mkdtemp()
+  try:
+    filters = []
+    for i, (x, y, label) in enumerate(placed):
+      tf = os.path.join(tmp, f'{i}.txt')
+      with open(tf, 'w') as f:
+        f.write(label)
+      filters.append(
+          f'drawtext={font_opt}textfile={tf}:fontcolor=white:fontsize={fontsize}'
+          f':x={x}:y={y}:box=1:boxcolor=black@0.5:boxborderw=3')
+    labelled = os.path.join(tmp, 'out.png')
+    run_ffmpeg(['-i', png_path, '-vf', ','.join(filters), labelled])
+    shutil.move(labelled, png_path)
+  finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def parse_args():
   ap = argparse.ArgumentParser(
       description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -446,6 +589,24 @@ def parse_args():
       default=1.0,
       help='playback speed: 2 = twice as fast, 0.5 = slow motion '
       '(applies to both sides)')
+
+  s = ap.add_argument_group('contact sheet (still image of tiled frames)')
+  s.add_argument(
+      '--contact-sheet',
+      action='store_true',
+      help='write a PNG contact sheet of tiled frames to -o instead of an .mp4; '
+      'with --query, one tile per row (labelled with its `name` column)')
+  s.add_argument(
+      '--tiles',
+      type=int,
+      default=24,
+      help='frames to sample across the clip for the contact sheet '
+      '(ignored when --query gives one tile per row; default: 24)')
+  s.add_argument(
+      '--cols',
+      type=int,
+      default=0,
+      help='columns in the contact sheet (default: auto)')
 
   g = ap.add_argument_group('clip (first trace)')
   g.add_argument(
@@ -491,15 +652,25 @@ def main():
   if not args.output:
     die('-o/--output is required (or use --list).')
 
-  # PyAV is needed only to write the .mp4 (not for --list), so it is imported
+  # PyAV is needed only to write the output (not for --list), so it is imported
   # lazily and is not a dependency of the perfetto package.
   try:
     import av  # noqa: F401
   except ImportError:
-    die('writing the .mp4 needs PyAV (ffmpeg bindings): pip install av')
+    die('writing the output needs PyAV (ffmpeg bindings): pip install av')
+  if args.contact_sheet:
+    try:
+      import numpy  # noqa: F401
+    except ImportError:
+      die('the contact sheet needs numpy: pip install numpy')
 
   clip = Clip(args.display_id, args.start, args.end, args.query)
   left = load_clip(args.trace_processor, args.trace, clip)
+
+  if args.contact_sheet:
+    n = contact_sheet(left, args.tiles, args.cols, args.output)
+    print(f'Wrote {args.output}: contact sheet of {n} frames')
+    return 0
 
   if args.compare:
     clip2 = Clip(args.display_id2, args.start2, args.end2, args.query2)
