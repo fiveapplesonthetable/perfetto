@@ -161,7 +161,10 @@ def select_range(frames, start_ts, end_ts):
   """Frames whose on-screen interval intersects [start_ts, end_ts], extended
   back to a seeding key frame."""
   if start_ts is None and end_ts is None:
-    return frames
+    # A ring-buffer capture can start mid-GOP; drop leading frames before the
+    # first key frame so the stream decodes from the top.
+    seed = next((i for i, f in enumerate(frames) if f.is_key), len(frames))
+    return frames[seed:]
   # A captured frame stays on screen until the next one is captured, so the
   # frame shown at start_ts is the last one that begins at or before it, not
   # the first one after. Snapping forward instead would drop the very frame
