@@ -138,6 +138,13 @@ export class VideoFrameDetailsPanel implements TrackEventDetailsPanel {
           ),
         ),
       ),
+      m(Button, {
+        className: 'pf-video-frame-download',
+        icon: 'photo_camera',
+        title: 'Download this frame as a PNG',
+        compact: true,
+        onclick: () => void p.downloadFrameImage(),
+      }),
     );
   }
 }

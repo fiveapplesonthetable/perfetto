@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Separate the download button from the playback controls next to it.
+.pf-video-frame-download {
+  margin-left: 8px;
+}
+
 // Base preview canvas. max-width keeps it within its container; the shell
 // rules below bound the height in the details panel.
 .pf-video-frame-preview {

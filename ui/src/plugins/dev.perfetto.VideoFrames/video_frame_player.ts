@@ -15,6 +15,7 @@
 import m from 'mithril';
 import type {Trace} from '../../public/trace';
 import {BLOB, LONG, NUM, STR_NULL} from '../../trace_processor/query_result';
+import {downloadUrl} from '../../base/download_utils';
 
 // Max in-flight decoder inputs before the feed loop awaits, to bound the
 // decoder's queue and held-frame memory.
@@ -106,6 +107,14 @@ export class VideoFramePlayer {
 
   get currentFrame(): FrameInfo | undefined {
     return this.frames[this.currentIdx];
+  }
+
+  async downloadFrameImage(): Promise<void> {
+    const frame = this.currentFrame;
+    if (frame === undefined) return;
+    const url = await this.decodeFrameImage(frame.id);
+    if (url === undefined) return;
+    downloadUrl({fileName: `video-frame-${frame.frameNumber}.png`, url});
   }
 
   // The details panel calls this on canvas mount. Re-paints the current

@@ -36,6 +36,11 @@ Examples:
   # list the video streams in the trace
   trace_video_conv.py trace.perfetto-trace --list
 
+  # save a single frame (the one on screen at a ts, or at what a query selects)
+  trace_video_conv.py trace.perfetto-trace --screenshot shot.png --start 90697190
+  trace_video_conv.py trace.perfetto-trace --screenshot shot.png \
+      --query "SELECT ts FROM slice WHERE name = 'my_cuj'"
+
   # clip to a time range (trace ts, ns), or to whatever a query selects
   trace_video_conv.py trace.perfetto-trace -o clip.mp4 --start 90697190 --end 90697200
   trace_video_conv.py trace.perfetto-trace -o clip.mp4 \
@@ -260,6 +265,64 @@ def codec_format(codec_string):
   return 'hevc' if cs.startswith(('hvc', 'hev')) else 'h264'
 
 
+def write_png(path, rgb):
+  """Write an HxWx3 uint8 RGB numpy array as a PNG (no Pillow dependency)."""
+  import struct
+  import zlib
+  h, w = rgb.shape[0], rgb.shape[1]
+  data = rgb.astype('uint8').tobytes()
+  stride = w * 3
+  raw = bytearray()
+  for y in range(h):
+    raw.append(0)  # filter type 0 (none)
+    raw += data[y * stride:(y + 1) * stride]
+
+  def chunk(typ, payload):
+    return (struct.pack('>I', len(payload)) + typ + payload +
+            struct.pack('>I', zlib.crc32(typ + payload) & 0xffffffff))
+
+  with open(path, 'wb') as f:
+    f.write(b'\x89PNG\r\n\x1a\n')
+    f.write(chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)))
+    f.write(chunk(b'IDAT', zlib.compress(bytes(raw), 6)))
+    f.write(chunk(b'IEND', b''))
+
+
+def screenshot(loaded, out_path):
+  """Save the frame that was on screen at the clip's start as a PNG. `loaded.sel`
+  runs from a seeding key frame up to the requested point, and the encoder emits
+  no B-frames, so the last decoded picture is exactly the frame shown there."""
+  import av
+  raw = write_temp(build_stream(loaded.cfg, loaded.sel), '.bin')
+  pic = None
+  try:
+    with av.open(raw, format=codec_format(loaded.codec)) as container:
+      for pic in container.decode(video=0):
+        pass
+  finally:
+    os.unlink(raw)
+  if pic is None:
+    die('could not decode a frame for the screenshot.')
+  write_png(out_path, pic.reformat(format='rgb24').to_ndarray())
+
+
+def resolve_point(bin_path, trace, start, query):
+  """The single trace ts a screenshot is taken at: --start, or the earliest ts a
+  --query selects."""
+  if start is not None:
+    return start
+  if not query:
+    die('--screenshot needs a point: pass --start TS or --query.')
+  config = TraceProcessorConfig(bin_path=bin_path)
+  with TraceProcessor(trace=trace, config=config) as tp:
+    rows = list(tp.query(query))
+  if not rows:
+    die('--query returned no rows; nothing to screenshot.')
+  if not hasattr(rows[0], 'ts'):
+    die("--query must return a 'ts' column.")
+  return min(r.ts for r in rows)
+
+
 def mux(cfg_frames, sel, start_ts, end_ts, codec_string, speed, out_path):
   """Wrap the coded frames in an .mp4 with their exact per-frame timing and no
   re-encode, via ffmpeg's libav (PyAV): copy the coded access units and give each
@@ -436,6 +499,11 @@ def parse_args():
       action='store_true',
       help='list the video streams in the trace and exit')
   ap.add_argument(
+      '--screenshot',
+      metavar='PNG',
+      help='save a single frame - the one on screen at --start (or the earliest '
+      'ts a --query selects) - as a PNG, instead of extracting an .mp4')
+  ap.add_argument(
       '--trace-processor',
       metavar='PATH',
       help='local trace_processor(_shell) build '
@@ -488,15 +556,28 @@ def main():
       list_streams(tp)
     return 0
 
-  if not args.output:
-    die('-o/--output is required (or use --list).')
-
-  # PyAV is needed only to write the .mp4 (not for --list), so it is imported
-  # lazily and is not a dependency of the perfetto package.
+  # PyAV is needed only to decode/write frames (not for --list), so it is
+  # imported lazily and is not a dependency of the perfetto package.
   try:
     import av  # noqa: F401
   except ImportError:
-    die('writing the .mp4 needs PyAV (ffmpeg bindings): pip install av')
+    die('writing the output needs PyAV (ffmpeg bindings): pip install av')
+
+  if args.screenshot:
+    try:
+      import numpy  # noqa: F401  (the frame is decoded to a numpy array)
+    except ImportError:
+      die('--screenshot needs numpy: pip install numpy')
+    point = resolve_point(args.trace_processor, args.trace, args.start,
+                          args.query)
+    loaded = load_clip(args.trace_processor, args.trace,
+                       Clip(args.display_id, point, point, None))
+    screenshot(loaded, args.screenshot)
+    print(f'Wrote {args.screenshot}: frame at ts {point}')
+    return 0
+
+  if not args.output:
+    die('-o/--output is required (or use --list / --screenshot).')
 
   clip = Clip(args.display_id, args.start, args.end, args.query)
   left = load_clip(args.trace_processor, args.trace, clip)

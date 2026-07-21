@@ -171,12 +171,25 @@ the speed selector to play back slower (down to 0.1×) or faster (up to
 
 ![Playing a display-video capture back with the video-frames track pinned at the top: in the details panel the decoded preview advances from the settings screen to the launcher while the frame number and timestamp update.](../images/video_frames/05-playback.gif)
 
+### Saving a frame
+
+Click a frame to open its details. In the header, after the playback controls,
+the camera button saves the previewed frame as a `.png`.
+
+To save video (a whole display, a time range, or a query-selected region) as an
+`.mp4`, use the [command-line script](#exporting-to-an-mp4-from-the-command-line)
+below.
+
 ### Exporting to an .mp4 from the command line
 
+For saving a single frame from the UI instead, see [Saving a
+frame](#saving-a-frame) above.
+
 `tools/trace_video_conv.py` pulls the captured video out of a trace into an
-`.mp4` using ffmpeg (the encoded frames are copied as-is, not re-encoded).
-It needs `ffmpeg` on the `PATH`; `trace_processor` is downloaded
-automatically, or pass `--trace-processor` to use a local build.
+`.mp4` using ffmpeg (the encoded frames are copied as-is, not re-encoded), or a
+single frame into a `.png` with `--screenshot`. It needs `ffmpeg` on the `PATH`;
+`trace_processor` is downloaded automatically, or pass `--trace-processor` to use
+a local build.
 
 ```bash
 # List the video streams in a trace.
@@ -184,6 +197,12 @@ tools/trace_video_conv.py TRACE.perfetto-trace --list
 
 # Convert the whole video to an .mp4.
 tools/trace_video_conv.py TRACE.perfetto-trace -o out.mp4
+
+# Save a single frame as a .png: the one on screen at a ts, or at what a
+# query selects (the query returns a `ts` column).
+tools/trace_video_conv.py TRACE.perfetto-trace --screenshot shot.png --start <ts>
+tools/trace_video_conv.py TRACE.perfetto-trace --screenshot shot.png \
+    --query "SELECT ts FROM slice WHERE name = 'my_cuj'"
 
 # Clip to a time range (trace ts, ns), or to whatever a query selects
 # (the query returns a `ts` column, and optionally `dur`).
@@ -203,6 +222,7 @@ tools/trace_video_conv.py before.perfetto-trace --compare after.perfetto-trace \
 | --- | --- |
 | `-o, --output` | Output `.mp4` path. |
 | `--list` | List the trace's video streams and exit. |
+| `--screenshot` | Save a single frame as a `.png` — the one on screen at `--start`, or at the earliest `ts` a `--query` returns — instead of an `.mp4`. |
 | `--display-id` | Which stream to use, for a trace with more than one display. |
 | `--start`, `--end` | Clip to a time range, in trace `ts` nanoseconds. |
 | `--query` | Clip to the region a SQL query selects (returns `ts`, optionally `dur`). |
