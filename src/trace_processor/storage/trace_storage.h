@@ -585,6 +585,13 @@ class TraceStorage {
     return mutable_table<tables::TraceFileTable>();
   }
 
+  const tables::TraceFileMetricTable& trace_file_metric_table() const {
+    return table<tables::TraceFileMetricTable>();
+  }
+  tables::TraceFileMetricTable* mutable_trace_file_metric_table() {
+    return mutable_table<tables::TraceFileMetricTable>();
+  }
+
   const tables::ChromeStackSampleExtrasTable& chrome_stack_sample_extras_table()
       const {
     return table<tables::ChromeStackSampleExtrasTable>();
