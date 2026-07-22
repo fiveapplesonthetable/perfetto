@@ -92,12 +92,14 @@ void ArgsParser::AddBoolean(Id flat_key, Id key, bool value) {
 void ArgsParser::AddUpid(Id flat_key, Id key, int64_t pid) {
   if (auto upid = process_tracker_.GetProcessOrNull(pid)) {
     inserter_.AddArg(flat_key, key, Variadic::Integer(*upid));
+    storage_.SetArgRefTable(flat_key, storage_.InternString("process"));
   }
 }
 
 void ArgsParser::AddUtid(Id flat_key, Id key, int64_t tid) {
   if (auto utid = process_tracker_.GetThreadOrNull(tid)) {
     inserter_.AddArg(flat_key, key, Variadic::Integer(*utid));
+    storage_.SetArgRefTable(flat_key, storage_.InternString("thread"));
   }
 }
 

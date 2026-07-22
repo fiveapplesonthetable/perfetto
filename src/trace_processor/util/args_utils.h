@@ -55,6 +55,9 @@ class ArgNode {
   }
   Type GetType() const { return type_; }
   Variadic GetPrimitiveValue() const;
+  // For a primitive that references a row in another table (e.g. a upid
+  // from an (is_pid) annotation), the referenced table name; else null.
+  StringId GetRefTable() const { return ref_table_; }
   const std::vector<ArgNode>& GetArray() const;
   const std::vector<std::pair<std::string, ArgNode>>& GetDict() const;
 
@@ -74,6 +77,7 @@ class ArgNode {
   Type type_;
 
   Variadic primitive_value_;
+  StringId ref_table_ = kNullStringId;
   std::unique_ptr<std::vector<ArgNode>> array_;
   // Use vector of pairs to preserve insertion order.
   std::unique_ptr<std::vector<std::pair<std::string, ArgNode>>> dict_;
@@ -91,7 +95,8 @@ class ArgSet {
 
   const ArgNode& root() const { return root_; }
 
-  base::Status AppendArg(NullTermStringView key, Variadic value);
+  base::Status AppendArg(NullTermStringView key, Variadic value,
+                         StringId ref_table = kNullStringId);
 
   // Clears the arg set while retaining allocated capacity for reuse.
   void Clear();

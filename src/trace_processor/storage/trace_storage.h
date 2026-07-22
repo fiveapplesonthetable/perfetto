@@ -35,6 +35,7 @@
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/time.h"
+#include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/ext/base/string_view.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "perfetto/trace_processor/trace_blob_view.h"
@@ -1095,6 +1096,21 @@ class TraceStorage {
     return static_cast<Variadic::Type>(idx);
   }
 
+  // Records that args with the given flat key hold an integer that is a
+  // reference to a row in |table| (e.g. a upid from an (is_pid) annotation).
+  // Consumed by __intrinsic_arg_set_to_json to emit a typed reference the UI
+  // can render. See args_parser AddUpid/AddUtid.
+  void SetArgRefTable(StringId flat_key, StringId table) {
+    arg_ref_table_by_flat_key_.Insert(flat_key, table);
+  }
+
+  // Returns the referenced table name for a flat key, if it was registered
+  // as a reference via SetArgRefTable.
+  std::optional<StringId> GetArgRefTable(StringId flat_key) const {
+    const StringId* table = arg_ref_table_by_flat_key_.Find(flat_key);
+    return table ? std::make_optional(*table) : std::nullopt;
+  }
+
   // Set by the display.video importer when it emits a frame; read by trace
   // doctor to tell "no capture" from a producer error. A flag not a stat, to
   // keep per-event counts out of stats. TODO(lalitm): drop once trace doctor
@@ -1159,6 +1175,9 @@ class TraceStorage {
   // The below array allow us to map between enums and their string
   // representations.
   std::array<StringId, Variadic::kMaxType + 1> variadic_type_ids_;
+
+  // Maps an arg flat key to the table its integer value references.
+  base::FlatHashMap<StringId, StringId> arg_ref_table_by_flat_key_;
 };
 
 }  // namespace perfetto::trace_processor

@@ -105,6 +105,7 @@ void ArgNode::Clear() {
   switch (type_) {
     case Type::kPrimitive:
       primitive_value_ = Variadic::Null();
+      ref_table_ = kNullStringId;
       break;
     case Type::kArray:
       if (array_) {
@@ -128,7 +129,8 @@ void ArgSet::Clear() {
   root_.Clear();
 }
 
-base::Status ArgSet::AppendArg(NullTermStringView key, Variadic value) {
+base::Status ArgSet::AppendArg(NullTermStringView key, Variadic value,
+                               StringId ref_table) {
   // Parse the key path (e.g., "foo.bar[0].baz")
   ArgNode* target = &root_;
 
@@ -177,6 +179,7 @@ base::Status ArgSet::AppendArg(NullTermStringView key, Variadic value) {
     }
   }
   *target = ArgNode(value);
+  target->ref_table_ = ref_table;
   return base::OkStatus();
 }
 

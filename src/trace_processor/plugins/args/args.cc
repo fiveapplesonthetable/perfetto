@@ -104,9 +104,21 @@ void WriteArgNode(const ArgNode& node,
                   const TraceStorage* storage,
                   json::JsonValueSerializer&& writer) {
   switch (node.GetType()) {
-    case ArgNode::Type::kPrimitive:
-      WriteVariadic(node.GetPrimitiveValue(), storage, std::move(writer));
+    case ArgNode::Type::kPrimitive: {
+      StringId ref_table = node.GetRefTable();
+      if (ref_table != kNullStringId) {
+        int64_t id = node.GetPrimitiveValue().int_value;
+        NullTermStringView table = storage->GetString(ref_table);
+        std::move(writer).WriteDict(
+            [id, table](json::JsonDictSerializer& dict) {
+              dict.AddString("__ref", table.c_str());
+              dict.AddInt("id", id);
+            });
+      } else {
+        WriteVariadic(node.GetPrimitiveValue(), storage, std::move(writer));
+      }
       break;
+    }
     case ArgNode::Type::kArray:
       std::move(writer).WriteArray(
           [&node, storage](json::JsonArraySerializer& arr) {
@@ -223,8 +235,11 @@ void ArgSetToJson::Step(sqlite3_context* ctx, int, sqlite3_value** argv) {
   // Reuse arg_set - clear but retain capacity
   arg_set.Clear();
   for (; !args_cursor.Eof(); args_cursor.Next()) {
-    const auto result = arg_set.AppendArg(storage->GetString(args_cursor.key()),
-                                          GetArgValue(*storage, args_cursor));
+    auto ref_table = storage->GetArgRefTable(args_cursor.flat_key());
+    const auto result =
+        arg_set.AppendArg(storage->GetString(args_cursor.key()),
+                          GetArgValue(*storage, args_cursor),
+                          ref_table.value_or(kNullStringId));
     if (!result.ok()) {
       return sqlite::result::Error(ctx, result.c_message());
     }
