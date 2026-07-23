@@ -110,6 +110,7 @@
 #include "src/trace_processor/plugins/experimental_flamegraph/experimental_flamegraph.h"
 #include "src/trace_processor/plugins/experimental_flat_slice/experimental_flat_slice.h"
 #include "src/trace_processor/plugins/experimental_slice_layout/experimental_slice_layout.h"
+#include "src/trace_processor/plugins/export_functions/export_functions.h"
 #include "src/trace_processor/plugins/graph_scan/graph_scan.h"
 #include "src/trace_processor/plugins/graph_traversal/graph_traversal.h"
 #include "src/trace_processor/plugins/import/import.h"
@@ -354,6 +355,7 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   experimental_flamegraph::RegisterPlugin();
   experimental_flat_slice::RegisterPlugin();
   experimental_slice_layout::RegisterPlugin();
+  export_functions::RegisterPlugin();
   graph_scan::RegisterPlugin();
   graph_traversal::RegisterPlugin();
   import::RegisterPlugin();
