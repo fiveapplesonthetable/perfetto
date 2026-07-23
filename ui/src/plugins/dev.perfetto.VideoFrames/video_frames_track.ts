@@ -36,15 +36,22 @@ export function createVideoFramesTrack(
   // key frame.
   const src = `
     SELECT
-      id,
-      ts,
-      COALESCE(LEAD(ts) OVER (ORDER BY ts) - ts, 0) AS dur,
+      vf.id,
+      vf.ts,
+      COALESCE(LEAD(vf.ts) OVER (ORDER BY vf.ts) - vf.ts, 0) AS dur,
       0 AS depth,
-      'Frame ' || frame_number AS name
-    FROM __intrinsic_video_frames
-    WHERE display_id = ${displayId}
-      AND COALESCE(is_config, 0) = 0
-      AND ts >= (
+      -- When the frame is aligned to a SurfaceFlinger composite, name it by
+      -- that vsync id; otherwise fall back to the frame number.
+      CASE
+        WHEN dv.vsync_id IS NOT NULL
+          THEN 'vsync ' || dv.vsync_id
+        ELSE 'Frame ' || vf.frame_number
+      END AS name
+    FROM __intrinsic_video_frames AS vf
+    LEFT JOIN android_display_video_frames AS dv USING (id)
+    WHERE vf.display_id = ${displayId}
+      AND COALESCE(vf.is_config, 0) = 0
+      AND vf.ts >= (
         SELECT MIN(ts) FROM __intrinsic_video_frames
         WHERE display_id = ${displayId} AND is_key_frame = 1
       )

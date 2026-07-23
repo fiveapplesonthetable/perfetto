@@ -32,6 +32,9 @@ export default class implements PerfettoPlugin {
     'playback.';
 
   async onTraceLoad(ctx: Trace): Promise<void> {
+    // Match each video frame to its frame-timeline composite (vsync id) by
+    // present time; the track and details panel reference this table.
+    await ctx.engine.query(`INCLUDE PERFETTO MODULE android.display_video`);
     const res = await ctx.engine.query(`
       SELECT display_id AS displayId, MAX(display_name) AS displayName
       FROM __intrinsic_video_frames

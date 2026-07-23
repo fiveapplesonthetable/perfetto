@@ -14,7 +14,13 @@
 
 import m from 'mithril';
 import type {Trace} from '../../public/trace';
-import {BLOB, LONG, NUM, STR_NULL} from '../../trace_processor/query_result';
+import {
+  BLOB,
+  LONG,
+  LONG_NULL,
+  NUM,
+  STR_NULL,
+} from '../../trace_processor/query_result';
 
 // Max in-flight decoder inputs before the feed loop awaits, to bound the
 // decoder's queue and held-frame memory.
@@ -32,6 +38,10 @@ export interface FrameInfo {
   frameNumber: number;
   isKey: boolean;
   ptsUs: number;
+  // Frame-timeline vsync id (SurfaceFlinger DisplayFrame token) of the composite
+  // that produced this frame, matched to the frame timeline by present time.
+  // Undefined if no composite is within the match window.
+  vsyncId?: bigint;
 }
 
 // Decoder setup, cached once per stream.
@@ -124,15 +134,22 @@ export class VideoFramePlayer {
 
   async ensureFramesLoaded(): Promise<void> {
     if (this.framesLoaded) return;
+    // android_display_video_frames matches each capture frame to the frame
+    // timeline by present time (nearest DisplayFrame), yielding its vsync id.
+    await this.trace.engine.query(
+      `INCLUDE PERFETTO MODULE android.display_video`,
+    );
     const res = await this.trace.engine.query(`
-      SELECT id, ts, frame_number AS frameNumber,
-             COALESCE(is_key_frame, 0) AS isKey,
-             COALESCE(pts_us, 0) AS ptsUs,
-             COALESCE(is_config, 0) AS isConfig,
-             codec_string AS codecString
-      FROM __intrinsic_video_frames
-      WHERE display_id = ${this.displayId}
-      ORDER BY ts
+      SELECT vf.id AS id, vf.ts AS ts, vf.frame_number AS frameNumber,
+             COALESCE(vf.is_key_frame, 0) AS isKey,
+             COALESCE(vf.pts_us, 0) AS ptsUs,
+             COALESCE(vf.is_config, 0) AS isConfig,
+             vf.codec_string AS codecString,
+             dv.vsync_id AS vsyncId
+      FROM __intrinsic_video_frames AS vf
+      LEFT JOIN android_display_video_frames AS dv USING (id)
+      WHERE vf.display_id = ${this.displayId}
+      ORDER BY vf.ts
     `);
     const it = res.iter({
       id: NUM,
@@ -142,6 +159,7 @@ export class VideoFramePlayer {
       ptsUs: NUM,
       isConfig: NUM,
       codecString: STR_NULL,
+      vsyncId: LONG_NULL,
     });
     for (; it.valid(); it.next()) {
       if (it.codecString !== null) this.codecString = it.codecString;
@@ -155,6 +173,7 @@ export class VideoFramePlayer {
         frameNumber: it.frameNumber,
         isKey: it.isKey !== 0,
         ptsUs: it.ptsUs,
+        vsyncId: it.vsyncId ?? undefined,
       });
     }
 
