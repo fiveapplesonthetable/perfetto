@@ -141,9 +141,14 @@ export interface BreakdownTrackProps {
    */
   sortTracks?: boolean;
   /**
-   * Optional custom details panel for the slice tracks.
+   * Optional custom details panel for the slice tracks. Receives the selected
+   * slice row (its `id` is the slice's identifier column) so the panel can look
+   * up per-slice details.
    */
-  detailsPanel?: (trace: Trace) => TrackEventDetailsPanel;
+  detailsPanel?: (
+    trace: Trace,
+    row: {id: number},
+  ) => TrackEventDetailsPanel;
   /**
    * Optional description for the root track.
    */
@@ -323,10 +328,13 @@ export class BreakdownTracks {
       ...(hasValue ? [`${agg.valueCol} AS agg_value`] : []),
     ].join(', ');
 
+    // May be empty when there are no breakdown columns (a single root counter),
+    // so it's prefixed with ', ' only when non-empty to avoid a trailing comma.
     const denormCols = [
       ...this.aggColNames.map((n) => `i.${n}`),
       ...(hasValue ? ['i.agg_value'] : []),
     ].join(', ');
+    const denormColsClause = denormCols ? `, ${denormCols}` : '';
 
     // Drop intervals that can't carry a count: a NULL id (e.g. binder_reply_id
     // on oneway transactions) or a negative dur (dur = -1 marks an incomplete
@@ -360,7 +368,7 @@ export class BreakdownTracks {
       WHERE ${idCheck}${aggTs} IS NOT NULL AND ${aggDur} >= 0;
 
       CREATE PERFETTO TABLE ${this.segmentsTableName} AS
-      SELECT iss.ts, iss.group_id, iss.interval_ends_at_ts, ${denormCols}
+      SELECT iss.ts, iss.group_id, iss.interval_ends_at_ts${denormColsClause}
       FROM interval_self_intersect!((
         SELECT id, ts, dur FROM ${this.intervalsTableName}
       )) iss
@@ -547,7 +555,7 @@ export class BreakdownTracks {
           src,
         }),
         detailsPanel: this.props.detailsPanel
-          ? () => this.props.detailsPanel!(this.props.trace)
+          ? (row) => this.props.detailsPanel!(this.props.trace, row)
           : undefined,
       });
     });
