@@ -1867,7 +1867,8 @@ class AddMetricMenu implements m.ClassComponent<AddMetricMenuAttrs> {
   }
 }
 
-function displaySize(totalSize: number, unit: string): string {
+// Exported so other views showing flamegraph metrics format identically.
+export function displaySize(totalSize: number, unit: string): string {
   if (unit === '' || unit === 'count') return totalSize.toLocaleString();
   if (totalSize === 0) return `0 ${unit}`;
   let step: number;
