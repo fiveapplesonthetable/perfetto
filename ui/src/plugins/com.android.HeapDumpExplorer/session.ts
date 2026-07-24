@@ -17,9 +17,10 @@ import type {Engine} from '../../trace_processor/engine';
 import type {Trace} from '../../public/trace';
 import type {Setting} from '../../public/settings';
 import type {Store} from '../../base/store';
-import {NUM} from '../../trace_processor/query_result';
+import {NUM, STR} from '../../trace_processor/query_result';
 
-import {SQL_PREAMBLE} from './components';
+import {SQL_PREAMBLE, shortClassName} from './components';
+import {escapeRegex} from '../../widgets/flamegraph_regex';
 import {flamegraphQuery} from './views/flamegraph_objects_view';
 import * as queries from './queries';
 import {
@@ -376,24 +377,68 @@ export class HeapDumpExplorerSession {
     });
   };
 
-  // Open the flamegraph pivoted at `pathHash`. The metric matches the tree the
-  // hash came from. The chip shows `<label> (this instance)` since the raw hash
-  // regex is unreadable.
-  readonly openFlamegraphPivotedAt = (
-    pathHash: string,
-    label: string,
+  // Open the flamegraph focused on one instance's reference path.
+  //
+  // path_hash_stable is aggregatable (so bottom-up merges) and therefore no
+  // longer matchable, so we can't pivot on the raw hash. Instead we reconstruct
+  // the class path of the object's node in the class tree and express it with
+  // existing name-matching: pivot on the leaf class, plus a Show Stack filter
+  // per ancestor class so only paths through that chain survive. This keeps the
+  // engine untouched. It is an approximation: Show Stack tests class-name
+  // membership, not order, so paths that happen to contain the same set of
+  // classes are not excluded.
+  readonly openFlamegraphOnInstancePath = async (
+    objId: number,
     isDominator: boolean,
-  ): void => {
+  ): Promise<void> => {
+    const dump = this.activeDump;
+    if (dump === null) return;
+    const module = isDominator
+      ? 'android.memory.heap_graph.dominator_class_tree'
+      : 'android.memory.heap_graph.class_tree';
+    const tree = isDominator
+      ? '_heap_graph_dominator_class_tree'
+      : '_heap_graph_class_tree';
+    const hashes = isDominator
+      ? '_heap_graph_dominator_path_hashes'
+      : '_heap_graph_path_hashes';
+    await this.engine.query(`INCLUDE PERFETTO MODULE ${module};`);
+    const res = await this.engine.query(`
+      WITH RECURSIVE chain(id, parent_id, name, depth) AS (
+        SELECT ct.id, ct.parent_id, coalesce(ct.name, 'unknown'), 0
+        FROM ${tree} ct
+        WHERE ct.graph_sample_ts = ${dump.ts} AND ct.upid = ${dump.upid}
+          AND ct.path_hash_stable = (
+            SELECT path_hash FROM ${hashes} WHERE id = ${objId} LIMIT 1
+          )
+        UNION ALL
+        SELECT ct.id, ct.parent_id, coalesce(ct.name, 'unknown'), chain.depth + 1
+        FROM ${tree} ct
+        JOIN chain ON ct.id = chain.parent_id
+        WHERE ct.graph_sample_ts = ${dump.ts} AND ct.upid = ${dump.upid}
+      )
+      SELECT name, depth FROM chain ORDER BY depth
+    `);
+    const path: string[] = [];
+    for (const it = res.iter({name: STR, depth: NUM}); it.valid(); it.next()) {
+      path.push(it.name);
+    }
+    if (path.length === 0) return;
+    const exact = (n: string) => `/^${escapeRegex(n)}$/`;
+    const [leaf, ...ancestors] = path;
     this.setFlamegraphPanelState({
       selectedMetricId: isDominator
         ? METRIC_DOMINATED_OBJECT_SIZE
         : METRIC_OBJECT_SIZE,
       addedMetricIds: [],
-      filters: [],
+      filters: ancestors.map((a) => ({
+        kind: 'SHOW_STACK' as const,
+        filter: exact(a),
+      })),
       view: {
         kind: 'PIVOT',
-        pivot: `/^${pathHash}$/`,
-        displayLabel: `${label} (this instance)`,
+        pivot: exact(leaf),
+        displayLabel: `${shortClassName(leaf)} (this path)`,
       },
     });
     this.navigate('flamegraph');
