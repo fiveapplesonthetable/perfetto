@@ -42,25 +42,23 @@ interface FlamegraphViewAttrs {
   readonly onShowObjects: (pathHashes: string, isDominator: boolean) => void;
 }
 
-// path_hash_stable is exposed unaggregatable (and CAST to TEXT in SQL,
-// since the stdlib emits it as INT64 and the flamegraph reads
-// unaggregatable columns as STR_NULL) so it lands in `matchingColumns`
-// — that's what lets a PIVOT filter target a specific node by its hash.
-// Hidden from the tooltip via `isVisible: false`.
 const UNAGG_PROPS = [
   {name: 'root_type', displayName: 'Root Type'},
   {name: 'heap_type', displayName: 'Heap Type'},
-  {
-    name: 'path_hash_stable',
-    displayName: 'Path Hash',
-    isVisible: () => false,
-  },
 ];
 
 const SELF_COUNT_AGG_PROP = {
   name: 'self_count',
   displayName: 'Self Count',
   mergeAggregation: 'SUM' as const,
+};
+
+// Aggregatable so it is not part of frame identity.
+const PATH_HASH_AGG_PROP = {
+  name: 'path_hash_stable',
+  displayName: 'Path Hash',
+  mergeAggregation: 'CONCAT_WITH_COMMA' as const,
+  isVisible: () => false,
 };
 
 // Build a JAVA_HEAP_GRAPH metric for the BFS or dominator class tree,
@@ -100,7 +98,9 @@ function buildMetric(
     `,
     unaggregatableProperties: UNAGG_PROPS,
     aggregatableProperties:
-      valueColumn === 'self_size' ? [SELF_COUNT_AGG_PROP] : [],
+      valueColumn === 'self_size'
+        ? [SELF_COUNT_AGG_PROP, PATH_HASH_AGG_PROP]
+        : [PATH_HASH_AGG_PROP],
     optionalNodeActions: [showObjectsAction],
   };
 }

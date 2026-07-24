@@ -308,7 +308,8 @@ async function computeFlamegraphTree(
   const unagg = unaggregatableProperties ?? [];
   const unaggCols = unagg.map((x) => x.name);
 
-  const matchingColumns = ['name', ...unaggCols];
+  // Aggregatable columns are matchable but do not affect frame identity.
+  const matchingColumns = ['name', ...unaggCols, ...aggCols];
   // Filters match literally by default; `/…/` opts into a raw regex.
   const matchExpr = (x: string) =>
     matchingColumns.map(
