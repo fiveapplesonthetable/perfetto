@@ -22,40 +22,9 @@
 #include <memory>
 #include <optional>
 
-#include "perfetto/base/build_config.h"
+#include "src/trace_processor/util/compression_types.h"
 
 namespace perfetto::trace_processor::util {
-
-// The compression codecs trace_processor can decompress. To add one, subclass
-// Decompressor, add a case to CreateDecompressor() and, if the codec can arrive
-// as a whole compressed file, a magic in trace_type.cc's
-// SniffCompressedTraceType() and a matching importer.
-enum class CompressionType : uint8_t {
-  // Not compressed, or a header we don't recognize.
-  kNone,
-  // gzip-framed deflate (e.g. a .gz file).
-  kGzip,
-  // A zstd frame.
-  kZstd,
-};
-
-// Whether the current build flags include the library each codec needs.
-// CreateDecompressor() returns nullptr for unsupported codecs.
-constexpr bool IsGzipSupported() {
-#if PERFETTO_BUILDFLAG(PERFETTO_ZLIB)
-  return true;
-#else
-  return false;
-#endif
-}
-
-constexpr bool IsZstdSupported() {
-#if PERFETTO_BUILDFLAG(PERFETTO_ZSTD)
-  return true;
-#else
-  return false;
-#endif
-}
 
 // An owned block of decompressed bytes. The allocation may be larger than
 // `size`, so only `size` bytes are valid. Handed straight to

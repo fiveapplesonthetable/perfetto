@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef SRC_TRACE_PROCESSOR_UTIL_ZSTD_COMPRESSOR_H_
-#define SRC_TRACE_PROCESSOR_UTIL_ZSTD_COMPRESSOR_H_
+#ifndef SRC_TRACE_PROCESSOR_UTIL_GZIP_COMPRESSOR_H_
+#define SRC_TRACE_PROCESSOR_UTIL_GZIP_COMPRESSOR_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -25,12 +25,13 @@
 
 namespace perfetto::trace_processor::util {
 
-// One-shot zstd compression, the counterpart of ZstdDecompressor. Prefer the
-// codec-agnostic CompressToBuffer(CompressionType::kZstd, ...); use this
-// directly only when a zstd frame is specifically required.
-struct ZstdCompressor {
-  // Compresses |data| into a single zstd frame at |level| (1-22). Returns
-  // nullopt on error or when zstd is not compiled in (IsZstdSupported()).
+// One-shot gzip compression, the counterpart of GzipDecompressor. Prefer the
+// codec-agnostic CompressToBuffer(CompressionType::kGzip, ...); use this
+// directly only when a gzip member is specifically required.
+struct GzipCompressor {
+  // Compresses |data| into a single gzip member at |level| (0-9) that
+  // GzipDecompressor (InputMode::kGzip) reads back. Returns nullopt on error or
+  // when zlib is not compiled in (IsGzipSupported()).
   static std::optional<CompressedBuffer> CompressFully(const uint8_t* data,
                                                        size_t len,
                                                        int level);
@@ -38,4 +39,4 @@ struct ZstdCompressor {
 
 }  // namespace perfetto::trace_processor::util
 
-#endif  // SRC_TRACE_PROCESSOR_UTIL_ZSTD_COMPRESSOR_H_
+#endif  // SRC_TRACE_PROCESSOR_UTIL_GZIP_COMPRESSOR_H_

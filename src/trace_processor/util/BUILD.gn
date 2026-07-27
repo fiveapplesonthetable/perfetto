@@ -66,6 +66,7 @@ source_set("bump_allocator") {
 # directly for raw-deflate zip entries).
 source_set("decompressor") {
   sources = [
+    "compression_types.h",
     "decompressor.cc",
     "decompressor.h",
     "gzip_decompressor.cc",
@@ -85,18 +86,26 @@ source_set("decompressor") {
   }
 }
 
-# One-shot compressors, the counterpart of ":decompressor". Kept separate so the
-# decompressor target stays decompression-only.
+# Codec-agnostic one-shot compressor (gzip, zstd), the counterpart of
+# ":decompressor". Consumers use CompressToBuffer() from compressor.h. Kept
+# separate so the decompressor target stays decompression-only.
 source_set("compressor") {
   sources = [
+    "compression_types.h",
+    "compressor.cc",
+    "compressor.h",
+    "gzip_compressor.cc",
+    "gzip_compressor.h",
     "zstd_compressor.cc",
     "zstd_compressor.h",
   ]
   deps = [
     "../../../gn:default_deps",
     "../../../include/perfetto/base",
-    "../../../include/perfetto/ext/base:base",
   ]
+  if (enable_perfetto_zlib) {
+    deps += [ "../../../gn:zlib" ]
+  }
   if (enable_perfetto_zstd) {
     deps += [ "../../../gn:zstd" ]
   }
@@ -484,6 +493,7 @@ source_set("flatbuffer_reader") {
 source_set("unittests") {
   sources = [
     "bump_allocator_unittest.cc",
+    "compressor_unittest.cc",
     "descriptors_unittest.cc",
     "flatbuffer_reader_unittest.cc",
     "galloping_search_unittest.cc",
@@ -507,6 +517,7 @@ source_set("unittests") {
   testonly = true
   deps = [
     ":bump_allocator",
+    ":compressor",
     ":decompressor",
     ":descriptors",
     ":flatbuffer_reader",

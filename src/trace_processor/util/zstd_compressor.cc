@@ -18,11 +18,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
+#include <optional>
 
 #include "perfetto/base/build_config.h"
-#include "perfetto/ext/base/utils.h"
+#include "src/trace_processor/util/compressor.h"
 
 #if PERFETTO_BUILDFLAG(PERFETTO_ZSTD)
 #include <zstd.h>
@@ -33,28 +33,31 @@ namespace perfetto::trace_processor::util {
 #if PERFETTO_BUILDFLAG(PERFETTO_ZSTD)
 
 // static
-std::unique_ptr<uint8_t, base::FreeDeleter> ZstdCompressor::CompressFully(
+std::optional<CompressedBuffer> ZstdCompressor::CompressFully(
     const uint8_t* data,
     size_t len,
-    size_t* out_size,
     int level) {
   size_t bound = ZSTD_compressBound(len);
-  std::unique_ptr<uint8_t, base::FreeDeleter> out(
-      static_cast<uint8_t*>(malloc(bound)));
-  size_t n = ZSTD_compress(out.get(), bound, data, len, level);
+  CompressedBuffer out{std::unique_ptr<uint8_t[]>(new uint8_t[bound]), 0};
+  // ZSTD_compress allocates and frees a ZSTD_CCtx internally on every call. That
+  // is fine for the handful of blobs this is used on; if it is ever placed on a
+  // hot per-row path, reuse a ZSTD_compressCCtx with a (thread_local) context to
+  // avoid the per-call allocation.
+  size_t n = ZSTD_compress(out.data.get(), bound, data, len, level);
   if (ZSTD_isError(n)) {
-    return nullptr;
+    return std::nullopt;
   }
-  *out_size = n;
+  out.size = n;
   return out;
 }
 
 #else  // !PERFETTO_ZSTD
 
 // static
-std::unique_ptr<uint8_t, base::FreeDeleter>
-ZstdCompressor::CompressFully(const uint8_t*, size_t, size_t*, int) {
-  return nullptr;
+std::optional<CompressedBuffer> ZstdCompressor::CompressFully(const uint8_t*,
+                                                              size_t,
+                                                              int) {
+  return std::nullopt;
 }
 
 #endif  // PERFETTO_BUILDFLAG(PERFETTO_ZSTD)

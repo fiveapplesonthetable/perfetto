@@ -16,7 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -29,7 +28,7 @@
 #include "src/trace_processor/sqlite/bindings/sqlite_type.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_value.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
-#include "src/trace_processor/util/zstd_compressor.h"
+#include "src/trace_processor/util/compressor.h"
 
 namespace perfetto::trace_processor {
 
@@ -39,10 +38,10 @@ namespace {
 // is meant to store.
 constexpr int kLevel = 9;
 
-// __intrinsic_zstd(X) -> zstd(X) as a BLOB. X is a string or blob; NULL yields
-// NULL.
-struct Zstd : public sqlite::Function<Zstd> {
-  static constexpr char kName[] = "__intrinsic_zstd";
+// __intrinsic_zstd_compress(X) -> zstd(X) as a BLOB. X is a string or blob;
+// NULL yields NULL.
+struct ZstdCompress : public sqlite::Function<ZstdCompress> {
+  static constexpr char kName[] = "__intrinsic_zstd_compress";
   static constexpr int kArgCount = 1;
 
   static void Step(sqlite3_context* ctx, int, sqlite3_value** argv) {
@@ -65,15 +64,19 @@ struct Zstd : public sqlite::Function<Zstd> {
         break;
     }
 
-    size_t out_size = 0;
-    auto out =
-        util::ZstdCompressor::CompressFully(src, src_size, &out_size, kLevel);
-    if (!out) {
+    if (!util::IsZstdSupported()) {
       return sqlite::utils::SetError(
-          ctx, "ZSTD: compression failed (is zstd compiled in?)");
+          ctx, "ZSTD: zstd is not compiled into this build");
     }
-    return sqlite::result::RawBytes(ctx, out.release(),
-                                    static_cast<int>(out_size), free);
+    auto out = util::CompressToBuffer(util::CompressionType::kZstd, src,
+                                      src_size, kLevel);
+    if (!out) {
+      return sqlite::utils::SetError(ctx, "ZSTD: compression failed");
+    }
+    // Hand the buffer to SQLite without a copy; it frees it via this deleter.
+    return sqlite::result::RawBytes(
+        ctx, out->data.release(), static_cast<int>(out->size),
+        +[](void* p) { delete[] static_cast<uint8_t*>(p); });
   }
 };
 
@@ -89,7 +92,7 @@ class ZstdFunctionsPlugin : public Plugin<ZstdFunctionsPlugin> {
   ~ZstdFunctionsPlugin() override;
   void RegisterFunctions(PerfettoSqlConnection*,
                          std::vector<FunctionRegistration>& out) override {
-    out.push_back(MakeFunctionRegistration<Zstd>(nullptr));
+    out.push_back(MakeFunctionRegistration<ZstdCompress>(nullptr));
   }
 };
 ZstdFunctionsPlugin::~ZstdFunctionsPlugin() = default;
