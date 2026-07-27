@@ -28,6 +28,5 @@ source_set("zstd_functions") {
     "../../perfetto_sql/engine",
     "../../sqlite",
     "../../util:compressor",
-    "../../util:decompressor",
   ]
 }

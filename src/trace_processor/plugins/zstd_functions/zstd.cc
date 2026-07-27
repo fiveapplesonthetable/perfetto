@@ -20,6 +20,7 @@
 #include <memory>
 #include <vector>
 
+#include "perfetto/base/build_config.h"
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/utils.h"
 #include "src/trace_processor/core/plugin/plugin.h"
@@ -29,7 +30,6 @@
 #include "src/trace_processor/sqlite/bindings/sqlite_type.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_value.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
-#include "src/trace_processor/util/decompressor.h"
 #include "src/trace_processor/util/zstd_compressor.h"
 
 namespace perfetto::trace_processor {
@@ -66,15 +66,16 @@ struct ZstdCompress : public sqlite::Function<ZstdCompress> {
         break;
     }
 
-    if (!util::IsZstdSupported()) {
-      return sqlite::utils::SetError(
-          ctx, "ZSTD: zstd is not compiled into this build");
-    }
     size_t out_size = 0;
     auto out =
         util::ZstdCompressor::CompressFully(src, src_size, &out_size, kLevel);
     if (!out) {
+#if PERFETTO_BUILDFLAG(PERFETTO_ZSTD)
       return sqlite::utils::SetError(ctx, "ZSTD: compression failed");
+#else
+      return sqlite::utils::SetError(
+          ctx, "ZSTD: zstd is not compiled into this build");
+#endif
     }
     return sqlite::result::RawBytes(ctx, out.release(),
                                     static_cast<int>(out_size), free);
