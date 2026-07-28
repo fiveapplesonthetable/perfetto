@@ -1912,7 +1912,8 @@ function getUnitDisplayName(unit: string | undefined): string {
   return unit;
 }
 
-function toTags(state: FlamegraphState): ReadonlyArray<string> {
+// Exported so other views can mirror the flamegraph's filter chips.
+export function toTags(state: FlamegraphState): ReadonlyArray<string> {
   const toString = (x: FlamegraphFilter) => {
     switch (x.kind) {
       case 'HIDE_FRAME':

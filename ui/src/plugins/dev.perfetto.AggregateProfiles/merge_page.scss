@@ -32,9 +32,71 @@
     }
   }
 
+  // A collapsible drawer (charts / grid): header + body, height set inline. Can
+  // shrink to just its header; the resize handle below always stays draggable.
+  &__drawer {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__drawer-head {
+    flex: 0 0 auto;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 4px 0 8px;
+    font-size: var(--pf-font-size-xs);
+    color: var(--pf-color-text-muted);
+    border-bottom: 1px solid var(--pf-color-border);
+  }
+
+  &__drawer-buttons {
+    margin-left: auto;
+  }
+
+  &__drawer-body {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+  }
+
   &__summary {
     font-size: var(--pf-font-size-s);
     color: var(--pf-color-text-muted);
+  }
+
+  // Charts flow horizontally within the row, wrapping onto new lines; the row
+  // scrolls vertically if there are more than fit.
+  &__charts {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 6px 10px;
+    padding: 6px 10px;
+    overflow-y: auto;
+  }
+
+  &__chart {
+    flex: 0 0 auto;
+    width: 210px;
+  }
+
+  &__chart-title {
+    font-size: var(--pf-font-size-xs);
+    color: var(--pf-color-text-muted);
+    margin-bottom: 2px;
+  }
+
+  &__chart-na {
+    opacity: 0.7;
+    font-style: italic;
   }
 
   &__grid {
