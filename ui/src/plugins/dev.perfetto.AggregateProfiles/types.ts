@@ -49,10 +49,13 @@ export interface MergeProfileMetric {
   readonly count: number;
 }
 
-// One source pprof, keyed by its file scope.
+// One source pprof, keyed by its file scope. `numeric`/`labels` hold the
+// user-supplied per-trace metrics from the manifest.
 export interface MergeProfile {
   readonly scope: string;
   readonly sampleTypes: ReadonlyMap<string, MergeProfileMetric>;
+  readonly numeric: ReadonlyMap<string, number>;
+  readonly labels: ReadonlyMap<string, string>;
 }
 
 // A pprof sample-type present across the loaded profiles.

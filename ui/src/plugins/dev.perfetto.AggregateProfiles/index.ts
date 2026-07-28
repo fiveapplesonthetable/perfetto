@@ -17,7 +17,7 @@ import m from 'mithril';
 
 import type {PerfettoPlugin} from '../../public/plugin';
 import type {Trace} from '../../public/trace';
-import {NUM, STR} from '../../trace_processor/query_result';
+import {NUM, NUM_NULL, STR, STR_NULL} from '../../trace_processor/query_result';
 import type {Row} from '../../trace_processor/query_result';
 import HeapProfilePlugin, {
   traceHasTimelineData,
@@ -191,7 +191,22 @@ async function getProfileMetrics(trace: Trace, scope: string) {
 // grouped scan; the callstack tables are only touched for the selected subset,
 // so this scales to thousands of profiles.
 async function loadMergeProfiles(trace: Trace): Promise<LoadedProfiles> {
-  const byScope = new Map<string, Map<string, MergeProfileMetric>>();
+  const byScope = new Map<
+    string,
+    {
+      sampleTypes: Map<string, MergeProfileMetric>;
+      numeric: Map<string, number>;
+      labels: Map<string, string>;
+    }
+  >();
+  const ensureScope = (scope: string) => {
+    let p = byScope.get(scope);
+    if (p === undefined) {
+      p = {sampleTypes: new Map(), numeric: new Map(), labels: new Map()};
+      byScope.set(scope, p);
+    }
+    return p;
+  };
   const sampleKinds = new Map<string, SampleType>();
   const result = await trace.engine.query(`
     SELECT
@@ -221,17 +236,55 @@ async function loadMergeProfiles(trace: Trace): Promise<LoadedProfiles> {
   ) {
     const key = `${it.type} (${it.unit})`;
     sampleKinds.set(key, {key, type: it.type, unit: it.unit});
-    let sampleTypes = byScope.get(it.scope);
-    if (sampleTypes === undefined) {
-      sampleTypes = new Map();
-      byScope.set(it.scope, sampleTypes);
+    ensureScope(it.scope).sampleTypes.set(key, {
+      aggId: it.agg_id,
+      total: it.total,
+      count: it.n,
+    });
+  }
+
+  // User-supplied per-trace metrics from perfetto_manifest.json, joined by
+  // trace-file name == aggregate_profile.scope.
+  const numericUnits = new Map<string, string>();
+  const categorical = new Set<string>();
+  const metricRes = await trace.engine.query(`
+    SELECT
+      tf.name AS scope,
+      m.key AS key,
+      m.numeric_value AS num,
+      m.string_value AS str,
+      m.unit AS unit
+    FROM __intrinsic_trace_file_metric m
+    JOIN __intrinsic_trace_file tf ON tf.id = m.trace_file_id
+  `);
+  for (
+    const it = metricRes.iter({
+      scope: STR,
+      key: STR,
+      num: NUM_NULL,
+      str: STR_NULL,
+      unit: STR_NULL,
+    });
+    it.valid();
+    it.next()
+  ) {
+    const p = byScope.get(it.scope);
+    if (p === undefined) continue;
+    if (it.num !== null) {
+      p.numeric.set(it.key, it.num);
+      if (!numericUnits.has(it.key)) numericUnits.set(it.key, it.unit ?? '');
+    } else if (it.str !== null) {
+      p.labels.set(it.key, it.str);
+      categorical.add(it.key);
     }
-    sampleTypes.set(key, {aggId: it.agg_id, total: it.total, count: it.n});
   }
 
   const profiles: MergeProfile[] = Array.from(
     byScope.entries(),
-    ([scope, sampleTypes]) => ({scope, sampleTypes}),
+    ([scope, p]) => ({
+      scope,
+      ...p,
+    }),
   );
 
   const columns: MergeColumn[] = [{field: 'c0', title: 'profile', kind: 'id'}];
@@ -244,12 +297,31 @@ async function loadMergeProfiles(trace: Trace): Promise<LoadedProfiles> {
       sampleKey: st.key,
     });
   }
+  for (const [key, unit] of numericUnits) {
+    columns.push({
+      field: `c${columns.length}`,
+      title: key,
+      kind: 'numeric',
+      unit,
+    });
+  }
+  for (const key of Array.from(categorical).sort()) {
+    columns.push({
+      field: `c${columns.length}`,
+      title: key,
+      kind: 'categorical',
+    });
+  }
 
   const rows: Row[] = profiles.map((p) => {
     const row: Row = {c0: p.scope};
     for (const c of columns) {
       if (c.sampleKey !== undefined) {
         row[c.field] = p.sampleTypes.get(c.sampleKey)?.total ?? null;
+      } else if (c.kind === 'numeric') {
+        row[c.field] = p.numeric.get(c.title) ?? null;
+      } else if (c.kind === 'categorical') {
+        row[c.field] = p.labels.get(c.title) ?? null;
       }
     }
     return row;
