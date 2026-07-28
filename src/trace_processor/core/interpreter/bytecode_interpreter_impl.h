@@ -29,8 +29,13 @@
 #include <type_traits>
 #include <utility>
 
+#include "perfetto/base/build_config.h"
 #include "perfetto/base/compiler.h"
 #include "perfetto/base/logging.h"
+
+#if PERFETTO_BUILDFLAG(PERFETTO_ARCH_CPU_X86_64)
+#include <immintrin.h>  // SIMD compress for the contiguous linear filter.
+#endif
 #include "perfetto/ext/base/endian.h"
 #include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/ext/base/string_view.h"
@@ -932,6 +937,76 @@ inline PERFETTO_ALWAYS_INLINE void SortedFilter(
   }
 }
 
+#if PERFETTO_BUILDFLAG(PERFETTO_ARCH_CPU_X86_64)
+// Portable-ish SIMD compress for the contiguous linear filter. Compares 32-bit
+// column values against a constant and appends the absolute row index of every
+// match. This is the branchless "compare + compress-store" that replaces the
+// scalar branchy append; the win comes from not mispredicting per row (the
+// scalar loop peaks in cost around 50% selectivity). Runs 4 lanes on SSSE3.
+//
+// The store writes a full 4-index vector each iteration and advances the write
+// cursor by popcount(mask); the caller's output span is DCHECK'd to be at least
+// range.size(), and we only vector-store while `i + 4 <= end`, so the furthest a
+// full store can reach is index range.size()-1 -- always in bounds.
+struct SimdCompress4Lut {
+  __m128i entry[16];
+  SimdCompress4Lut() {
+    for (int m = 0; m < 16; ++m) {
+      uint8_t b[16];
+      int p = 0;
+      for (int lane = 0; lane < 4; ++lane) {
+        if (m & (1 << lane)) {
+          for (int k = 0; k < 4; ++k)
+            b[p++] = static_cast<uint8_t>(lane * 4 + k);
+        }
+      }
+      for (; p < 16; ++p)
+        b[p] = 0x80;  // unused lanes: shuffle to zero, overwritten by next store
+      memcpy(&entry[m], b, 16);
+    }
+  }
+};
+inline const SimdCompress4Lut& SimdCompress4() {
+  static const SimdCompress4Lut lut;
+  return lut;
+}
+
+// Compares data[start..end) `op` value (op selected by the Comparator tag) and
+// writes the matching absolute indices. Only 4-byte types are supported here;
+// callers use the scalar path otherwise. `SseCmp` returns the compare mask.
+template <typename SseCmp>
+__attribute__((target("ssse3"))) PERFETTO_NO_INLINE uint32_t*
+SimdLinearScan32(const uint32_t* data,
+                 uint32_t start,
+                 uint32_t end,
+                 uint32_t value,
+                 uint32_t* out,
+                 SseCmp cmp) {
+  const SimdCompress4Lut& lut = SimdCompress4();
+  const __m128i vval = _mm_set1_epi32(static_cast<int>(value));
+  uint32_t* w = out;
+  uint32_t i = start;
+  for (; i + 4 <= end; i += 4) {
+    __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+    int m = _mm_movemask_ps(_mm_castsi128_ps(cmp(v, vval)));
+    __m128i idx = _mm_setr_epi32(static_cast<int>(i), static_cast<int>(i + 1),
+                                 static_cast<int>(i + 2), static_cast<int>(i + 3));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(w),
+                     _mm_shuffle_epi8(idx, lut.entry[m]));
+    w += static_cast<uint32_t>(__builtin_popcount(static_cast<unsigned>(m)));
+  }
+  // Scalar tail for the last < 4 elements (indices returned by the mask above
+  // are absolute, so this simply continues from `i`).
+  for (; i < end; ++i) {
+    // Reproduce the vector compare for one lane via a 1-element broadcast.
+    __m128i v = _mm_set1_epi32(static_cast<int>(data[i]));
+    if (_mm_movemask_ps(_mm_castsi128_ps(cmp(v, vval))) & 1)
+      *w++ = i;
+  }
+  return w;
+}
+#endif  // PERFETTO_ARCH_CPU_X86_64
+
 template <typename T>
 inline PERFETTO_ALWAYS_INLINE void LinearFilterEq(
     InterpreterState& state,
@@ -970,10 +1045,25 @@ inline PERFETTO_ALWAYS_INLINE void LinearFilterEq(
     to_compare = value;
   }
 
-  // Note to future readers: this can be optimized further with explicit SIMD
-  // but the compiler does a pretty good job even without it. For context,
-  // we're talking about query changing from 2s -> 1.6s on a 12m row table.
   uint32_t* o_write = span.b;
+#if PERFETTO_BUILDFLAG(PERFETTO_ARCH_CPU_X86_64)
+  // Explicit SIMD compare+compress for 4-byte columns (Uint32/Int32 and the
+  // 4-byte StringPool::Id): equality is a bitwise 32-bit compare, so the same
+  // kernel serves all of them. Guarded at runtime so a baseline binary still
+  // uses SSSE3 on capable CPUs and falls back to scalar otherwise.
+  if constexpr (sizeof(Compare) == 4) {
+    if (__builtin_cpu_supports("ssse3")) {
+      uint32_t val32;
+      memcpy(&val32, &to_compare, 4);
+      o_write = SimdLinearScan32(
+          reinterpret_cast<const uint32_t*>(data), range.b, range.e, val32,
+          o_write,
+          [](__m128i a, __m128i b) { return _mm_cmpeq_epi32(a, b); });
+      span.e = o_write;
+      return;
+    }
+  }
+#endif
   for (uint32_t i = range.b; i < range.e; ++i) {
     if (std::equal_to<>()(data[i], to_compare)) {
       *o_write++ = i;

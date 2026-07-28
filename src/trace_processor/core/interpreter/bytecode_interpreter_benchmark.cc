@@ -85,6 +85,48 @@ void BM_BytecodeInterpreter_LinearFilterEqUint32(benchmark::State& state) {
 }
 BENCHMARK(BM_BytecodeInterpreter_LinearFilterEqUint32);
 
+// Same linear-filter op but at ~50% selectivity on UNPREDICTABLE data (random
+// values, threshold at the midpoint). This is where the scalar branchy append is
+// worst -- the branch predictor cannot learn a random 50/50 stream -- and where
+// the SIMD compare+compress (branchless, selectivity-independent) wins most. Note
+// this uses a range op emulated via the value: half the random values equal the
+// low bit we test, so ~50% match with no learnable pattern.
+void BM_BytecodeInterpreter_LinearFilterEqUint32_HalfSelective(
+    benchmark::State& state) {
+  constexpr uint32_t kTableSize = 1024 * 1024;
+  FlexVector<uint32_t> col_data_vec;
+  // xorshift32: cheap, unpredictable. We store value&1 so ~50% equal 0, but in a
+  // random (unlearnable) order -- the branch predictor gets no traction.
+  uint32_t rng = 0x9e3779b9u;
+  for (uint32_t i = 0; i < kTableSize; ++i) {
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    col_data_vec.push_back(rng & 1u);
+  }
+  dataframe::Column col{dataframe::Storage{std::move(col_data_vec)},
+                        dataframe::NullStorage::NonNull{}, Unsorted{},
+                        HasDuplicates{}};
+  std::string bytecode_str = R"(
+    CastFilterValue<Uint32>: [fval_handle=FilterValue(0), write_register=Register(0), op=NonNullOp(0)]
+    InitRange: [size=1048576, dest_register=Register(1)]
+    AllocateIndices: [size=1048576, dest_slab_register=Register(3), dest_span_register=Register(2)]
+    LinearFilterEq<Uint32>: [storage_register=Register(4), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  StringPool spool;
+  Interpreter<Fetcher> interpreter;
+  interpreter.Initialize(ParseBytecodeToVec(bytecode_str), 5, &spool);
+  StoragePtr storage_ptr{col.storage.unchecked_data<Uint32>(), Uint32{}};
+  interpreter.SetRegisterValue(WriteHandle<StoragePtr>(4), storage_ptr);
+  Fetcher fetcher;
+  fetcher.value.push_back(int64_t(0));  // matches ~50% of rows
+  for (auto _ : state) {
+    interpreter.Execute(fetcher);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_BytecodeInterpreter_LinearFilterEqUint32_HalfSelective);
+
 void BM_BytecodeInterpreter_LinearFilterEqString(benchmark::State& state) {
   constexpr uint32_t kTableSize = 1024 * 1024;
 
