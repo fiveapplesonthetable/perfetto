@@ -771,6 +771,20 @@ void QueryPlanBuilder::NonStringConstraint(
     AddLinearFilterEqBytecode(c, result, *non_id_type);
     return;
   }
+  // Same optimization as the Eq case above, but for the ordering ops
+  // (Lt/Le/Gt/Ge) on a non-null numeric column: scan the contiguous range
+  // directly instead of materializing every index and then cutting it down.
+  // Id (implicitly sorted, handled by the sorted path) and String (ordering
+  // needs StringPool::Get) fall through -- TryDowncast returns nullopt for them.
+  if (std::holds_alternative<i::RwHandle<Range>>(indices_reg_) &&
+      col.null_storage.nullability().Is<NonNull>()) {
+    auto iod_type = type.TryDowncast<i::IntegerOrDoubleType>();
+    auto ineq_op = op.TryDowncast<i::InequalityOp>();
+    if (iod_type && ineq_op) {
+      AddLinearInequalityFilterBytecode(c, result, *iod_type, *ineq_op);
+      return;
+    }
+  }
   auto update = EnsureIndicesAreInSlab();
   PruneNullIndices(c.col, update);
   auto source = TranslateNonNullIndices(c.col, update, false);
@@ -1482,6 +1496,43 @@ void QueryPlanBuilder::AddLinearFilterEqBytecode(
                              col.duplicate_state, col.estimated_distinct}});
     bc.arg<B::storage_register>() =
         StorageRegisterFor(c.col, non_id_storage_type.Upcast<StorageType>());
+    bc.arg<B::filter_value_reg>() = filter_value_result_reg;
+    bc.arg<B::source_register>() = range_reg;
+    bc.arg<B::update_register>() = span_reg;
+  }
+  indices_reg_ = span_reg;
+}
+
+void QueryPlanBuilder::AddLinearInequalityFilterBytecode(
+    const FilterSpec& c,
+    const i::ReadHandle<i::CastFilterValueResult>& filter_value_result_reg,
+    const i::IntegerOrDoubleType& type,
+    const i::InequalityOp& op) {
+  const auto& col = GetColumn(c.col);
+  PERFETTO_DCHECK(std::holds_alternative<i::RwHandle<Range>>(indices_reg_));
+  PERFETTO_DCHECK(col.null_storage.nullability().Is<NonNull>());
+
+  using SpanReg = i::RwHandle<Span<uint32_t>>;
+  using SlabReg = i::RwHandle<Slab<uint32_t>>;
+  using RegRange = i::RwHandle<Range>;
+
+  auto range_reg = base::unchecked_get<RegRange>(indices_reg_);
+  SlabReg slab_reg = builder_.AllocateRegister<Slab<uint32_t>>();
+  SpanReg span_reg = builder_.AllocateRegister<Span<uint32_t>>();
+  {
+    using B = i::AllocateIndices;
+    auto& bc = AddOpcode<B>(UnchangedRowCount{});
+    bc.arg<B::size>() = plan_.params.max_row_count;
+    bc.arg<B::dest_slab_register>() = slab_reg;
+    bc.arg<B::dest_span_register>() = span_reg;
+  }
+
+  {
+    using B = i::LinearInequalityFilterBase;
+    B& bc = AddOpcode<B>(i::Index<i::LinearInequalityFilter>(type, op),
+                         RowCountModifier{NonEqualityFilterRowCount{}});
+    bc.arg<B::storage_register>() =
+        StorageRegisterFor(c.col, type.Upcast<StorageType>());
     bc.arg<B::filter_value_reg>() = filter_value_result_reg;
     bc.arg<B::source_register>() = range_reg;
     bc.arg<B::update_register>() = span_reg;

@@ -311,8 +311,7 @@ TEST_F(DataframeBytecodeTest, Numeric) {
       InitRange: [size=0, dest_register=Register(0)]
       CastFilterValue<Uint32>: [fval_handle=FilterValue(0), write_register=Register(1), op=NonNullOp(5)]
       AllocateIndices: [size=0, dest_slab_register=Register(2), dest_span_register=Register(3)]
-      Iota: [source_register=Register(0), update_register=Register(3)]
-      NonStringFilter<Uint32, Ge>: [storage_register=Register(4), val_register=Register(1), source_register=Register(3), update_register=Register(3)]
+      LinearInequalityFilter<Uint32, Ge>: [storage_register=Register(4), filter_value_reg=Register(1), source_register=Register(0), update_register=Register(3)]
   )");
   }
 }
@@ -1128,17 +1127,18 @@ TEST_F(DataframeBytecodeTest,
                   /*cols_used=*/3);  // 0b11
 }
 
-TEST_F(DataframeBytecodeTest, PlanQuery_NoLinearFilterEq_IfNotEqOperator) {
+TEST_F(DataframeBytecodeTest, PlanQuery_LinearInequalityFilter_NonNullUint32) {
   std::vector<Column> cols = MakeColumnVector(Column{
       Storage::Uint32{}, NullStorage::NonNull{}, Unsorted{}, HasDuplicates{}});
-  std::vector<FilterSpec> filters = {{0, 0, Gt{}, std::nullopt}};  // Not Eq
-  // Should use NonStringFilter because op is Gt, not Eq.
+  std::vector<FilterSpec> filters = {{0, 0, Gt{}, std::nullopt}};  // Ordering op
+  // An ordering op (Gt/Lt/Le/Ge) on a non-null numeric range uses the linear
+  // scan (LinearInequalityFilter) just like Eq uses LinearFilterEq: it appends
+  // matching indices directly from the range without an Iota + NonStringFilter.
   RunBytecodeTest(cols, filters, {}, {}, {}, R"(
     InitRange: [size=0, dest_register=Register(0)]
     CastFilterValue<Uint32>: [fval_handle=FilterValue(0), write_register=Register(1), op=NonNullOp(4)]
     AllocateIndices: [size=0, dest_slab_register=Register(2), dest_span_register=Register(3)]
-    Iota: [source_register=Register(0), update_register=Register(3)]
-    NonStringFilter<Uint32, Gt>: [storage_register=Register(4), val_register=Register(1), source_register=Register(3), update_register=Register(3)]
+    LinearInequalityFilter<Uint32, Gt>: [storage_register=Register(4), filter_value_reg=Register(1), source_register=Register(0), update_register=Register(3)]
   )",
                   /*cols_used=*/1);
 }

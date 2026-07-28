@@ -471,6 +471,12 @@ class QueryPlanBuilder {
       const interpreter::ReadHandle<interpreter::CastFilterValueResult>&,
       const interpreter::NonIdStorageType&);
 
+  void AddLinearInequalityFilterBytecode(
+      const FilterSpec&,
+      const interpreter::ReadHandle<interpreter::CastFilterValueResult>&,
+      const interpreter::IntegerOrDoubleType&,
+      const interpreter::InequalityOp&);
+
   bool CanUseMinMaxOptimization(const std::vector<SortSpec>&, const LimitSpec&);
 
   const Column& GetColumn(uint32_t idx) { return *columns_[idx]; }

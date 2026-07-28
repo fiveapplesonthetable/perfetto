@@ -1005,6 +1005,109 @@ SimdLinearScan32(const uint32_t* data,
   }
   return w;
 }
+
+// Builds the 4-lane compare mask for a 32-bit inequality (data OP value). Uses
+// only SSE2 intrinsics, so it is safe to call from a baseline-compiled lambda
+// (which is what SimdLinearScan32 receives). Unsigned columns are handled with
+// the usual sign-flip so signed SSE compares yield unsigned ordering.
+template <typename M, typename Op>
+PERFETTO_ALWAYS_INLINE __m128i Sse32IneqMask(__m128i v, __m128i k) {
+  if constexpr (std::is_unsigned_v<M>) {
+    const __m128i flip = _mm_set1_epi32(static_cast<int>(0x80000000u));
+    v = _mm_xor_si128(v, flip);
+    k = _mm_xor_si128(k, flip);
+  }
+  if constexpr (std::is_same_v<Op, Lt>) {
+    return _mm_cmplt_epi32(v, k);
+  } else if constexpr (std::is_same_v<Op, Gt>) {
+    return _mm_cmpgt_epi32(v, k);
+  } else if constexpr (std::is_same_v<Op, Le>) {
+    return _mm_or_si128(_mm_cmplt_epi32(v, k), _mm_cmpeq_epi32(v, k));
+  } else if constexpr (std::is_same_v<Op, Ge>) {
+    return _mm_or_si128(_mm_cmpgt_epi32(v, k), _mm_cmpeq_epi32(v, k));
+  } else {
+    static_assert(std::is_same_v<Op, Lt>, "Unsupported op");
+  }
+}
+
+// Builds the 2-lane compare mask for a 64-bit inequality (data OP value).
+// int64 uses _mm_cmpgt_epi64 / _mm_cmpeq_epi64 (SSE4.2/SSE4.1); double uses the
+// SSE2 packed-double compares, which return false for unordered (NaN) operands
+// -- matching std::less<double> etc. Must be compiled under the same target as
+// its caller so the SSE4.2 intrinsics are legal; hence the target attribute.
+template <typename M, typename Op>
+__attribute__((target("sse4.2"))) PERFETTO_ALWAYS_INLINE __m128i
+Sse64IneqMask(__m128i v, __m128i k) {
+  if constexpr (std::is_same_v<M, double>) {
+    __m128d vd = _mm_castsi128_pd(v);
+    __m128d kd = _mm_castsi128_pd(k);
+    if constexpr (std::is_same_v<Op, Lt>) {
+      return _mm_castpd_si128(_mm_cmplt_pd(vd, kd));
+    } else if constexpr (std::is_same_v<Op, Le>) {
+      return _mm_castpd_si128(_mm_cmple_pd(vd, kd));
+    } else if constexpr (std::is_same_v<Op, Gt>) {
+      return _mm_castpd_si128(_mm_cmpgt_pd(vd, kd));
+    } else if constexpr (std::is_same_v<Op, Ge>) {
+      return _mm_castpd_si128(_mm_cmpge_pd(vd, kd));
+    } else {
+      static_assert(std::is_same_v<Op, Lt>, "Unsupported op");
+    }
+  } else {  // signed int64
+    if constexpr (std::is_same_v<Op, Lt>) {
+      return _mm_cmpgt_epi64(k, v);
+    } else if constexpr (std::is_same_v<Op, Gt>) {
+      return _mm_cmpgt_epi64(v, k);
+    } else if constexpr (std::is_same_v<Op, Le>) {
+      return _mm_or_si128(_mm_cmpgt_epi64(k, v), _mm_cmpeq_epi64(v, k));
+    } else if constexpr (std::is_same_v<Op, Ge>) {
+      return _mm_or_si128(_mm_cmpgt_epi64(v, k), _mm_cmpeq_epi64(v, k));
+    } else {
+      static_assert(std::is_same_v<Op, Lt>, "Unsupported op");
+    }
+  }
+}
+
+// 64-bit analog of SimdLinearScan32 for the inequality linear filter. Processes
+// two 64-bit lanes per step; the compress is a branchless conditional store (for
+// two lanes a shuffle LUT is unnecessary -- write each index, advance the cursor
+// by that lane's match bit, so a non-matching lane 0 is overwritten by lane 1).
+// The output indices are 32-bit even though the data is 64-bit. The whole
+// function is target("sse4.2") so Sse64IneqMask's SSE4.2 int64 compares are
+// legal; callers gate on __builtin_cpu_supports("sse4.2").
+template <typename M, typename Op>
+__attribute__((target("sse4.2"))) PERFETTO_NO_INLINE uint32_t*
+SimdLinearScan64(const void* data,
+                 uint32_t start,
+                 uint32_t end,
+                 M value,
+                 uint32_t* out) {
+  const char* base = reinterpret_cast<const char*>(data);
+  __m128i vval;
+  if constexpr (std::is_same_v<M, double>) {
+    vval = _mm_castpd_si128(_mm_set1_pd(value));
+  } else {
+    vval = _mm_set1_epi64x(static_cast<long long>(value));
+  }
+  uint32_t* w = out;
+  uint32_t i = start;
+  for (; i + 2 <= end; i += 2) {
+    __m128i v = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(base + static_cast<size_t>(i) * 8));
+    int m = _mm_movemask_pd(_mm_castsi128_pd(Sse64IneqMask<M, Op>(v, vval)));
+    *w = i;
+    w += (m & 1);
+    *w = i + 1;
+    w += (m >> 1) & 1;
+  }
+  for (; i < end; ++i) {
+    int64_t one;
+    memcpy(&one, base + static_cast<size_t>(i) * 8, 8);
+    __m128i v = _mm_set1_epi64x(one);
+    if (_mm_movemask_pd(_mm_castsi128_pd(Sse64IneqMask<M, Op>(v, vval))) & 1)
+      *w++ = i;
+  }
+  return w;
+}
 #endif  // PERFETTO_ARCH_CPU_X86_64
 
 template <typename T>
@@ -1066,6 +1169,69 @@ inline PERFETTO_ALWAYS_INLINE void LinearFilterEq(
 #endif
   for (uint32_t i = range.b; i < range.e; ++i) {
     if (std::equal_to<>()(data[i], to_compare)) {
+      *o_write++ = i;
+    }
+  }
+  span.e = o_write;
+}
+
+// Inequality (Lt/Le/Gt/Ge) analog of LinearFilterEq: scans a contiguous Range of
+// a non-null numeric column and appends the matching absolute indices. The 4-byte
+// path reuses the SSSE3 SimdLinearScan32 compress kernel with a per-op SSE2
+// compare; the 8-byte path uses the 2-lane SSE4.2 SimdLinearScan64. Both are
+// runtime-dispatched with a scalar fallback that is bit-exact (same
+// IntegerOrDoubleComparator used by NonStringFilter).
+template <typename T, typename Op>
+inline PERFETTO_ALWAYS_INLINE void LinearInequalityFilter(
+    InterpreterState& state,
+    const ::perfetto::trace_processor::core::interpreter::LinearInequalityFilter<
+        T,
+        Op>& lf) {
+  using B = ::perfetto::trace_processor::core::interpreter::
+      LinearInequalityFilter<T, Op>;
+
+  Span<uint32_t>& span =
+      state.ReadFromRegister(lf.template arg<B::update_register>());
+  Range range = state.ReadFromRegister(lf.template arg<B::source_register>());
+  PERFETTO_DCHECK(range.size() <= span.size());
+
+  const auto& res =
+      state.ReadFromRegister(lf.template arg<B::filter_value_reg>());
+  if (!HandleInvalidCastFilterValueResult(res.validity, range)) {
+    std::iota(span.b, span.b + range.size(), range.b);
+    span.e = span.b + range.size();
+    return;
+  }
+
+  const auto* data =
+      state.ReadStorageFromRegister<T>(lf.template arg<B::storage_register>());
+  using M = StorageType::VariantTypeAtIndex<T, CastFilterValueResult::Value>;
+  const M value = base::unchecked_get<M>(res.value);
+  auto comparator = comparators::IntegerOrDoubleComparator<M, Op>();
+
+  uint32_t* o_write = span.b;
+#if PERFETTO_BUILDFLAG(PERFETTO_ARCH_CPU_X86_64)
+  if constexpr (sizeof(M) == 4) {
+    if (__builtin_cpu_supports("ssse3")) {
+      uint32_t val32;
+      memcpy(&val32, &value, 4);
+      o_write = SimdLinearScan32(
+          reinterpret_cast<const uint32_t*>(data), range.b, range.e, val32,
+          o_write,
+          [](__m128i v, __m128i k) { return Sse32IneqMask<M, Op>(v, k); });
+      span.e = o_write;
+      return;
+    }
+  } else if constexpr (sizeof(M) == 8) {
+    if (__builtin_cpu_supports("sse4.2")) {
+      o_write = SimdLinearScan64<M, Op>(data, range.b, range.e, value, o_write);
+      span.e = o_write;
+      return;
+    }
+  }
+#endif
+  for (uint32_t i = range.b; i < range.e; ++i) {
+    if (comparator(data[i], value)) {
       *o_write++ = i;
     }
   }

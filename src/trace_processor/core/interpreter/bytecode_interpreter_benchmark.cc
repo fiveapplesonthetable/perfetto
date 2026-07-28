@@ -127,6 +127,82 @@ void BM_BytecodeInterpreter_LinearFilterEqUint32_HalfSelective(
 }
 BENCHMARK(BM_BytecodeInterpreter_LinearFilterEqUint32_HalfSelective);
 
+// Inequality (range) linear filter on a 64-bit column at ~50% UNPREDICTABLE
+// selectivity -- the `WHERE ts > X` / `WHERE dur > threshold` shape, where ts and
+// dur are int64. Random int64 data with the threshold at 0 gives ~50% matches in
+// an unlearnable order, defeating the scalar branch predictor. Exercises the
+// 2-lane SSE4.2 SimdLinearScan64 path.
+void BM_BytecodeInterpreter_LinearInequalityInt64_HalfSelective(
+    benchmark::State& state) {
+  constexpr uint32_t kTableSize = 1024 * 1024;
+  FlexVector<int64_t> col_data_vec;
+  uint64_t rng = 0x9e3779b97f4a7c15ull;
+  for (uint32_t i = 0; i < kTableSize; ++i) {
+    rng ^= rng << 13;
+    rng ^= rng >> 7;
+    rng ^= rng << 17;
+    col_data_vec.push_back(static_cast<int64_t>(rng));  // ~50% are > 0
+  }
+  dataframe::Column col{dataframe::Storage{std::move(col_data_vec)},
+                        dataframe::NullStorage::NonNull{}, Unsorted{},
+                        HasDuplicates{}};
+  std::string bytecode_str = R"(
+    CastFilterValue<Int64>: [fval_handle=FilterValue(0), write_register=Register(0), op=NonNullOp(4)]
+    InitRange: [size=1048576, dest_register=Register(1)]
+    AllocateIndices: [size=1048576, dest_slab_register=Register(3), dest_span_register=Register(2)]
+    LinearInequalityFilter<Int64, Gt>: [storage_register=Register(4), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  StringPool spool;
+  Interpreter<Fetcher> interpreter;
+  interpreter.Initialize(ParseBytecodeToVec(bytecode_str), 5, &spool);
+  StoragePtr storage_ptr{col.storage.unchecked_data<Int64>(), Int64{}};
+  interpreter.SetRegisterValue(WriteHandle<StoragePtr>(4), storage_ptr);
+  Fetcher fetcher;
+  fetcher.value.push_back(int64_t(0));  // matches ~50% of rows (v > 0)
+  for (auto _ : state) {
+    interpreter.Execute(fetcher);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_BytecodeInterpreter_LinearInequalityInt64_HalfSelective);
+
+// Inequality linear filter on a 32-bit column at ~50% UNPREDICTABLE selectivity
+// (`WHERE cpu < X` shape on a uint32 column). Exercises the SSSE3
+// SimdLinearScan32 path with an unsigned less-than compare.
+void BM_BytecodeInterpreter_LinearInequalityUint32_HalfSelective(
+    benchmark::State& state) {
+  constexpr uint32_t kTableSize = 1024 * 1024;
+  FlexVector<uint32_t> col_data_vec;
+  uint32_t rng = 0x9e3779b9u;
+  for (uint32_t i = 0; i < kTableSize; ++i) {
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    col_data_vec.push_back(rng);  // full-range uint32
+  }
+  dataframe::Column col{dataframe::Storage{std::move(col_data_vec)},
+                        dataframe::NullStorage::NonNull{}, Unsorted{},
+                        HasDuplicates{}};
+  std::string bytecode_str = R"(
+    CastFilterValue<Uint32>: [fval_handle=FilterValue(0), write_register=Register(0), op=NonNullOp(2)]
+    InitRange: [size=1048576, dest_register=Register(1)]
+    AllocateIndices: [size=1048576, dest_slab_register=Register(3), dest_span_register=Register(2)]
+    LinearInequalityFilter<Uint32, Lt>: [storage_register=Register(4), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  StringPool spool;
+  Interpreter<Fetcher> interpreter;
+  interpreter.Initialize(ParseBytecodeToVec(bytecode_str), 5, &spool);
+  StoragePtr storage_ptr{col.storage.unchecked_data<Uint32>(), Uint32{}};
+  interpreter.SetRegisterValue(WriteHandle<StoragePtr>(4), storage_ptr);
+  Fetcher fetcher;
+  fetcher.value.push_back(int64_t(0x80000000ll));  // ~50% of rows below midpoint
+  for (auto _ : state) {
+    interpreter.Execute(fetcher);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_BytecodeInterpreter_LinearInequalityUint32_HalfSelective);
+
 void BM_BytecodeInterpreter_LinearFilterEqString(benchmark::State& state) {
   constexpr uint32_t kTableSize = 1024 * 1024;
 

@@ -2252,6 +2252,78 @@ TEST_F(BytecodeInterpreterTest, LinearFilterEq_HandleInvalidCast_AllMatch) {
   EXPECT_THAT(GetRegister<Span<uint32_t>>(2), ElementsAre(0u, 1u, 2u));
 }
 
+// The LinearInequalityFilter tests below use column sizes that are not a
+// multiple of the SIMD lane count (10 for the 4-lane u32/i32 path, 11 for the
+// 2-lane i64 path, 7 for the 2-lane f64 path) so both the vector body and the
+// scalar tail are exercised. Values are chosen to catch signed/unsigned and NaN
+// mistakes.
+
+TEST_F(BytecodeInterpreterTest, LinearInequalityFilter_Uint32_Lt) {
+  // 4000000000u would be negative if misinterpreted as signed, which would
+  // wrongly satisfy "< 100" -- guards the unsigned sign-flip.
+  AddColumn(CreateNonNullColumn<uint32_t, uint32_t>(
+      {50u, 200u, 100u, 99u, 0u, 4000000000u, 100u, 1u, 101u, 50u}, Unsorted{},
+      HasDuplicates{}));
+  std::string bytecode_str = R"(
+    LinearInequalityFilter<Uint32, Lt>: [storage_register=Register(3), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  Range source_range{0, 10};
+  std::vector<uint32_t> update_data(10);
+  SetRegistersAndExecute(bytecode_str, CastFilterValueResult::Valid(100u),
+                         source_range, GetSpan(update_data),
+                         GetStoragePtr<Uint32>(0));
+  EXPECT_THAT(GetRegister<Span<uint32_t>>(2), ElementsAre(0u, 3u, 4u, 7u, 9u));
+}
+
+TEST_F(BytecodeInterpreterTest, LinearInequalityFilter_Int32_Gt) {
+  AddColumn(CreateNonNullColumn<int32_t, int32_t>(
+      {-5, 10, 0, -1, 100, -2147483647 - 1, 2147483647, 3, -7, 8}, Unsorted{},
+      HasDuplicates{}));
+  std::string bytecode_str = R"(
+    LinearInequalityFilter<Int32, Gt>: [storage_register=Register(3), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  Range source_range{0, 10};
+  std::vector<uint32_t> update_data(10);
+  SetRegistersAndExecute(bytecode_str, CastFilterValueResult::Valid(int32_t(0)),
+                         source_range, GetSpan(update_data),
+                         GetStoragePtr<Int32>(0));
+  EXPECT_THAT(GetRegister<Span<uint32_t>>(2), ElementsAre(1u, 4u, 6u, 7u, 9u));
+}
+
+TEST_F(BytecodeInterpreterTest, LinearInequalityFilter_Int64_Ge) {
+  AddColumn(CreateNonNullColumn<int64_t, int64_t>(
+      {100, 99, 101, 5000000000ll, -100, 100, 0, 9223372036854775807ll, -5, 200,
+       100},
+      Unsorted{}, HasDuplicates{}));
+  std::string bytecode_str = R"(
+    LinearInequalityFilter<Int64, Ge>: [storage_register=Register(3), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  Range source_range{0, 11};
+  std::vector<uint32_t> update_data(11);
+  SetRegistersAndExecute(bytecode_str,
+                         CastFilterValueResult::Valid(int64_t(100)),
+                         source_range, GetSpan(update_data),
+                         GetStoragePtr<Int64>(0));
+  EXPECT_THAT(GetRegister<Span<uint32_t>>(2),
+              ElementsAre(0u, 2u, 3u, 5u, 7u, 9u, 10u));
+}
+
+TEST_F(BytecodeInterpreterTest, LinearInequalityFilter_Double_Le_ExcludesNan) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  AddColumn(CreateNonNullColumn<double, double>(
+      {1.0, 2.5, 3.0, nan, -1.0, 2.5, 2.4}, Unsorted{}, HasDuplicates{}));
+  std::string bytecode_str = R"(
+    LinearInequalityFilter<Double, Le>: [storage_register=Register(3), filter_value_reg=Register(0), source_register=Register(1), update_register=Register(2)]
+  )";
+  Range source_range{0, 7};
+  std::vector<uint32_t> update_data(7);
+  SetRegistersAndExecute(bytecode_str, CastFilterValueResult::Valid(double(2.5)),
+                         source_range, GetSpan(update_data),
+                         GetStoragePtr<Double>(0));
+  // NaN (index 3) must be excluded: NaN <= 2.5 is false, matching std::less_equal.
+  EXPECT_THAT(GetRegister<Span<uint32_t>>(2), ElementsAre(0u, 1u, 4u, 5u, 6u));
+}
+
 TEST_F(BytecodeInterpreterTest, CollectIdIntoRankMap) {
   AddColumn(CreateSparseNullableStringColumn(
       {std::make_optional("apple"), std::nullopt, std::make_optional("banana")},

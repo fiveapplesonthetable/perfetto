@@ -568,6 +568,31 @@ struct LinearFilterEq : LinearFilterEqBase {
   static_assert(TS1::Contains<T>());
 };
 
+// Inequality (Lt/Le/Gt/Ge) sibling of LinearFilterEq: scans a contiguous Range
+// of a non-null numeric column with an ordering op and appends the matching
+// absolute row indices, without first materializing the full index set and then
+// cutting it down with NonStringFilter. Uses the same SIMD compare+compress
+// kernel as LinearFilterEq. String ordering is intentionally excluded (it needs
+// StringPool::Get and cannot be pure-SIMD), as is Id (handled by the sorted
+// path) and Eq (handled by LinearFilterEq).
+struct LinearInequalityFilterBase
+    : TemplatedBytecode2<IntegerOrDoubleType, InequalityOp> {
+  static constexpr Cost kCost = LinearPerRowCost{7};
+  PERFETTO_DATAFRAME_BYTECODE_IMPL_4(ReadHandle<StoragePtr>,
+                                     storage_register,
+                                     ReadHandle<CastFilterValueResult>,
+                                     filter_value_reg,
+                                     ReadHandle<Range>,
+                                     source_register,
+                                     RwHandle<Span<uint32_t>>,
+                                     update_register);
+};
+template <typename T, typename Op>
+struct LinearInequalityFilter : LinearInequalityFilterBase {
+  static_assert(TS1::Contains<T>());
+  static_assert(TS2::Contains<Op>());
+};
+
 // Filters rows based on a list of values (IN operator). Supports both indexed
 // and non-indexed modes:
 //   - Indexed: index_register points to a sorted permutation vector and
@@ -664,6 +689,22 @@ struct Reverse : Bytecode {
   X(LinearFilterEq<Int64>)                             \
   X(LinearFilterEq<Double>)                            \
   X(LinearFilterEq<String>)                            \
+  X(LinearInequalityFilter<Uint32, Lt>)                \
+  X(LinearInequalityFilter<Uint32, Le>)                \
+  X(LinearInequalityFilter<Uint32, Gt>)                \
+  X(LinearInequalityFilter<Uint32, Ge>)                \
+  X(LinearInequalityFilter<Int32, Lt>)                 \
+  X(LinearInequalityFilter<Int32, Le>)                 \
+  X(LinearInequalityFilter<Int32, Gt>)                 \
+  X(LinearInequalityFilter<Int32, Ge>)                 \
+  X(LinearInequalityFilter<Int64, Lt>)                 \
+  X(LinearInequalityFilter<Int64, Le>)                 \
+  X(LinearInequalityFilter<Int64, Gt>)                 \
+  X(LinearInequalityFilter<Int64, Ge>)                 \
+  X(LinearInequalityFilter<Double, Lt>)                \
+  X(LinearInequalityFilter<Double, Le>)                \
+  X(LinearInequalityFilter<Double, Gt>)                \
+  X(LinearInequalityFilter<Double, Ge>)                \
   X(NonStringFilter<Id, Eq>)                           \
   X(NonStringFilter<Id, Ne>)                           \
   X(NonStringFilter<Id, Lt>)                           \
