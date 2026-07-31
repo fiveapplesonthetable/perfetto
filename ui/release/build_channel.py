@@ -122,7 +122,7 @@ def build(channel):
   print('===================================================================')
   version = check_output_str(['tools/write_version_header.py', '--stdout'])
   check_call_and_log(['tools/install-build-deps', '--ui'])
-  check_call_and_log(['ui/build'])
+  check_call_and_log(['ui/build', '--bigtrace'])
   return version, pjoin(ROOT_DIR, 'ui/out/dist')
 
 
