@@ -25,6 +25,7 @@ import {Section} from '../../widgets/section';
 import {Tree} from '../../widgets/tree';
 import type {FlowPoint} from '../../core/flow_types';
 import {hasArgs} from './args';
+import {renderOpenInDefaultWorkspaceButton} from './open_in_default_workspace_button';
 import {
   type DistributionScope,
   findSliceTrackDataset,
@@ -285,7 +286,10 @@ export class ThreadSliceDetailsPanel implements TrackEventDetailsPanel {
       {
         title: 'Slice',
         description: slice.name,
-        buttons: this.renderContextButton(slice),
+        buttons: [
+          renderOpenInDefaultWorkspaceButton(this.trace),
+          this.renderContextButton(slice),
+        ],
       },
       m(
         GridLayout,
