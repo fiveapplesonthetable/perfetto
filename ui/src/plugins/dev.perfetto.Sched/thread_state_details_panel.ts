@@ -37,7 +37,6 @@ import {
 import {ThreadStateRef} from '../../components/widgets/thread_state';
 import {CRITICAL_PATH_LITE_CMD} from '../../public/exposed_commands';
 import {goToSchedSlice} from '../../components/widgets/sched';
-import {renderOpenInDefaultWorkspaceButton} from '../../components/details/open_in_default_workspace_button';
 import type {TrackEventDetailsPanel} from '../../public/details_panel';
 import type {Trace} from '../../public/trace';
 import {formatDuration} from '../../components/time_utils';
@@ -139,11 +138,7 @@ export class ThreadStateDetailsPanel implements TrackEventDetailsPanel {
     // "Pinned" views in DetailsShell.
     return m(
       DetailsShell,
-      {
-        title: 'Thread State',
-        description: this.renderLoadingText(),
-        buttons: renderOpenInDefaultWorkspaceButton(this.trace),
-      },
+      {title: 'Thread State', description: this.renderLoadingText()},
       m(
         GridLayout,
         m(
