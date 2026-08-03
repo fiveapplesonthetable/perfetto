@@ -2,7 +2,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 2
   sequence_flags: 1
-  previous_packet_dropped: true
+  previous_packet_dropped: 1
   trusted_pid: 1716
   first_packet_on_sequence: true
 }
@@ -10,7 +10,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 2
   interned_data {
-    protolog_string_args {
+    [com.android.internal.FrameworksNativeInternedData.protolog_string_args] {
       iid: 1
       str: "MyTestString"
     }
@@ -21,7 +21,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 2
   interned_data {
-    protolog_stacktrace {
+    [com.android.internal.FrameworksNativeInternedData.protolog_stacktrace] {
       iid: 1
       str: "A STACK TRACE"
     }
@@ -47,7 +47,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 3
   sequence_flags: 1
-  previous_packet_dropped: true
+  previous_packet_dropped: 1
   trusted_pid: 1716
   first_packet_on_sequence: true
 }
@@ -69,7 +69,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 3
   interned_data {
-    protolog_string_args {
+    [com.android.internal.FrameworksNativeInternedData.protolog_string_args] {
       iid: 1
       str: "MyOtherTestString"
     }
@@ -80,7 +80,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 3
   interned_data {
-    protolog_string_args {
+    [com.android.internal.FrameworksNativeInternedData.protolog_string_args] {
       iid: 2
       str: "SomeOtherTestString"
     }
@@ -105,7 +105,7 @@ packet {
   trusted_uid: 1000
   trusted_packet_sequence_id: 3
   interned_data {
-    protolog_string_args {
+    [com.android.internal.FrameworksNativeInternedData.protolog_string_args] {
       iid: 12
       str: "MyTestString"
     }
@@ -164,7 +164,7 @@ packet {
 packet {
   trusted_uid: 10224
   trusted_packet_sequence_id: 10
-  previous_packet_dropped: true
+  previous_packet_dropped: 1
   trusted_pid: 2063
   first_packet_on_sequence: true
   [com.android.internal.FrameworksNativeWinscopeTracePacket.protolog_viewer_config] {

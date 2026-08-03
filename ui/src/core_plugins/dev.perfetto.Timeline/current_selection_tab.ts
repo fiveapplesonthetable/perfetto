@@ -26,6 +26,7 @@ import type {
   TrackSelection,
 } from '../../public/selection';
 import {assertUnreachable} from '../../base/assert';
+import {Icons} from '../../base/semantic_icons';
 import {Button, ButtonBar} from '../../widgets/button';
 import {NoteEditor} from './note_editor';
 import {Gate} from '../../base/mithril_utils';
@@ -34,9 +35,7 @@ export interface CurrentSelectionTabAttrs {
   readonly trace: TraceImpl;
 }
 
-export class CurrentSelectionTab
-  implements m.ClassComponent<CurrentSelectionTabAttrs>
-{
+export class CurrentSelectionTab implements m.ClassComponent<CurrentSelectionTabAttrs> {
   private readonly fadeContext = new FadeContext();
 
   view({attrs}: m.Vnode<CurrentSelectionTabAttrs>): m.Children {
@@ -92,7 +91,7 @@ export class CurrentSelectionTab
     if (detailsPanel) {
       return {
         isLoading: detailsPanel.isLoading,
-        content: detailsPanel.render(),
+        content: this.withWorkspaceButton(trace, detailsPanel.render()),
       };
     } else {
       return {
@@ -153,6 +152,50 @@ export class CurrentSelectionTab
     };
   }
 
+  // A button, shown for any selection whose track lives in a non-default
+  // workspace but also exists in the default one, that jumps back to the default
+  // workspace and scrolls to the selection there.
+  private renderOpenInDefaultWorkspaceButton(trace: TraceImpl): m.Children {
+    const {currentWorkspace, defaultWorkspace, workspaces, selection} = trace;
+    if (currentWorkspace === defaultWorkspace) return;
+    const sel = selection.selection;
+    const trackUri =
+      sel.kind === 'track_event' || sel.kind === 'track'
+        ? sel.trackUri
+        : undefined;
+    if (trackUri === undefined) return;
+    if (defaultWorkspace.getTrackByUri(trackUri) === undefined) return;
+    return m(Button, {
+      label: 'Open in default workspace',
+      icon: Icons.GoTo,
+      onclick: () => {
+        workspaces.switchWorkspace(defaultWorkspace);
+        selection.scrollToSelection('focus');
+      },
+    });
+  }
+
+  // Details panels render their own DetailsShell, so merge the button into its
+  // header buttons rather than adding it to every panel individually.
+  private withWorkspaceButton(
+    trace: TraceImpl,
+    content: m.Children,
+  ): m.Children {
+    const button = this.renderOpenInDefaultWorkspaceButton(trace);
+    if (button === undefined) return content;
+    if (
+      content == null ||
+      typeof content !== 'object' ||
+      Array.isArray(content) ||
+      ((content as m.Vnode).tag as unknown) !== DetailsShell
+    ) {
+      return content;
+    }
+    const shell = content as m.Vnode<{buttons?: m.Children}>;
+    shell.attrs.buttons = [shell.attrs.buttons, button];
+    return shell;
+  }
+
   private renderNoteSelection(trace: TraceImpl, selection: NoteSelection) {
     return {
       isLoading: false,
@@ -165,7 +208,11 @@ export class CurrentSelectionTab
     if (track) {
       return m(
         DetailsShell,
-        {title: 'Track', description: track.uri},
+        {
+          title: 'Track',
+          description: track.uri,
+          buttons: this.renderOpenInDefaultWorkspaceButton(trace),
+        },
         m(
           GridLayout,
           m(
