@@ -241,6 +241,11 @@ namespace perfetto::trace_processor::stats {
   F(systemd_journal_num_total,            kSingle,  kInfo,     kTrace, Scope::kMachineAndTrace,    ""), \
   F(systrace_parse_failure,               kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace, ""), \
   F(task_state_invalid,                   kSingle,  kError,    kAnalysis, Scope::kMachineAndTrace, ""), \
+  F(track_duplicate_dropped,              kSingle,  kDataLoss, kAnalysis, Scope::kMachineAndTrace,      \
+      "Count of duplicate tracks dropped while merging traces. Two trace files "                        \
+      "attributed to the same machine each defined a track for the same entity "                        \
+      "(e.g. cpu_frequency for the same CPU); the duplicate was dropped and its "                       \
+      "events attached to the existing track, interleaving data from both files."),                     \
   F(traced_buf_abi_violations,            kIndexed, kDataLoss, kTrace, Scope::kMachineAndTrace,    ""), \
   F(traced_buf_buffer_size,               kIndexed, kInfo,     kTrace, Scope::kMachineAndTrace,    ""), \
   F(traced_buf_bytes_overwritten,         kIndexed, kInfo,     kTrace, Scope::kMachineAndTrace,    ""), \

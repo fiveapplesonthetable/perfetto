@@ -20,16 +20,42 @@
 #include <cstdint>
 #include <optional>
 
+#include "perfetto/ext/base/hash.h"
 #include "perfetto/ext/base/string_view.h"
 #include "src/trace_processor/importers/common/args_tracker.h"
 #include "src/trace_processor/importers/common/cpu_tracker.h"
+#include "src/trace_processor/importers/common/stats_tracker.h"
 #include "src/trace_processor/importers/common/tracks_internal.h"
+#include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/track_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
 #include "src/trace_processor/types/variadic.h"
 
 namespace perfetto::trace_processor {
+
+TrackId TrackTracker::InternTrackCrossContext(
+    uint64_t blueprint_hash,
+    const std::function<TrackId()>& create) {
+  // Absent in the minimal contexts some unit tests build; they never merge
+  // files, so per-context interning alone is correct there.
+  TrackDedupState* dedup = context_->track_dedup_state.get();
+  if (!dedup) {
+    return create();
+  }
+  // Mix in the machine id so tracks on distinct machines stay distinct.
+  base::FnvHasher hasher;
+  hasher.Update(blueprint_hash);
+  hasher.Update(context_->machine_id().value);
+  uint64_t key = hasher.digest();
+  if (TrackId* canonical = dedup->tracks.Find(key)) {
+    context_->stats_tracker->IncrementStats(stats::track_duplicate_dropped);
+    return *canonical;
+  }
+  TrackId id = create();
+  dedup->tracks.Insert(key, id);
+  return id;
+}
 
 TrackTracker::TrackTracker(TraceProcessorContext* context)
     : context_(context),

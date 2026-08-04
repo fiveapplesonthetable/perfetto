@@ -192,6 +192,17 @@ def _machine_file(path, name):
   return {'path': path, 'machine': {'name': name}}
 
 
+# A proto trace with two cpu_frequency ftrace events for cpu 0, at |ts| and
+# |ts|+1000. cpu_frequency interns one track keyed on (machine, cpu).
+def _cpu_freq_proto(ts, freq):
+  return TextProto('packet { ftrace_events { cpu: 0\n'
+                   '  event { timestamp: %d pid: 0\n'
+                   '    cpu_frequency { state: %d cpu_id: 0 } }\n'
+                   '  event { timestamp: %d pid: 0\n'
+                   '    cpu_frequency { state: %d cpu_id: 0 } } } }\n' %
+                   (ts, freq, ts + 1000, freq * 2))
+
+
 class TraceManifest(TestSuite):
   """Tests for the perfetto_manifest sidecar JSON.
 
@@ -732,6 +743,40 @@ class TraceManifest(TestSuite):
         out=Csv('''
         "machines"
         2
+        '''))
+
+  # Two files on the same machine each interning a track for the same entity
+  # (cpu_frequency for cpu 0) collapse onto one track; the duplicate is dropped,
+  # its events attach to the surviving track, and a data-loss stat records it.
+  def test_same_machine_duplicate_track_dropped(self):
+    return DiffTestBlueprint(
+        trace=Zip({
+            'meta.json':
+                _meta({
+                    'version': 1,
+                    'files': [
+                        _machine_file('a.pb', 'phone'),
+                        _machine_file('b.pb', 'phone'),
+                    ],
+                }),
+            'a.pb':
+                _cpu_freq_proto(1000, 1000000),
+            'b.pb':
+                _cpu_freq_proto(3000, 1500000),
+        }),
+        query='''
+          SELECT
+            (SELECT count(*) FROM cpu_counter_track
+             WHERE type = 'cpu_frequency') AS tracks,
+            (SELECT count(*) FROM counter c
+             JOIN cpu_counter_track t ON c.track_id = t.id
+             WHERE t.type = 'cpu_frequency') AS points,
+            (SELECT sum(value) FROM stats
+             WHERE name = 'track_duplicate_dropped') AS dropped;
+        ''',
+        out=Csv('''
+        "tracks","points","dropped"
+        1,4,1
         '''))
 
   # The named machine gets a positive 1-based label_index even though the

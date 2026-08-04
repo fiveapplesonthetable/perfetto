@@ -77,6 +77,7 @@ struct ProtoImporterModuleContext;
 struct TraceManifestState;
 struct TraceTimeState;
 struct TrackCompressorGroupIdxState;
+struct TrackDedupState;
 
 namespace perf_importer {
 class PerfTracker;
@@ -192,6 +193,7 @@ class TraceProcessorContext {
   GlobalPtr<ClockSynchronizer> clock_sync;
   GlobalPtr<TraceManifestState> trace_manifest_state;
   GlobalPtr<TrackCompressorGroupIdxState> track_group_idx_state;
+  GlobalPtr<TrackDedupState> track_dedup_state;
   GlobalPtr<StackProfileTracker> stack_profile_tracker;
   GlobalPtr<ProfilerSampleTracker> profiler_sample_tracker;
   GlobalPtr<Destructible> deobfuscation_tracker;  // DeobfuscationTracker
