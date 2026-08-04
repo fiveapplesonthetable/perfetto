@@ -746,8 +746,8 @@ class TraceManifest(TestSuite):
         '''))
 
   # Two files on the same machine each interning a track for the same entity
-  # (cpu_frequency for cpu 0) collapse onto one track; the duplicate is dropped,
-  # its events attach to the surviving track, and a data-loss stat records it.
+  # (cpu_frequency for cpu 0): the first file owns the track, the second file's
+  # events for it are dropped, and a data-loss stat records the dropped track.
   def test_same_machine_duplicate_track_dropped(self):
     return DiffTestBlueprint(
         trace=Zip({
@@ -776,7 +776,7 @@ class TraceManifest(TestSuite):
         ''',
         out=Csv('''
         "tracks","points","dropped"
-        1,4,1
+        1,2,1
         '''))
 
   # The named machine gets a positive 1-based label_index even though the

@@ -39,8 +39,8 @@ TrackId TrackTracker::InternTrackCrossContext(
     const std::function<TrackId()>& create) {
   // Absent in the minimal contexts some unit tests build; they never merge
   // files, so per-context interning alone is correct there.
-  TrackDedupState* dedup = context_->track_dedup_state.get();
-  if (!dedup) {
+  TrackClaimState* claims = context_->track_claim_state.get();
+  if (!claims) {
     return create();
   }
   // Mix in the machine id so tracks on distinct machines stay distinct.
@@ -48,12 +48,14 @@ TrackId TrackTracker::InternTrackCrossContext(
   hasher.Update(blueprint_hash);
   hasher.Update(context_->machine_id().value);
   uint64_t key = hasher.digest();
-  if (TrackId* canonical = dedup->tracks.Find(key)) {
+  if (claims->tracks.Find(key)) {
+    // Another merged trace file already owns this track on this machine; drop
+    // it so its events are not recorded against the owner's track.
     context_->stats_tracker->IncrementStats(stats::track_duplicate_dropped);
-    return *canonical;
+    return kInvalidTrackId;
   }
   TrackId id = create();
-  dedup->tracks.Insert(key, id);
+  claims->tracks.Insert(key, id);
   return id;
 }
 

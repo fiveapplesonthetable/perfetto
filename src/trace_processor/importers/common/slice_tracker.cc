@@ -125,6 +125,11 @@ SliceTracker::StartedSlice SliceTracker::StartSlice(
     StringId raw_name,
     bool want_args,
     std::optional<OverlapInfo>* overlap_out) {
+  if (track_id == kInvalidTrackId) {
+    // Track dropped as a duplicate from a merged trace (see TrackTracker).
+    return {};
+  }
+
   const StringId name =
       context_->slice_translation_table->TranslateName(raw_name);
 

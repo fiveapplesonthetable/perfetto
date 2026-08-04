@@ -38,20 +38,23 @@ void EventTracker::PushProcessCounterForThread(ProcessCounterForThread pcounter,
                                                int64_t timestamp,
                                                double value,
                                                UniqueTid utid) {
-  const auto& counter = context_->storage->counter_table();
-  auto opt_id = PushCounter(timestamp, value, kInvalidTrackId);
-  if (opt_id) {
-    PendingUpidResolutionCounter pending;
-    pending.row = counter[*opt_id].ToRowNumber().row_number();
-    pending.utid = utid;
-    pending.counter = pcounter;
-    pending_upid_resolution_counter_.emplace_back(pending);
-  }
+  // Inserted against a placeholder track; the real track is resolved once the
+  // thread's process is known (see FlushPendingEvents).
+  auto* counter = context_->storage->mutable_counter_table();
+  CounterId id = counter->Insert({timestamp, kInvalidTrackId, value, {}}).id;
+  PendingUpidResolutionCounter pending;
+  pending.row = (*counter)[id].ToRowNumber().row_number();
+  pending.utid = utid;
+  pending.counter = pcounter;
+  pending_upid_resolution_counter_.emplace_back(pending);
 }
 
 std::optional<CounterId> EventTracker::PushCounter(int64_t timestamp,
                                                    double value,
                                                    TrackId track_id) {
+  if (track_id == kInvalidTrackId) {
+    return std::nullopt;
+  }
   auto* counters = context_->storage->mutable_counter_table();
   return counters->Insert({timestamp, track_id, value, {}}).id;
 }

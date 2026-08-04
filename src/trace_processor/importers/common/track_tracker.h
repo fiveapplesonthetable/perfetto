@@ -42,10 +42,10 @@
 
 namespace perfetto::trace_processor {
 
-// Shared by every forked TraceProcessorContext. Maps a (machine, blueprint,
-// dimensions) hash to the canonical track so tracks interned in different
-// merged trace files collapse onto one instead of duplicating.
-struct TrackDedupState {
+// Shared by every forked TraceProcessorContext. Records, per (machine,
+// blueprint, dimensions), the track owned by the first merged trace file to
+// claim it, so later files interning the same track are dropped.
+struct TrackClaimState {
   base::FlatHashMap<uint64_t, TrackId, base::AlreadyHashed<uint64_t>> tracks;
 };
 
@@ -215,18 +215,17 @@ class TrackTracker {
     if (TrackId* local = tracks_.Find(hash)) {
       return *local;
     }
-    // First time in this context: reuse a track another merged file already
-    // created for the same (machine, blueprint, dimensions) instead of
-    // duplicating it.
+    // First time in this context: the first merged file to claim this track
+    // owns it; later files get kInvalidTrackId so their events are dropped.
     TrackId id = InternTrackCrossContext(
         hash, [&] { return CreateTrack(bp, dims, name, args, unit); });
     tracks_.Insert(hash, id);
     return id;
   }
 
-  // Returns the canonical track for |blueprint_hash| on the current machine,
-  // calling |create| to make it on first sight. If another merged trace file
-  // already created it, that track is reused and a data-loss stat recorded.
+  // Returns the track for |blueprint_hash| on the current machine, calling
+  // |create| to make it on first sight. If another merged trace file already
+  // owns it, returns kInvalidTrackId and records a data-loss stat.
   TrackId InternTrackCrossContext(uint64_t blueprint_hash,
                                   const std::function<TrackId()>& create);
 

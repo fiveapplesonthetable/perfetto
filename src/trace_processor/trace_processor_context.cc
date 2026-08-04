@@ -194,7 +194,7 @@ void InitGlobalState(TraceProcessorContext* context,
   context->trace_manifest_state = Ptr<TraceManifestState>::MakeRoot();
   context->track_group_idx_state =
       Ptr<TrackCompressorGroupIdxState>::MakeRoot();
-  context->track_dedup_state = Ptr<TrackDedupState>::MakeRoot();
+  context->track_claim_state = Ptr<TrackClaimState>::MakeRoot();
   context->stack_profile_tracker = Ptr<StackProfileTracker>::MakeRoot(context);
   context->profiler_sample_tracker =
       Ptr<ProfilerSampleTracker>::MakeRoot(context);
@@ -229,7 +229,7 @@ void CopyGlobalState(const TraceProcessorContext* source,
   dest->clock_sync = source->clock_sync.Fork();
   dest->trace_manifest_state = source->trace_manifest_state.Fork();
   dest->track_group_idx_state = source->track_group_idx_state.Fork();
-  dest->track_dedup_state = source->track_dedup_state.Fork();
+  dest->track_claim_state = source->track_claim_state.Fork();
   dest->register_additional_proto_modules =
       source->register_additional_proto_modules;
   dest->perf_aux_tokenizer_registrations =
