@@ -96,7 +96,7 @@ export default class implements PerfettoPlugin {
         cpu,
         ucpu,
       } = it;
-      const uri = `/cpu_freq_cpu${ucpu}`;
+      const uri = `/cpu_freq_cpu${freqTrackId}`;
 
       ctx.tracks.registerTrack({
         uri,

@@ -235,7 +235,7 @@ export default class GpuPlugin implements PerfettoPlugin {
     }
 
     for (const {id, gpu} of tracks) {
-      const uri = `/gpu_frequency_${gpu.ugpu}`;
+      const uri = `/gpu_frequency_${id}`;
       const name = `${gpu.displayName} Frequency${gpu.maybeMachineLabel()}`;
       ctx.tracks.registerTrack({
         uri,

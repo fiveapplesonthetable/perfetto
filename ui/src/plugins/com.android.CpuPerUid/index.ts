@@ -88,7 +88,7 @@ export default class implements PerfettoPlugin {
           from counter
           where track_id = ${it.id}`,
           name,
-          `/cpu_per_uid_summary_${it.type}_${it.cluster}`,
+          `/cpu_per_uid_summary_${it.id}`,
           group,
           'cpu-per-uid-summary',
         );

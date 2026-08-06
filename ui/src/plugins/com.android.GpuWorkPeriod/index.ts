@@ -89,8 +89,8 @@ export default class implements PerfettoPlugin {
     // Cache the work-period group(s) by name so each is created only once.
     const groupsByName = new Map<string, TrackNode>();
     for (; it.valid(); it.next()) {
-      const {trackId, gpuId, uid, packageName} = it;
-      const uri = `/gpu_work_period_${gpuId}_${uid}`;
+      const {trackId, gpuId, packageName} = it;
+      const uri = `/gpu_work_period_${trackId}`;
       const track = await SliceTrack.createMaterialized({
         trace: ctx,
         uri,
