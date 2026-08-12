@@ -57,6 +57,64 @@ class Startups(TestSuite):
         0,186974938196632,186975083989042,145792410,"androidx.benchmark.integration.macrobenchmark.target","cold"
         """))
 
+  # A coalesced launch: launchingActivity#1 (1..3) spans two consecutive
+  # activities. Its "launching:" slices are com.pkga (1..2) then com.pkgb (2..3).
+  # The startup must be re-anchored to the launched package (com.pkgb) at ts=2,
+  # not read from the async span start at ts=1. A plain launch
+  # (launchingActivity#2) keeps its async span start (5, not the 5.2 where its
+  # single "launching:" slice begins), preserving the intent-resolution prefix.
+  def test_coalesced_startups_reanchored_minsdk33(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 1
+          process_tree {
+            processes { pid: 1000 uid: 1000 cmdline: "system_server" }
+            threads { tid: 1000 tgid: 1000 }
+          }
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event { timestamp: 1000000000 pid: 1000
+              print { buf: "S|1000|launchingActivity#1|0\n" } }
+            event { timestamp: 1000000000 pid: 1000
+              print { buf: "S|1000|launching: com.pkga|11\n" } }
+            event { timestamp: 2000000000 pid: 1000
+              print { buf: "F|1000|launching: com.pkga|11\n" } }
+            event { timestamp: 2000000000 pid: 1000
+              print { buf: "S|1000|launching: com.pkgb|22\n" } }
+            event { timestamp: 3000000000 pid: 1000
+              print { buf: "F|1000|launching: com.pkgb|22\n" } }
+            event { timestamp: 3000000000 pid: 1000
+              print { buf: "F|1000|launchingActivity#1|0\n" } }
+            event { timestamp: 3000000000 pid: 1000
+              print { buf: "I|1000|launchingActivity#1:completed-cold:com.pkgb\n" } }
+            event { timestamp: 5000000000 pid: 1000
+              print { buf: "S|1000|launchingActivity#2|0\n" } }
+            event { timestamp: 5200000000 pid: 1000
+              print { buf: "S|1000|launching: com.solo|33\n" } }
+            event { timestamp: 6000000000 pid: 1000
+              print { buf: "F|1000|launching: com.solo|33\n" } }
+            event { timestamp: 6000000000 pid: 1000
+              print { buf: "F|1000|launchingActivity#2|0\n" } }
+            event { timestamp: 6000000000 pid: 1000
+              print { buf: "I|1000|launchingActivity#2:completed-warm:com.solo\n" } }
+          }
+        }
+        """),
+        query="""
+        INCLUDE PERFETTO MODULE android.startup.startups;
+        SELECT startup_id, ts, ts_end, dur, package, startup_type
+        FROM android_startups
+        ORDER BY startup_id;
+        """,
+        out=Csv("""
+        "startup_id","ts","ts_end","dur","package","startup_type"
+        1,2000000000,3000000000,1000000000,"com.pkgb","cold"
+        2,5000000000,6000000000,1000000000,"com.solo","warm"
+        """))
+
   def test_hot_startups_maxsdk28(self):
     return DiffTestBlueprint(
         trace=DataPath('api24_startup_hot.perfetto-trace'),
