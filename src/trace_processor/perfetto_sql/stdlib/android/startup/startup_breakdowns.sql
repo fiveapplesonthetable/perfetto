@@ -178,6 +178,25 @@ CREATE VIRTUAL TABLE _startup_thread_states_and_slices_breakdown_sp USING SPAN_L
     _startup_thread_states_breakdown PARTITIONED root_id,
     _startup_flat_slices_breakdown PARTITIONED root_id);
 
+-- launch_ts is when the launched app's own launch begins (ts_end -
+-- dur_without_trampoline), clamped to the first main thread activity.
+CREATE PERFETTO TABLE _startup_launch_gap AS
+SELECT
+  r.startup_id,
+  r.ts,
+  min(_startup_thread_states_breakdown.ts) AS first_main_ts,
+  min(
+    min(_startup_thread_states_breakdown.ts),
+    r.ts + s.dur - s.dur_without_trampoline
+  ) AS launch_ts
+FROM _startup_thread_states_breakdown
+JOIN _startup_root_slices AS r
+  ON r.id = root_id
+JOIN android_startups AS s
+  USING (startup_id)
+GROUP BY
+  r.id;
+
 -- Blended thread state and slice breakdown blocking app startups.
 --
 -- Each row blames a unique period during an app startup with a reason
@@ -210,19 +229,24 @@ FROM _startup_thread_states_and_slices_breakdown_sp AS b
 JOIN _startup_root_slices AS startup
   ON startup.id = b.root_id
 UNION ALL
--- Augment the existing startup breakdown with an artificial slice accounting for
--- any launch delays before the app starts handling startup on its main thread
 SELECT
-  _startup_root_slices.ts,
-  min(_startup_thread_states_breakdown.ts) - _startup_root_slices.ts AS dur,
+  ts,
+  launch_ts - ts AS dur,
+  startup_id,
+  NULL AS slice_id,
+  NULL AS thread_state_id,
+  'trampoline' AS reason
+FROM _startup_launch_gap
+WHERE
+  launch_ts - ts > 0
+UNION ALL
+SELECT
+  launch_ts AS ts,
+  first_main_ts - launch_ts AS dur,
   startup_id,
   NULL AS slice_id,
   NULL AS thread_state_id,
   'launch_delay' AS reason
-FROM _startup_thread_states_breakdown
-JOIN _startup_root_slices
-  ON _startup_root_slices.id = root_id
-GROUP BY
-  root_id
-HAVING
-  min(_startup_thread_states_breakdown.ts) - _startup_root_slices.ts > 0;
+FROM _startup_launch_gap
+WHERE
+  first_main_ts - launch_ts > 0;
