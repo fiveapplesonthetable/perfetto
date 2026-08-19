@@ -1,0 +1,127 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto2";
+
+package perfetto.protos;
+
+// Configuration for the "linux.io_stall" data source.
+//
+// The data source uses eBPF kprobes on the kernel VFS / mm layer to record
+// file-I/O operations (VFS read/write, mmap page faults, fsync/fdatasync, sync,
+// stat, writeback, f2fs checkpoint, single-folio page-in and the folio wait
+// primitives) as TrackEvent slices on the thread performing them, each
+// annotated with the file path, inode, filesystem, byte count and offset. It
+// runs on any Linux kernel with BTF (CO-RE) and on Android. It does not itself
+// decide what is a "stall": whether an op was a real storage stall is derived
+// downstream from the thread's sched 'D' (uninterruptible) state overlapping
+// the slice, in SQL. The knobs here control which ops are recorded and how
+// short an op may be before it is dropped.
+message IoStallConfig {
+  // A file-I/O operation the data source can record.
+  enum IoOp {
+    IO_OP_UNSPECIFIED = 0;
+    IO_OP_OPEN = 1;
+    IO_OP_CLOSE = 2;
+    IO_OP_READ = 3;
+    IO_OP_WRITE = 4;
+    // Page fault reading a file-backed mapping.
+    IO_OP_MMAP_READ = 5;
+    IO_OP_FSYNC = 6;
+    IO_OP_FDATASYNC = 7;
+    // Page fault dirtying a file-backed mapping.
+    IO_OP_MMAP_WRITE = 8;
+    IO_OP_SYNC = 9;
+    IO_OP_STAT = 10;
+    // Async writeback of dirty pages to storage.
+    IO_OP_WRITEBACK = 11;
+    // f2fs checkpoint.
+    IO_OP_CHECKPOINT = 12;
+    // Single-folio read bypassing vfs_read (filemap_read_folio).
+    IO_OP_PAGE_READ = 13;
+
+    // High-volume kernel page-wait primitives. They catch storage waits the
+    // semantic ops above miss (fs-internal metadata I/O, page-lock waits) but
+    // also sweep in non-storage waits and fire very frequently. They are NOT in
+    // the default set: to record them, list them explicitly in |record_ops|.
+
+    // folio_wait_writeback.
+    IO_OP_WB_WAIT = 14;
+    // folio_wait_bit_common.
+    IO_OP_FOLIO_WAIT = 15;
+  }
+
+  // Per-op override of |default_threshold_us|.
+  message OpThreshold {
+    optional IoOp op = 1;
+    optional uint32 threshold_us = 2;
+  }
+
+  // Minimum wall-clock duration, in microseconds, for an op to be recorded.
+  // Applied to every op that does not have an entry in |op_threshold|. Ops
+  // shorter than this are dropped (they are not stalls). 0 records every
+  // occurrence of the op. If unset, defaults to 30.
+  optional uint32 default_threshold_us = 1;
+
+  // Per-op thresholds that override |default_threshold_us| for the named op.
+  // e.g.
+  //   op_threshold { op: IO_OP_READ  threshold_us: 0 }    # every read
+  //   op_threshold { op: IO_OP_WRITE threshold_us: 100 }  # writes >= 100us
+  repeated OpThreshold op_threshold = 2;
+
+  // The ops to record. If empty, the default set is recorded: every op except
+  // the high-volume wait primitives IO_OP_FOLIO_WAIT and IO_OP_WB_WAIT. If
+  // non-empty, exactly the listed ops are recorded and all others are dropped.
+  repeated IoOp record_ops = 3;
+
+  // How much of a file's identity to record, for privacy and cost.
+  enum PathCapture {
+    // Unset behaves as PATH_CAPTURE_ALL (unchanged default).
+    PATH_CAPTURE_UNSPECIFIED = 0;
+    // Resolve and record the absolute path of every file.
+    PATH_CAPTURE_ALL = 1;
+    // Never resolve a path; record only the inode, device and filesystem. The
+    // in-kernel dentry walk is skipped entirely (its cost is the program's
+    // largest), so this is both the most private and the cheapest mode.
+    PATH_CAPTURE_NONE = 2;
+    // Resolve, but record the path only when it matches the allowlist
+    // (|path_exact| or |path_regexes|); otherwise fall back to inode-only.
+    // Non-matching paths are never written to the trace.
+    PATH_CAPTURE_ALLOWLIST = 3;
+  }
+
+  // Path-capture policy. If unset but |path_exact| or |path_regexes| is
+  // non-empty, ALLOWLIST is implied; otherwise ALL.
+  optional PathCapture path_capture = 4;
+
+  // Exact absolute paths to record when |path_capture| is ALLOWLIST. A path is
+  // recorded iff it equals one of these exactly, e.g. "/system/lib64/libc.so".
+  // Matched by O(1) set lookup (cheap), so this is checked before the regexes.
+  repeated string path_exact = 5;
+
+  // Path regexes to record when |path_capture| is ALLOWLIST (ECMAScript
+  // syntax), e.g. "\\.so$" or "^/data/app/". A path is recorded iff it equals
+  // an |path_exact| entry OR matches any of these. Use a regex (e.g. an
+  // "^/prefix/" anchor) to capture a whole subtree; |path_exact| is for single
+  // files.
+  repeated string path_regexes = 7;
+
+  // Size of the BPF ring buffer, in KiB (rounded up to a power-of-two page
+  // multiple). 0 means the default (16 MiB). Only honored where the tracer
+  // loads the BPF itself (the standalone Linux build); on Android the ring
+  // buffer is created by bpfloader at boot with a fixed size.
+  optional uint32 ring_buffer_size_kb = 6;
+}
