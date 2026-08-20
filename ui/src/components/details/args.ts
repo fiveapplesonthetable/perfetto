@@ -21,6 +21,9 @@ import {MenuItem, PopupMenu} from '../../widgets/menu';
 import {TreeNode} from '../../widgets/tree';
 import type {Args, ArgsDict, ArgValue} from '../sql_utils/args';
 import type {Trace} from '../../public/trace';
+import {asUtid} from '../sql_utils/core_types';
+import {getThreadInfo, type ThreadInfo} from '../sql_utils/thread';
+import {renderThreadRef} from '../widgets/thread';
 
 // Renders slice arguments (key/value pairs) as a subtree.
 export function renderArguments(
@@ -95,7 +98,7 @@ function renderArgsTree(
   }
   return m(TreeNode, {
     left: renderArgKey(key, fullKey, args, extraMenuItems),
-    right: renderArgValue(args),
+    right: renderArgValue(trace, key, args),
   });
 }
 
@@ -121,11 +124,42 @@ function renderArgKey(
   }
 }
 
-function renderArgValue(value: ArgValue): m.Children {
+function renderArgValue(
+  trace: Trace,
+  key: string,
+  value: ArgValue,
+): m.Children {
+  if (
+    (key === 'utid' || key === 'end_utid') &&
+    (typeof value === 'number' || typeof value === 'bigint')
+  ) {
+    return m(ThreadArgValue, {trace, utid: Number(value)});
+  }
   if (isWebLink(value)) {
     return renderWebLink(value);
-  } else {
-    return `${value}`;
+  }
+  return `${value}`;
+}
+
+// Renders a utid-valued arg (e.g. rss_stat's responsible thread, or an async
+// slice's utid/end_utid) as a thread reference, resolving the name async and
+// showing the raw utid until it loads.
+class ThreadArgValue
+  implements m.ClassComponent<{trace: Trace; utid: number}>
+{
+  private info?: ThreadInfo;
+
+  oninit({attrs}: m.Vnode<{trace: Trace; utid: number}>) {
+    getThreadInfo(attrs.trace.engine, asUtid(attrs.utid)).then((info) => {
+      this.info = info;
+      m.redraw();
+    });
+  }
+
+  view({attrs}: m.Vnode<{trace: Trace; utid: number}>): m.Children {
+    return this.info !== undefined
+      ? renderThreadRef(attrs.trace, this.info)
+      : `${attrs.utid}`;
   }
 }
 
