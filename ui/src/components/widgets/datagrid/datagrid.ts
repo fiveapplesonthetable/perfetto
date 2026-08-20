@@ -54,21 +54,24 @@ import type {
   TreeModel,
 } from './data_source';
 import {
-  type SchemaRegistry,
+  type ColumnSchema,
   getColumnInfo,
   getDefaultVisibleColumns,
   isCellRenderResult,
+  splitPath,
 } from './datagrid_schema';
 import {DataGridToolbar, GridFilterChip} from './datagrid_toolbar';
-import {DataGridExportButton} from './export_button';
+import {ExportButton} from '../../../widgets/export_button';
 import {
   buildColumnNames,
   defaultValueFormatter,
+  formatRows,
+} from './export_utils';
+import {
   formatAsJSON,
   formatAsMarkdown,
   formatAsTSV,
-  formatRows,
-} from './export_utils';
+} from '../../../base/export_formatters';
 import {InMemoryDataSource} from './in_memory_data_source';
 import {
   type AggregateColumn,
@@ -76,6 +79,8 @@ import {
   type Column,
   DEFAULT_GROUP_DISPLAY,
   type Filter,
+  getPivotDrillDownFilters,
+  type GroupDisplay,
   type GroupPath,
   type IdBasedTree,
   type Pivot,
@@ -108,6 +113,33 @@ function groupPathsEqual(a: GroupPath, b: GroupPath): boolean {
     if (!sqlValuesEqual(a[i], b[i])) return false;
   }
   return true;
+}
+
+function getPivotGroupDisplay(pivot: Pivot): GroupDisplay {
+  // A single grouping level has no hierarchy to display as a tree.
+  if (pivot.groupBy.length <= 1) return 'flat';
+  return pivot.groupDisplay ?? DEFAULT_GROUP_DISPLAY;
+}
+
+function getPivotDrillDownColumns(
+  pivot: Pivot,
+  flatColumns: readonly Column[],
+): readonly Column[] {
+  const columns: Column[] = [];
+  const fields = new Set<string>();
+
+  const addColumn = ({id, field, sort}: Column) => {
+    if (fields.has(field)) return;
+    fields.add(field);
+    columns.push({id, field, sort});
+  };
+
+  flatColumns.forEach(addColumn);
+  pivot.groupBy.forEach(addColumn);
+  for (const aggregate of pivot.aggregates) {
+    if ('field' in aggregate) addColumn(aggregate);
+  }
+  return columns;
 }
 
 export interface AggregationCellAttrs extends m.Attributes {
@@ -166,12 +198,7 @@ export interface DataGridAttrs {
    * Schema registry defining the shape of available data.
    * Contains named schemas that can reference each other for nested relationships.
    */
-  readonly schema: SchemaRegistry;
-
-  /**
-   * The name of the root schema in the registry to use for this grid.
-   */
-  readonly rootSchema: string;
+  readonly schema: ColumnSchema;
 
   /**
    * The data source that provides rows to the grid. Responsible for fetching,
@@ -386,6 +413,13 @@ export interface DataGridApi {
    * @returns The total row count
    */
   getRowCount(): number | undefined;
+
+  /**
+   * Get the DataSourceModel (columns, filters, sort, pagination, mode) used
+   * for the grid's current render. Combine with a datasource's own
+   * introspection (e.g. SQLDataSource.getQuery) to see what's being run.
+   */
+  getModel(): DataSourceModel;
 }
 
 function getOrCreateDataSource(data: DataSource | readonly Row[]): DataSource {
@@ -401,8 +435,7 @@ function getOrCreateDataSource(data: DataSource | readonly Row[]): DataSource {
  */
 interface FlatGridBuildContext {
   readonly attrs: DataGridAttrs;
-  readonly schema: SchemaRegistry;
-  readonly rootSchema: string;
+  readonly schema: ColumnSchema;
   readonly datasource: DataSource;
   readonly rowsResult: DataSourceRows;
   readonly aggregateSummaries?: Row;
@@ -420,8 +453,7 @@ interface FlatGridBuildContext {
  */
 interface PivotGridBuildContext {
   readonly attrs: DataGridAttrs;
-  readonly schema: SchemaRegistry;
-  readonly rootSchema: string;
+  readonly schema: ColumnSchema;
   readonly datasource: DataSource;
   readonly rowsResult: DataSourceRows;
   readonly aggregateSummaries?: Row;
@@ -449,10 +481,10 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     if (attrs.initialColumns) {
       this.columns = attrs.initialColumns;
     } else {
-      this.columns = getDefaultVisibleColumns(
-        attrs.schema,
-        attrs.rootSchema,
-      ).map((field) => ({id: shortUuid(), field}));
+      this.columns = getDefaultVisibleColumns(attrs.schema).map((field) => ({
+        id: shortUuid(),
+        field,
+      }));
     }
 
     if (attrs.initialFilters) {
@@ -478,7 +510,6 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       pivot,
       tree,
       schema,
-      rootSchema,
       structuredQueryCompatMode = false,
       toolbarItemsLeft,
       toolbarItemsRight,
@@ -549,13 +580,15 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
           datasource,
           model,
           schema,
-          rootSchema,
           this.pivot,
           format,
         );
       },
       getRowCount: () => {
         return rowsResult.totalRows;
+      },
+      getModel: () => {
+        return model;
       },
     });
 
@@ -568,7 +601,6 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       const pivotContext: PivotGridBuildContext = {
         attrs,
         schema,
-        rootSchema,
         datasource,
         rowsResult,
         aggregateSummaries: aggregateSummariesResult.data,
@@ -585,7 +617,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       const columnInfoCache = new Map(
         this.columns.map((col) => [
           col.field,
-          getColumnInfo(schema, rootSchema, col.field),
+          getColumnInfo(schema, col.field),
         ]),
       );
 
@@ -593,7 +625,6 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       const flatContext: FlatGridBuildContext = {
         attrs,
         schema,
-        rootSchema,
         datasource,
         rowsResult,
         aggregateSummaries: aggregateSummariesResult.data,
@@ -626,21 +657,14 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
         rightItems: [
           toolbarItemsRight,
           showExportButton &&
-            m(DataGridExportButton, {
+            m(ExportButton, {
               onExportData: (format) =>
-                this.formatData(
-                  datasource,
-                  model,
-                  schema,
-                  rootSchema,
-                  this.pivot,
-                  format,
-                ),
+                this.formatData(datasource, model, schema, this.pivot, format),
             }),
         ],
         filterChips: this.filters.map((filter, index) =>
           m(GridFilterChip, {
-            content: this.formatFilter(filter, schema, rootSchema),
+            content: this.formatFilter(filter, schema),
             onRemove: showFilterControls
               ? () => this.removeFilter(index, attrs)
               : undefined,
@@ -649,8 +673,8 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
         drillDownFields:
           this.pivot?.drillDown &&
           this.pivot.drillDown.map(({field, value}) => {
-            const colInfo = getColumnInfo(schema, rootSchema, field);
-            const titleParts = colInfo?.titleParts ?? field.split('.');
+            const colInfo = getColumnInfo(schema, field);
+            const titleParts = colInfo?.titleParts ?? splitPath(field);
             return {
               title: buildColumnTitle(titleParts),
               value: formatChipValue(value, colInfo?.cellFormatter),
@@ -698,7 +722,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
               title:
                 this.filters.length > 0
                   ? 'No results match your filters'
-                  : emptyStateMessage ?? 'No data available',
+                  : (emptyStateMessage ?? 'No data available'),
               fillHeight: true,
             },
             this.filters.length > 0 &&
@@ -736,11 +760,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     if (this.pivot && this.pivot.drillDown) {
       // DrillDown mode: use FlatModel with drilldown conditions as filters
       // This shows raw rows filtered to specific group values
-      const drillDownFilters: Filter[] = this.pivot.drillDown.map((dd) => ({
-        field: dd.field,
-        op: dd.value === null ? 'is null' : '=',
-        value: dd.value === null ? undefined : dd.value,
-      })) as Filter[];
+      const drillDownFilters = getPivotDrillDownFilters(this.pivot);
 
       const flatModel: FlatModel = {
         ...baseModel,
@@ -783,7 +803,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
             }
           })
           .sort((a, b) => (a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0)),
-        groupDisplay: this.pivot.groupDisplay ?? DEFAULT_GROUP_DISPLAY,
+        groupDisplay: getPivotGroupDisplay(this.pivot),
         expandedGroups: this.pivot.expandedGroups,
         collapsedGroups: this.pivot.collapsedGroups,
       };
@@ -993,6 +1013,13 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     attrs: DataGridAttrs,
   ): void {
     if (!this.pivot) return;
+
+    // Drill-down shows raw rows, so retain the flat columns and add any fields
+    // introduced by the pivot. Multiple aggregates over the same field map to
+    // one raw column.
+    const newColumns = getPivotDrillDownColumns(this.pivot, this.columns);
+    this.columns = newColumns;
+    attrs.onColumnsChanged?.(newColumns);
 
     const newPivot: Pivot = {...this.pivot, drillDown};
     this.pivot = newPivot;
@@ -1320,12 +1347,14 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
 
   /**
    * Renders the pivot toolbar items (expand/collapse buttons and flat/tree toggle).
-   * Only shown when in pivot mode and not drilling down.
+   * Only shown for multi-level pivots that are not drilling down.
    */
   private renderPivotToolbarItems(attrs: DataGridAttrs): m.Children {
-    if (!this.pivot || this.pivot.drillDown) return null;
+    if (!this.pivot || this.pivot.drillDown || this.pivot.groupBy.length <= 1) {
+      return null;
+    }
 
-    const mode = this.pivot.groupDisplay ?? DEFAULT_GROUP_DISPLAY;
+    const mode = getPivotGroupDisplay(this.pivot);
     const isFlat = mode === 'flat';
 
     return [
@@ -1465,7 +1494,6 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     const {
       attrs,
       schema,
-      rootSchema,
       datasource,
       aggregateSummaries,
       columnInfoCache,
@@ -1487,7 +1515,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       const colInfo = columnInfoCache.get(field);
 
       // Build column title with chevron separators
-      const titleParts = colInfo?.titleParts ?? field.split('.');
+      const titleParts = colInfo?.titleParts ?? splitPath(field);
       const titleContent = buildColumnTitle(titleParts);
 
       // Build menu items
@@ -1520,15 +1548,14 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
             canAdd: attrs.canAddColumns ?? true,
             canRemove: this.columns.length > 1,
             onRemove:
-              attrs.canRemoveColumns ?? true
+              (attrs.canRemoveColumns ?? true)
                 ? () => this.removeColumn(colId, attrs)
                 : undefined,
             schema,
-            rootSchema,
             visibleColumns: this.columns.map((c) => c.field),
             onAddColumn: (newField) =>
               this.addColumn(newField, attrs, colIndex),
-            dataSource: datasource,
+            datasource,
           }),
         attrs.addColumnMenuItems?.(field),
         m(MenuDivider),
@@ -1647,7 +1674,12 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
         return this.columns.map((col) => {
           const {field} = col;
           const alias = getColumnAlias(col);
-          const value = row[alias];
+          const value = maybeUndefined(row[alias]);
+
+          if (value === undefined) {
+            return renderMissingCell();
+          }
+
           const colInfo = columnInfoCache.get(field);
           const cellRenderer =
             colInfo?.cellRenderer ?? ((v: SqlValue) => renderCell(v, field));
@@ -1683,9 +1715,9 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
             GridCell,
             {
               actionButtons: colInfo?.actions?.(value, row),
-              align: isRich ? rendered.align ?? 'left' : getAligment(value),
+              align: isRich ? (rendered.align ?? 'left') : getAligment(value),
               nullish: isRich
-                ? rendered.nullish ?? value === null
+                ? (rendered.nullish ?? value === null)
                 : value === null,
               chevron,
               onChevronClick,
@@ -1782,7 +1814,6 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     const {
       attrs,
       schema,
-      rootSchema,
       datasource,
       aggregateSummaries,
       pivot,
@@ -1811,8 +1842,8 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       const isLastGroupBy = i === pivot.groupBy.length - 1;
 
       // Get column info from schema
-      const colInfo = getColumnInfo(schema, rootSchema, field);
-      const titleParts = colInfo?.titleParts ?? field.split('.');
+      const colInfo = getColumnInfo(schema, field);
+      const titleParts = colInfo?.titleParts ?? splitPath(field);
       const titleContent = buildColumnTitle(titleParts);
 
       // Build menu items for groupBy column
@@ -1836,11 +1867,10 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
         showPivotControls &&
           m(ColumnMenu, {
             schema,
-            rootSchema,
             visibleColumns: currentGroupByFields,
             onAddColumn: (newField) =>
               this.addGroupByColumn(newField, attrs, i),
-            dataSource: datasource,
+            datasource,
             canRemove: true,
             onRemove: () => this.removeGroupByColumn(i, attrs),
             removeLabel: 'Remove group by',
@@ -1895,7 +1925,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       if (agg.function === 'COUNT') {
         title = 'Count';
       } else {
-        colInfo = getColumnInfo(schema, rootSchema, agg.field);
+        colInfo = getColumnInfo(schema, agg.field);
         const fieldTitle = colInfo?.titleParts ?? [agg.field];
         title = buildColumnTitle(fieldTitle);
       }
@@ -1942,7 +1972,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
           groupByThisMenuItem,
           m(AggregateMenu, {
             schema,
-            rootSchema,
+            datasource,
             existingAggregates: pivot.aggregates,
             onAddAggregate: (func, aggField) =>
               this.addAggregateColumn(func, aggField, attrs, i),
@@ -2013,7 +2043,6 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     const {
       attrs,
       schema,
-      rootSchema,
       rowsResult,
       pivot,
       showPivotControls,
@@ -2034,7 +2063,8 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     const aggregates = pivot.aggregates ?? [];
     const numGroupBy = pivot.groupBy.length;
     // In flat mode, don't use multi-level UI (no chevrons, no indent)
-    const isMultiLevel = numGroupBy > 1 && pivot.groupDisplay === 'tree';
+    const isMultiLevel =
+      numGroupBy > 1 && getPivotGroupDisplay(pivot) === 'tree';
 
     return rowIndices
       .map((index) => {
@@ -2068,7 +2098,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
           }
 
           // Get cell renderer from schema
-          const colInfo = getColumnInfo(schema, rootSchema, field);
+          const colInfo = getColumnInfo(schema, field);
           const cellRenderer =
             colInfo?.cellRenderer ?? ((v: SqlValue) => renderCell(v, field));
           const rendered = cellRenderer(value, row);
@@ -2109,9 +2139,9 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
             m(
               GridCell,
               {
-                align: isRich ? rendered.align ?? 'left' : getAligment(value),
+                align: isRich ? (rendered.align ?? 'left') : getAligment(value),
                 nullish: isRich
-                  ? rendered.nullish ?? value === null
+                  ? (rendered.nullish ?? value === null)
                   : value === null,
                 className: classNames(
                   'pf-data-grid__groupby-column',
@@ -2189,7 +2219,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
           // For aggregates with a field, we can use the field's cell renderer
           let cellRenderer =
             'field' in agg
-              ? getColumnInfo(schema, rootSchema, agg.field)?.cellRenderer
+              ? getColumnInfo(schema, agg.field)?.cellRenderer
               : undefined;
           cellRenderer ??= (v: SqlValue) => renderCell(v, alias);
 
@@ -2201,9 +2231,9 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
               GridCell,
               {
                 // Default to 'right' for aggregates, but allow override
-                align: isRich ? rendered.align ?? 'left' : getAligment(value),
+                align: isRich ? (rendered.align ?? 'left') : getAligment(value),
                 nullish: isRich
-                  ? rendered.nullish ?? value === null
+                  ? (rendered.nullish ?? value === null)
                   : value === null,
               },
               isRich ? rendered.content : rendered,
@@ -2219,8 +2249,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
   private async formatData(
     dataSource: DataSource,
     model: DataSourceModel,
-    schema: SchemaRegistry | undefined,
-    rootSchema: string | undefined,
+    schema: ColumnSchema,
     pivot: Pivot | undefined,
     format: 'tsv' | 'json' | 'markdown' = 'tsv',
   ): Promise<string> {
@@ -2250,10 +2279,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       // Add groupBy column names (keyed by ID)
       for (const groupByCol of pivot.groupBy) {
         const {id, field} = groupByCol;
-        const colInfo =
-          schema && rootSchema
-            ? getColumnInfo(schema, rootSchema, field)
-            : undefined;
+        const colInfo = getColumnInfo(schema, field);
         columnNames[id] = colInfo?.def.titleString ?? field;
       }
 
@@ -2263,10 +2289,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
         if (agg.function === 'COUNT') {
           columnNames[alias] = 'COUNT';
         } else if ('field' in agg) {
-          const colInfo =
-            schema && rootSchema
-              ? getColumnInfo(schema, rootSchema, agg.field)
-              : undefined;
+          const colInfo = getColumnInfo(schema, agg.field);
           const fieldTitle = colInfo?.def.titleString ?? agg.field;
           columnNames[alias] = `${agg.function}(${fieldTitle})`;
         }
@@ -2278,7 +2301,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
 
       // Build column names using field paths for schema lookup
       const fieldPaths = this.columns.map((c) => c.field);
-      columnNames = buildColumnNames(schema, rootSchema, fieldPaths);
+      columnNames = buildColumnNames(schema, fieldPaths);
 
       // Map aliases to field paths for column name lookup
       for (let i = 0; i < columns.length; i++) {
@@ -2296,13 +2319,7 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
       aliasToField[getColumnAlias(col)] = col.field;
     }
 
-    const formattedRows = formatRows(
-      rows,
-      schema,
-      rootSchema,
-      columns,
-      aliasToField,
-    );
+    const formattedRows = formatRows(rows, schema, columns, aliasToField);
 
     // Format the data based on the requested format
     switch (format) {
@@ -2315,16 +2332,12 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
     }
   }
 
-  private formatFilter(
-    filter: Filter,
-    schema: SchemaRegistry,
-    rootSchema: string,
-  ): m.Children {
+  private formatFilter(filter: Filter, schema: ColumnSchema): m.Children {
     // Resolve column info once for all properties
-    const colInfo = getColumnInfo(schema, rootSchema, filter.field);
+    const colInfo = getColumnInfo(schema, filter.field);
 
     // Build column title with chevron separators
-    const titleParts = colInfo?.titleParts ?? filter.field.split('.');
+    const titleParts = colInfo?.titleParts ?? splitPath(filter.field);
     const columnDisplay = buildColumnTitle(titleParts);
 
     if ('value' in filter) {
@@ -2357,10 +2370,8 @@ export class DataGrid implements m.ClassComponent<DataGridAttrs> {
   }
 }
 
-export function renderCell(value: SqlValue, columnName?: string) {
-  if (value === undefined) {
-    return '';
-  } else if (value instanceof Uint8Array) {
+export function renderCell(value: SqlValue, columnName?: string): m.Children {
+  if (value instanceof Uint8Array) {
     return m(
       Anchor,
       {
@@ -2376,6 +2387,24 @@ export function renderCell(value: SqlValue, columnName?: string) {
   } else {
     return String(value);
   }
+}
+
+// Renders a cell for missing data (undefined value) with a placeholder message
+// and a distinct style. This is almost certainly a developer error
+// (misconfigured schema or initial column list), so we want to make it obvious
+// in the UI. We could throw, but throwing in the render loop takes the whole UI
+// down. We should attempt to handle errors in render loops more gracefully in
+// the future but for now this is better than the alternative which is a blank
+// cell.
+function renderMissingCell(): m.Children {
+  return m(
+    GridCell,
+    {
+      className: 'pf-datagrid-cell--missing',
+      align: 'center',
+    },
+    'no data',
+  );
 }
 
 function getAligment(value: SqlValue): 'left' | 'right' | 'center' {

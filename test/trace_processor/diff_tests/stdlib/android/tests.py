@@ -1352,15 +1352,17 @@ class AndroidStdlib(TestSuite):
         upid,
         pid,
         process_name,
-        event_type
+        event_type,
+        event_action,
+        event_time
         FROM android_input_events
         WHERE end_to_end_latency_dur IS NOT NULL
         ORDER BY dispatch_ts
       """,
         out=Csv("""
-        "total_latency_dur","handling_latency_dur","dispatch_latency_dur","end_to_end_latency_dur","tid","thread_name","upid","pid","process_name","event_type"
-        3422992,2937418,363000,51007097,4816,"ndroid.settings",344,4816,"com.android.settings","MOTION"
-        2139405,1956366,81387,50642855,4816,"ndroid.settings",344,4816,"com.android.settings","MOTION"
+        "total_latency_dur","handling_latency_dur","dispatch_latency_dur","end_to_end_latency_dur","tid","thread_name","upid","pid","process_name","event_type","event_action","event_time"
+        3422992,2937418,363000,51007097,4816,"ndroid.settings",344,4816,"com.android.settings","MOTION","HOVER_MOVE",12394215174000
+        2139405,1956366,81387,50642855,4816,"ndroid.settings",344,4816,"com.android.settings","MOTION","SCROLL",12394215174000
       """))
 
   def test_job_scheduler_events(self):
@@ -1683,11 +1685,12 @@ class AndroidStdlib(TestSuite):
 100000000000,5000000000,5000000000,"kernel_wakelock_3","kernel",3000000,0.000600
 100000000000,5000000000,5000000000,"native_wakelock_2","native",2000000,0.000400
 105000000000,5000000000,2000000000,"kernel_wakelock_1","kernel",10000000,0.005000
-105000000000,5000000000,2000000000,"kernel_wakelock_3","kernel",0,0.000000
-105000000000,5000000000,2000000000,"native_wakelock_2","native",0,0.000000
-110000000000,5000000000,5000000000,"kernel_wakelock_1","kernel",100000000,0.020000
-110000000000,5000000000,5000000000,"kernel_wakelock_3","kernel",300000000,0.060000
-110000000000,5000000000,5000000000,"native_wakelock_2","native",200000000,0.040000
+105000000000,10000000000,7000000000,"kernel_wakelock_3","kernel",0,0.000000
+105000000000,10000000000,7000000000,"native_wakelock_2","native",0,0.000000
+110000000000,5000000000,5000000000,"kernel_wakelock_1","kernel",10000000,0.002000
+115000000000,5000000000,5000000000,"kernel_wakelock_1","kernel",100000000,0.020000
+115000000000,5000000000,5000000000,"kernel_wakelock_3","kernel",300000000,0.060000
+115000000000,5000000000,5000000000,"native_wakelock_2","native",200000000,0.040000
         """))
 
   def test_android_device_name_multi_machine(self):

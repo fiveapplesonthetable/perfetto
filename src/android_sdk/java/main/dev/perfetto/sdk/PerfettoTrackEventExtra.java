@@ -26,6 +26,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * @hide
  */
 final class PerfettoTrackEventExtra {
+  static {
+    PerfettoNativeLibrary.load();
+  }
+
   private final long mPtr;
 
   PerfettoTrackEventExtra(PerfettoNativeMemoryCleaner memoryCleaner) {
@@ -266,6 +270,47 @@ final class PerfettoTrackEventExtra {
     private final boolean mIsNameStatic;
 
     CounterTrack(
+        String name,
+        long parentUuid,
+        boolean isNameStatic,
+        PerfettoNativeMemoryCleaner memoryCleaner) {
+      mPtr = native_init(name, parentUuid, isNameStatic);
+      mExtraPtr = native_get_extra_ptr(mPtr);
+      mName = name;
+      mIsNameStatic = isNameStatic;
+      memoryCleaner.registerNativeAllocation(this, mPtr, native_delete());
+    }
+
+    @Override
+    public long getPtr() {
+      return mExtraPtr;
+    }
+
+    public String getName() {
+      return mName;
+    }
+
+    public boolean isNameStatic() {
+      return mIsNameStatic;
+    }
+
+    @FastNative
+    private static native long native_init(String name, long parentUuid, boolean isNameStatic);
+
+    @CriticalNative
+    private static native long native_delete();
+
+    @CriticalNative
+    private static native long native_get_extra_ptr(long ptr);
+  }
+
+  static final class StateTrack implements PerfettoPointer {
+    private final long mPtr;
+    private final long mExtraPtr;
+    private final String mName;
+    private final boolean mIsNameStatic;
+
+    StateTrack(
         String name,
         long parentUuid,
         boolean isNameStatic,

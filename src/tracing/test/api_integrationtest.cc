@@ -1749,13 +1749,6 @@ TEST_P(PerfettoApiTest, ClearIncrementalStateMultipleInstances) {
 }
 
 TEST_P(PerfettoApiTest, ClearIncrementalStateTraitSuccess) {
-  if constexpr (
-      !PERFETTO_FLAGS_TRACK_EVENT_INCREMENTAL_STATE_CLEAR_NOT_DESTROY) {
-    GTEST_SKIP()
-        << "Test requires flag to be set:"
-           "PERFETTO_FLAGS_TRACK_EVENT_INCREMENTAL_STATE_CLEAR_NOT_DESTROY";
-  }
-
   // Test that when the ClearIncrementalState trait method returns true,
   // the state is cleared in place (not destroyed and recreated).
 
@@ -5376,6 +5369,53 @@ TEST_P(PerfettoApiTest, OnFlushAsync) {
       Contains(Property(
           &perfetto::protos::gen::TracePacket::for_testing,
           Property(&perfetto::protos::gen::TestEvent::str, "on-flush"))));
+}
+
+TEST_P(PerfettoApiTest, TraceContextDropCount) {
+  if (GetParam() == perfetto::kSystemBackend) {
+    GTEST_SKIP();
+  }
+  auto* data_source = &data_sources_["my_data_source"];
+  perfetto::TraceConfig cfg;
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("my_data_source");
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  WaitableTestEvent on_flush_started;
+  WaitableTestEvent on_flush_unblocked;
+  data_source->on_flush_callback = [&](perfetto::FlushFlags) {
+    on_flush_started.Notify();
+    on_flush_unblocked.Wait();
+  };
+
+  // Block the internal perfetto thread inside the OnFlush callback. The
+  // in-process tracing service runs on the same thread, so it cannot free
+  // shared memory buffer chunks while blocked: writing enough data below is
+  // guaranteed to exhaust the buffer and cause data loss.
+  tracing_session->get()->Flush([](bool) {});
+  on_flush_started.Wait();
+
+  uint64_t initial_drop_count = 0;
+  uint64_t final_drop_count = 0;
+  MockDataSource::Trace([&](MockDataSource::TraceContext ctx) {
+    initial_drop_count = ctx.drop_count();
+    // Write way more data than the shared memory buffer can hold (the default
+    // shared memory buffer size is 256 KiB).
+    std::string large_str(1024, 'x');
+    for (size_t i = 0; i < 2048; i++) {
+      ctx.NewTracePacket()->set_for_testing()->set_str(large_str);
+    }
+    final_drop_count = ctx.drop_count();
+  });
+  on_flush_unblocked.Notify();
+
+  EXPECT_EQ(initial_drop_count, 0u);
+  EXPECT_GT(final_drop_count, 0u);
+
+  tracing_session->get()->StopBlocking();
+  data_source->on_stop.Wait();
 }
 
 // Regression test for b/139110180. Checks that GetDataSourceLocked() can be

@@ -13,7 +13,9 @@
 # limitations under the License.
 
 # One manual step that finalizes a release. It:
-#   1. Attaches the LUCI-built binaries + SDK source zips to the draft release.
+#   1. Attaches the LUCI-built binaries + SDK source zips, plus a self-hostable
+#      UI zip (the exact ui.perfetto.dev build for this tag), to the draft
+#      release.
 #   2. Rolls the prebuilt manifests to this version (tools/release/roll-prebuilts)
 #      and opens a PR to main. roll-prebuilts also stamps the agent-skills
 #      version, so the prebuilts and the bundle move together.
@@ -114,6 +116,12 @@ jobs:
         run: |
           tools/release/package-github-release-artifacts --yes "$VERSION"
 
+      - name: Package UI artifact
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          tools/release/package-ui-github-release-artifact "$VERSION"
+
       - name: Upload assets to draft release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -192,6 +200,14 @@ jobs:
             --skills-src "$SKILLS_SRC"
           git worktree remove --force /tmp/release-tag-tree
 
+          # Attach a copy-paste installable skill zip to the release for
+          # offline installs (#6515). Unzipping yields a `perfetto/` skill
+          # directory to drop into any agent's skills directory.
+          (cd /tmp/ai-agents-tree/plugins/perfetto/skills && \
+            zip -qr /tmp/perfetto-ai-skill.zip perfetto)
+          gh release upload "$VERSION" /tmp/perfetto-ai-skill.zip \
+            --repo "$REPO" --clobber
+
           BRANCH="dev/github-bot/ai-agents-bundle"
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 
@@ -238,11 +254,70 @@ jobs:
             --title "Update ai-agents skills bundle ($VERSION)" \
             --body "$(cat <<EOF
           Automated agent-skills bundle for **$VERSION** (RFC-0026): this tag's
-          \`skills/\` plus the freshly rolled \`bin/trace_processor\`, the
-          per-agent manifests, and the \`agents-install\` fallback installer.
+          skill tree (with the freshly rolled \`trace_processor\` wrapper
+          bundled inside it at \`plugins/perfetto/skills/perfetto/bin/\`) and
+          the per-agent manifests.
           The version pin \`refs/ai-agent-tag/$VERSION\` already points at this
           bundle commit (\`$BUNDLE_SHA\`). On merge, \`ai-agents\` advances and
           installed agents pick up the update through their normal channels.
           EOF
           )"
           echo "::notice::Opened ai-agents bundle PR and tagged $VERSION."
+
+  # Builds and uploads the perfetto package to PyPI via Trusted Publishing.
+  # Requires a `pypi` Environment and a PyPI trusted publisher for
+  # (google/perfetto, finalize-release.yml, env: pypi). See
+  # https://docs.pypi.org/trusted-publishers/.
+  publish-pypi:
+    name: Publish Python package to PyPI
+    needs: finalize
+    runs-on: ubuntu-latest
+    environment: pypi
+    timeout-minutes: 15
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing.
+    steps:
+      - name: Validate input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must match vX.Y (got: $VERSION)"
+            exit 1
+          fi
+
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build sdist + wheel
+        env:
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # setup.py derives the version from the CHANGELOG's first vX.Y entry;
+          # fail early if it doesn't match the tag being published.
+          TOP_VER="$(grep -m1 -oE '^v[0-9]+\.[0-9]+' CHANGELOG)"
+          if [[ "$TOP_VER" != "$VERSION" ]]; then
+            echo "::error::CHANGELOG top release entry ($TOP_VER) != tag $VERSION. The CHANGELOG's first vX.Y entry must be $VERSION."
+            exit 1
+          fi
+          # download_url is PyPI metadata only; point it at this tag's archive.
+          ARCHIVE="https://github.com/${REPO}/archive/refs/tags/${VERSION}.zip"
+          sed -i -E "s#download_url\s*=\s*'[^']*'#download_url='${ARCHIVE}'#" \
+            python/setup.py
+          python -m pip install --upgrade build
+          python -m build python
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+          skip-existing: true  # Safe re-runs: skip a version already on PyPI.
