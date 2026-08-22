@@ -386,6 +386,18 @@ class FtraceParser {
   const StringId cpu_id_;
   const StringId suspend_resume_minimal_slice_name_id_;
   const StringId inode_arg_id_;
+  // Names for routing generic rust_binder/* ftrace events into BinderTracker.
+  const StringId rust_binder_transaction_id_;
+  const StringId rust_binder_transaction_received_id_;
+  const StringId rust_binder_transaction_alloc_buf_id_;
+  const StringId rust_binder_debug_id_;
+  const StringId rust_binder_target_node_id_;
+  const StringId rust_binder_to_proc_id_;
+  const StringId rust_binder_reply_id_;
+  const StringId rust_binder_flags_id_;
+  const StringId rust_binder_code_id_;
+  const StringId rust_binder_data_size_id_;
+  const StringId rust_binder_offsets_size_id_;
   const StringId signal_generate_id_;
   const StringId signal_deliver_id_;
   const StringId lmk_id_;

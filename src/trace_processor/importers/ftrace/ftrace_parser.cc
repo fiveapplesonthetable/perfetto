@@ -446,6 +446,21 @@ FtraceParser::FtraceParser(TraceProcessorContext* context,
       suspend_resume_minimal_slice_name_id_(
           context->storage->InternString("Suspended")),
       inode_arg_id_(context->storage->InternString("inode")),
+      rust_binder_transaction_id_(
+          context->storage->InternString("rust_binder_transaction")),
+      rust_binder_transaction_received_id_(
+          context->storage->InternString("rust_binder_transaction_received")),
+      rust_binder_transaction_alloc_buf_id_(
+          context->storage->InternString("rust_binder_transaction_alloc_buf")),
+      rust_binder_debug_id_(context->storage->InternString("debug_id")),
+      rust_binder_target_node_id_(context->storage->InternString("target_node")),
+      rust_binder_to_proc_id_(context->storage->InternString("to_proc")),
+      rust_binder_reply_id_(context->storage->InternString("reply")),
+      rust_binder_flags_id_(context->storage->InternString("flags")),
+      rust_binder_code_id_(context->storage->InternString("code")),
+      rust_binder_data_size_id_(context->storage->InternString("data_size")),
+      rust_binder_offsets_size_id_(
+          context->storage->InternString("offsets_size")),
       signal_generate_id_(context->storage->InternString("signal_generate")),
       signal_deliver_id_(context->storage->InternString("signal_deliver")),
       lmk_id_(context->storage->InternString("mem.lmk")),
@@ -1724,6 +1739,13 @@ void FtraceParser::ParseLegacyGenericFtrace(int64_t ts,
   ArgsTracker args_tracker(context_);
   auto inserter = args_tracker.AddArgsTo(id);
 
+  const bool is_rust_binder =
+      event_id == rust_binder_transaction_id_ ||
+      event_id == rust_binder_transaction_received_id_ ||
+      event_id == rust_binder_transaction_alloc_buf_id_;
+  int64_t rb_debug_id = 0, rb_target_node = 0, rb_to_proc = 0, rb_reply = 0,
+          rb_flags = 0, rb_code = 0, rb_data_size = 0, rb_offsets_size = 0;
+
   for (auto it = evt.field(); it; ++it) {
     protos::pbzero::GenericFtraceEvent::Field::Decoder fld(*it);
     auto field_name_id = context_->storage->InternString(fld.name());
@@ -1736,6 +1758,49 @@ void FtraceParser::ParseLegacyGenericFtrace(int64_t ts,
     } else if (fld.has_str_value()) {
       StringId str_value = context_->storage->InternString(fld.str_value());
       inserter.AddArg(field_name_id, Variadic::String(str_value));
+    }
+    if (PERFETTO_UNLIKELY(is_rust_binder)) {
+      int64_t v = fld.has_int_value()
+                      ? fld.int_value()
+                      : static_cast<int64_t>(fld.uint_value());
+      if (field_name_id == rust_binder_debug_id_)
+        rb_debug_id = v;
+      else if (field_name_id == rust_binder_target_node_id_)
+        rb_target_node = v;
+      else if (field_name_id == rust_binder_to_proc_id_)
+        rb_to_proc = v;
+      else if (field_name_id == rust_binder_reply_id_)
+        rb_reply = v;
+      else if (field_name_id == rust_binder_flags_id_)
+        rb_flags = v;
+      else if (field_name_id == rust_binder_code_id_)
+        rb_code = v;
+      else if (field_name_id == rust_binder_data_size_id_)
+        rb_data_size = v;
+      else if (field_name_id == rust_binder_offsets_size_id_)
+        rb_offsets_size = v;
+    }
+  }
+
+  // Route generic rust_binder/* events into BinderTracker so the binder tables
+  // (e.g. android_binder_txns) work on traces from the Rust binder driver.
+  if (PERFETTO_UNLIKELY(is_rust_binder)) {
+    auto* binder = BinderTracker::GetOrCreate(context_);
+    if (event_id == rust_binder_transaction_id_) {
+      std::string code_str =
+          base::IntToHexString(static_cast<uint32_t>(rb_code)) +
+          " Java Layer Dependent";
+      binder->Transaction(ts, tid, static_cast<int32_t>(rb_debug_id),
+                          static_cast<int32_t>(rb_target_node),
+                          static_cast<uint32_t>(rb_to_proc), /*dest_tid=*/0,
+                          rb_reply == 1, static_cast<uint32_t>(rb_flags),
+                          context_->storage->InternString(
+                              base::StringView(code_str)));
+    } else if (event_id == rust_binder_transaction_received_id_) {
+      binder->TransactionReceived(ts, tid, static_cast<int32_t>(rb_debug_id));
+    } else {
+      binder->TransactionAllocBuf(ts, tid, static_cast<uint64_t>(rb_data_size),
+                                  static_cast<uint64_t>(rb_offsets_size));
     }
   }
 }
@@ -1751,6 +1816,60 @@ void FtraceParser::ParseGenericFtrace(uint32_t event_proto_id,
   // tracks for them automatically (no perfetto code changes needed).
   if (PERFETTO_LIKELY(ts >= soft_drop_ftrace_data_before_ts_)) {
     generic_tracker_->MaybeParseAsTrackEvent(event_proto_id, ts, tid, decoder);
+  }
+
+  // Route generic rust_binder/* events into BinderTracker. The Rust binder
+  // driver emits rust_binder_* tracepoints (captured as generic ftrace events)
+  // instead of the C driver's typed binder_* events, so without this the binder
+  // tables (e.g. android_binder_txns) would be empty on such traces.
+  if (GenericFtraceTracker::GenericEvent* rb =
+          generic_tracker_->GetEvent(event_proto_id);
+      rb != nullptr &&
+      (rb->name == rust_binder_transaction_id_ ||
+       rb->name == rust_binder_transaction_received_id_ ||
+       rb->name == rust_binder_transaction_alloc_buf_id_)) {
+    int64_t debug_id = 0, target_node = 0, to_proc = 0, reply = 0, flags = 0,
+            code = 0, data_size = 0, offsets_size = 0;
+    ProtoDecoder rb_dec(blob);
+    for (auto f = rb_dec.ReadField(); f.valid(); f = rb_dec.ReadField()) {
+      if (f.id() >= rb->fields.size())
+        continue;
+      StringId fn = rb->fields[f.id()].name;
+      int64_t v = f.as_int64();
+      if (fn == rust_binder_debug_id_)
+        debug_id = v;
+      else if (fn == rust_binder_target_node_id_)
+        target_node = v;
+      else if (fn == rust_binder_to_proc_id_)
+        to_proc = v;
+      else if (fn == rust_binder_reply_id_)
+        reply = v;
+      else if (fn == rust_binder_flags_id_)
+        flags = v;
+      else if (fn == rust_binder_code_id_)
+        code = v;
+      else if (fn == rust_binder_data_size_id_)
+        data_size = v;
+      else if (fn == rust_binder_offsets_size_id_)
+        offsets_size = v;
+    }
+    auto* binder = BinderTracker::GetOrCreate(context_);
+    if (rb->name == rust_binder_transaction_id_) {
+      std::string code_str =
+          base::IntToHexString(static_cast<uint32_t>(code)) +
+          " Java Layer Dependent";
+      binder->Transaction(ts, tid, static_cast<int32_t>(debug_id),
+                          static_cast<int32_t>(target_node),
+                          static_cast<uint32_t>(to_proc), /*dest_tid=*/0,
+                          reply == 1, static_cast<uint32_t>(flags),
+                          context_->storage->InternString(
+                              base::StringView(code_str)));
+    } else if (rb->name == rust_binder_transaction_received_id_) {
+      binder->TransactionReceived(ts, tid, static_cast<int32_t>(debug_id));
+    } else {
+      binder->TransactionAllocBuf(ts, tid, static_cast<uint64_t>(data_size),
+                                  static_cast<uint64_t>(offsets_size));
+    }
   }
 
   if (PERFETTO_UNLIKELY(!context_->config.ingest_ftrace_in_raw_table)) {
