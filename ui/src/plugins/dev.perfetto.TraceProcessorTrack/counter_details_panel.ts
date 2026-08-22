@@ -30,6 +30,8 @@ import {Tree, TreeNode} from '../../widgets/tree';
 import {Timestamp} from '../../components/widgets/timestamp';
 import {DurationWidget} from '../../components/widgets/duration';
 import type {TrackEventSelection} from '../../public/selection';
+import {MenuItem} from '../../widgets/menu';
+import {copyToClipboard} from '../../base/clipboard';
 import {hasArgs, renderArguments} from '../../components/details/args';
 import {asArgSetId} from '../../components/sql_utils/core_types';
 import {type ArgsDict, getArgs} from '../../components/sql_utils/args';
@@ -114,16 +116,60 @@ export class CounterDetailsPanel implements TrackEventDetailsPanel {
     ];
   }
 
+  // Renders the counter's args. utid-valued args (e.g. a process-scoped
+  // counter's responsible thread) additionally get menu items to jump to, or
+  // copy the query for, the thread state the thread was in when this sample was
+  // recorded.
+  private renderArgs(info: CounterDetails): m.Children {
+    return renderArguments(this.trace, info.args ?? {}, (key, value) => {
+      if (
+        (key === 'utid' || key === 'end_utid') &&
+        (typeof value === 'number' || typeof value === 'bigint')
+      ) {
+        return this.threadStateAtSampleMenuItems(BigInt(value), info.ts);
+      }
+      return undefined;
+    });
+  }
+
+  // Finds the thread state that overlaps the counter sample: the last state the
+  // thread entered at or before the sample's timestamp (thread_state intervals
+  // are contiguous, so this is the state running when the sample was taken).
+  private threadStateAtSampleMenuItems(utid: bigint, ts: time): m.Children {
+    const query = `
+      select id
+      from thread_state
+      where utid = ${utid} and ts <= ${ts}
+      order by ts desc
+      limit 1`;
+    return [
+      m(MenuItem, {
+        label: 'Go to thread state at this time',
+        icon: 'call_made',
+        onclick: async () => {
+          const result = await this.engine.query(query);
+          const it = result.iter({id: NUM});
+          if (it.valid()) {
+            this.trace.selection.selectSqlEvent('thread_state', it.id, {
+              scrollToSelection: true,
+            });
+          }
+        },
+      }),
+      m(MenuItem, {
+        label: 'Copy query',
+        icon: 'content_copy',
+        onclick: () => copyToClipboard(query.trim()),
+      }),
+    ];
+  }
+
   render() {
     const counterInfo = this.counterDetails;
     if (counterInfo) {
       const args =
         hasArgs(counterInfo.args) &&
-        m(
-          Section,
-          {title: 'Arguments'},
-          m(Tree, renderArguments(this.trace, counterInfo.args)),
-        );
+        m(Section, {title: 'Arguments'}, m(Tree, this.renderArgs(counterInfo)));
 
       return m(
         DetailsShell,
