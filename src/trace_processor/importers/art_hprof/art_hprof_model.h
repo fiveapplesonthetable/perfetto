@@ -211,12 +211,12 @@ class Object {
   // bytes themselves: on native builds, where the trace is mmapped, no copy
   // of the data is ever made. It is released when the graph is torn down at
   // the end of the import, so it never pins trace chunks beyond that.
-  void SetRawData(TraceBlobView data) { raw_data_ = std::move(data); }
+  void SetRawData(TraceBlobView data) { data_ = std::move(data); }
 
-  const uint8_t* GetRawData() const { return raw_data_.data(); }
-  size_t GetRawDataSize() const { return raw_data_.size(); }
-  const TraceBlobView& GetRawDataView() const { return raw_data_; }
-  void ClearRawData() { raw_data_ = TraceBlobView(); }
+  const uint8_t* GetRawData() const { return data_.data(); }
+  size_t GetRawDataSize() const { return data_.size(); }
+  const TraceBlobView& GetRawDataView() const { return data_; }
+  void ClearRawData() { data_ = TraceBlobView(); }
 
   void AddReference(StringId field_name,
                     ObjectIndex target_index,
@@ -270,15 +270,20 @@ class Object {
   }
 
   // Primitive array payload, decoded to native endianness at parse time. This
-  // is the only copy of the data: it is handed to the storage as-is.
+  // is the only copy of the data: it is handed to the storage as-is. It shares
+  // the same storage slot as the instance/object-array raw data (an object is
+  // never both a primitive array and something else), so the accessors are
+  // guarded by the object type.
   void SetArrayData(TraceBlobView data, uint32_t element_count) {
-    array_data_ = std::move(data);
+    data_ = std::move(data);
     array_element_count_ = element_count;
   }
 
-  bool HasArrayData() const { return array_data_.size() > 0; }
+  bool HasArrayData() const {
+    return type_ == ObjectType::kPrimitiveArray && data_.size() > 0;
+  }
 
-  const TraceBlobView& GetArrayData() const { return array_data_; }
+  const TraceBlobView& GetArrayData() const { return data_; }
 
   size_t GetArrayElementCount() const { return array_element_count_; }
 
@@ -292,8 +297,11 @@ class Object {
   std::optional<HprofHeapRootTag> root_type_;
   StringId heap_type_;
 
-  // Data storage - used differently based on object type
-  TraceBlobView raw_data_;
+  // Instance/object-array raw bytes (a view onto the trace) or primitive-array
+  // payload (an owned, native-endian buffer). These uses are mutually
+  // exclusive by object type, so they share one slot; the accessors above are
+  // guarded by type_.
+  TraceBlobView data_;
   std::vector<Reference> references_;
   std::vector<PendingReference> pending_references_;
   uint32_t array_element_count_ = 0;
@@ -306,7 +314,6 @@ class Object {
 
   // Field values
   std::vector<Field> fields_;
-  TraceBlobView array_data_;
 };
 
 // An object-typed field, at its fixed offset in the instance data.
