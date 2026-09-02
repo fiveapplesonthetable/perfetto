@@ -156,6 +156,11 @@ class HeapGraphResolver {
   // (referent index, thunk index) of every sun.misc.Cleaner, collected during
   // ExtractAllObjectData() and consumed by CalculateNativeSizes().
   std::vector<std::pair<ObjectIndex, ObjectIndex>> cleaners_;
+
+  // Interned "[i]" array-element field names, cached by index and reused
+  // across all arrays to avoid re-formatting and re-interning per element.
+  std::vector<StringId> array_index_names_;
+  StringId ArrayIndexName(size_t index);
 };
 
 // Main parser class that builds a heap graph from HPROF data

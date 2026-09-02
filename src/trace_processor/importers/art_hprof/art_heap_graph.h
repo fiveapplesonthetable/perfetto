@@ -52,6 +52,12 @@ class HeapGraph {
 
   const ObjectStore& GetObjects() const { return objects_; }
 
+  // Release transient graph structures mid-population so they are not resident
+  // while the large output tables are built.
+  void ClearObjectIndex() { objects_.ClearIndex(); }
+  void ClearObjectEdges() { objects_.ClearEdges(); }
+  void ClearObjectScalars() { objects_.ClearScalars(); }
+
   // Instance field layout of a class hierarchy, or nullptr if unknown.
   const ClassFieldLayout* GetClassFields(uint64_t class_id) const {
     return class_fields_.Find(class_id);
@@ -76,7 +82,7 @@ class HeapGraph {
     heap_id_to_name_.Clear();
   }
 
-  static std::string GetRootTypeName(HprofHeapRootTag root_type_id) {
+  static const char* GetRootTypeName(HprofHeapRootTag root_type_id) {
     switch (root_type_id) {
       case HprofHeapRootTag::kJniGlobal:
         return "JNI_GLOBAL";

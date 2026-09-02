@@ -84,7 +84,7 @@ void HeapGraphResolver::ExtractAllObjectData() {
 
   const uint32_t id_size = header_.GetIdSize();
   for (ObjectIndex i = 0; i < objects_.size(); ++i) {
-    auto& obj = objects_.at(i);
+    Object obj = objects_.at(i);
     auto* cls = classes_.Find(obj.GetClassId());
     switch (obj.GetObjectType()) {
       case ObjectType::kInstance:
@@ -109,7 +109,7 @@ void HeapGraphResolver::ExtractAllObjectData() {
         if (cleaner_class_id != 0 && obj.GetClassId() == cleaner_class_id) {
           ObjectIndex referent = kInvalidObjectIndex;
           ObjectIndex thunk = kInvalidObjectIndex;
-          for (const auto& ref : obj.GetReferences()) {
+          for (const auto& ref : objects_.GetReferences(obj)) {
             if (ref.field_name == referent_field_id_) {
               referent = ref.target_index;
             } else if (ref.field_name == cleaner_thunk_field_id_) {
@@ -136,12 +136,13 @@ void HeapGraphResolver::ExtractAllObjectData() {
         }
         break;
     }
+  }
 
-    uint64_t obj_id = obj.GetId();
-    auto pending = roots_.Find(obj_id);
-    if (pending) {
-      obj.SetRootType(*pending);
-      roots_.Erase(obj_id);
+  // Iterate the (few) roots rather than probing the roots map for every object.
+  for (auto it = roots_.GetIterator(); it; ++it) {
+    ObjectIndex idx = objects_.FindIndex(it.key());
+    if (idx != kInvalidObjectIndex) {
+      objects_.at(idx).SetRootType(it.value());
     }
   }
 }
@@ -153,7 +154,7 @@ void HeapGraphResolver::MarkReachableObjects() {
   std::vector<ObjectIndex> queue;
 
   for (ObjectIndex i = 0; i < objects_.size(); ++i) {
-    auto& obj = objects_.at(i);
+    Object obj = objects_.at(i);
     if (obj.IsRoot()) {
       queue.push_back(i);
       obj.SetReachable();
@@ -162,13 +163,13 @@ void HeapGraphResolver::MarkReachableObjects() {
   }
 
   for (size_t head = 0; head < queue.size(); ++head) {
-    Object& obj = objects_.at(queue[head]);
+    Object obj = objects_.at(queue[head]);
     int32_t next_distance = obj.GetRootDistance() + 1;
-    for (const auto& ref : obj.GetReferences()) {
+    for (const auto& ref : objects_.GetReferences(obj)) {
       if (ref.target_index == kInvalidObjectIndex || ref.is_weak_referent) {
         continue;
       }
-      Object& target = objects_.at(ref.target_index);
+      Object target = objects_.at(ref.target_index);
       if (!target.IsReachable()) {
         target.SetReachable();
         target.SetRootDistance(next_distance);
@@ -178,23 +179,30 @@ void HeapGraphResolver::MarkReachableObjects() {
   }
 }
 
+StringId HeapGraphResolver::ArrayIndexName(size_t index) {
+  if (index >= array_index_names_.size()) {
+    char buf[24];
+    for (size_t i = array_index_names_.size(); i <= index; ++i) {
+      size_t len = base::SprintfTrunc(buf, sizeof(buf), "[%zu]", i);
+      array_index_names_.push_back(
+          context_->storage->InternString(base::StringView(buf, len)));
+    }
+  }
+  return array_index_names_[index];
+}
+
 void HeapGraphResolver::ExtractArrayElementReferences(Object& obj) {
   const uint8_t* elements = obj.GetRawData();
   size_t elements_size = obj.GetRawDataSize();
   size_t count = obj.GetArrayElementCount();
   uint32_t id_size = header_.GetIdSize();
-  char buf[24];
-  obj.ReserveReferences(count);
   for (size_t i = 0; i < count; ++i) {
     uint64_t element_id = ReadBigEndian<uint64_t>(
         context_, elements, elements_size, i * id_size, id_size);
     if (element_id != 0) {
       ObjectIndex target = objects_.FindIndex(element_id);
       if (target != kInvalidObjectIndex) {
-        size_t len = base::SprintfTrunc(buf, sizeof(buf), "[%zu]", i);
-        obj.AddReference(
-            context_->storage->InternString(base::StringView(buf, len)),
-            target);
+        objects_.AddReference(obj, ArrayIndexName(i), target);
         stats_.reference_count++;
       }
     }
@@ -213,7 +221,8 @@ bool HeapGraphResolver::ExtractObjectReferences(Object& obj,
       std::string qualified =
           cls.GetName() + "." +
           context_->storage->GetString(ref.field_name).ToStdString();
-      obj.AddReference(context_->storage->InternString(qualified), target);
+      objects_.AddReference(obj, context_->storage->InternString(qualified),
+                            target);
       stats_.reference_count++;
     }
   }
@@ -230,8 +239,6 @@ bool HeapGraphResolver::ExtractObjectReferences(Object& obj,
   }
 
   const uint32_t id_size = header_.GetIdSize();
-  obj.ReserveReferences(obj.GetReferences().size() +
-                        layout->object_fields.size());
   for (const auto& field : layout->object_fields) {
     if (field.offset >= data_size) {
       break;
@@ -243,8 +250,8 @@ bool HeapGraphResolver::ExtractObjectReferences(Object& obj,
     uint64_t target_id = ReadBigEndian<uint64_t>(context_, data, data_size,
                                                  field.offset, id_size);
     if (target_id != 0) {
-      obj.AddReference(field.name, objects_.FindIndex(target_id),
-                       field.is_weak_referent);
+      objects_.AddReference(obj, field.name, objects_.FindIndex(target_id),
+                            field.is_weak_referent);
       stats_.reference_count++;
     }
   }
@@ -282,11 +289,11 @@ std::optional<std::string> HeapGraphResolver::DecodeJavaString(
   if (value_array_id == 0)
     return std::nullopt;
 
-  const Object* array = objects_.Find(value_array_id);
+  Object array = objects_.Find(value_array_id);
   if (!array)
     return std::nullopt;
 
-  size_t array_len = array->GetArrayElementCount();
+  size_t array_len = array.GetArrayElementCount();
   int32_t offset = offset_opt.value_or(0);
   int32_t count = count_opt.value_or(static_cast<int32_t>(array_len) - offset);
 
@@ -310,14 +317,14 @@ std::optional<std::string> HeapGraphResolver::DecodeJavaString(
     }
   };
 
-  const uint8_t* array_data = array->GetArrayData().data();
+  const uint8_t* array_data = array.GetArrayData().data();
 
-  if (array->GetArrayElementType() == FieldType::kByte) {
+  if (array.GetArrayElementType() == FieldType::kByte) {
     for (int32_t i = 0; i < count; ++i)
       result.push_back(static_cast<char>(array_data[offset + i]));
     return result;
   }
-  if (array->GetArrayElementType() == FieldType::kChar) {
+  if (array.GetArrayElementType() == FieldType::kChar) {
     for (int32_t i = 0; i < count; ++i) {
       uint16_t ch;
       memcpy(&ch,
@@ -336,7 +343,7 @@ void HeapGraphResolver::DecodeJavaStrings() {
     return;
 
   for (ObjectIndex idx : string_object_indices_) {
-    Object& obj = objects_.at(idx);
+    Object obj = objects_.at(idx);
     auto decoded = DecodeJavaString(obj);
     if (decoded) {
       obj.SetDecodedString(context_->storage->InternString(*decoded));
@@ -443,7 +450,7 @@ void HeapGraphResolver::CalculateNativeSizes() {
     }
 
     ObjectIndex registry_idx = kInvalidObjectIndex;
-    for (const auto& ref : thunk.GetReferences()) {
+    for (const auto& ref : objects_.GetReferences(thunk)) {
       if (ref.field_name == cleaner_thunk_outer_field_id_) {
         registry_idx = ref.target_index;
         break;

@@ -139,6 +139,31 @@ class Storage {
     return base::unchecked_get<U>(ptr);
   }
 
+  // Reserves capacity for `n` elements. Id columns have no backing storage.
+  void Reserve(uint64_t n) {
+    switch (type_.index()) {
+      case StorageType::GetTypeIndex<core::Id>():
+        break;
+      case StorageType::GetTypeIndex<core::Uint32>():
+        base::unchecked_get<Storage::Uint32>(data_).reserve(n);
+        break;
+      case StorageType::GetTypeIndex<core::Int32>():
+        base::unchecked_get<Storage::Int32>(data_).reserve(n);
+        break;
+      case StorageType::GetTypeIndex<core::Int64>():
+        base::unchecked_get<Storage::Int64>(data_).reserve(n);
+        break;
+      case StorageType::GetTypeIndex<core::Double>():
+        base::unchecked_get<Storage::Double>(data_).reserve(n);
+        break;
+      case StorageType::GetTypeIndex<core::String>():
+        base::unchecked_get<Storage::String>(data_).reserve(n);
+        break;
+      default:
+        PERFETTO_FATAL("Should not reach here");
+    }
+  }
+
   StorageType type() const { return type_; }
 
  private:

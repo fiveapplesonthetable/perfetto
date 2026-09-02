@@ -655,6 +655,11 @@ class {self.table_name} {{
 
   void Clear() {{ dataframe_.Clear(); }}
 
+  // Reserves capacity for `rows` rows across all columns. Optional bulk-insert
+  // optimization: when the final row count is known before inserting, call this
+  // once to avoid incremental column reallocations. Capacity hint only.
+  void Reserve(uint32_t rows) {{ dataframe_.Reserve(rows); }}
+
   static const char* Name() {{
     return "{self.table.sql_name}";
   }}

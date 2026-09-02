@@ -93,8 +93,16 @@ base::Status ArtHprofParser::OnPushDataToSorter() {
   context_->storage->mutable_heap_graph_table()->Insert(heap_graph_row);
 
   PopulateClasses(graph);
+  // The id->row map is only needed to look up class objects above; free it
+  // before building the big object/reference/field tables.
+  graph.ClearObjectIndex();
   PopulateObjects(graph, ts, upid);
+  // The object scalar columns (size/heap/root/reachability) were only needed
+  // to fill the object table; free them before the large field tables.
+  graph.ClearObjectScalars();
   PopulateReferences(graph);
+  // References have been written out; the CSR edge array is now dead.
+  graph.ClearObjectEdges();
   PopulateFieldValues(graph);
 
   graph.ClearAll();
@@ -373,12 +381,12 @@ void ArtHprofParser::PopulateClasses(const HeapGraph& graph) {
   // entries, so iterate classes instead of scanning all objects.
   for (auto it = graph.GetClasses().GetIterator(); it; ++it) {
     auto class_id = it.key();
-    const auto* obj = graph.GetObjects().Find(class_id);
-    if (!obj || obj->GetObjectType() != ObjectType::kClass) {
+    Object obj = graph.GetObjects().Find(class_id);
+    if (!obj || obj.GetObjectType() != ObjectType::kClass) {
       continue;
     }
 
-    auto* class_name_it = class_name_map_.Find(obj->GetClassId());
+    auto* class_name_it = class_name_map_.Find(obj.GetClassId());
     if (!class_name_it) {
       context_->stats_tracker->IncrementStats(stats::hprof_class_errors);
       continue;
@@ -410,6 +418,10 @@ void ArtHprofParser::PopulateObjects(const HeapGraph& graph,
   tables::HeapGraphClassTable::Id unknown_class_id;
 
   object_rows_.assign(objects.size(), kInvalidRow);
+
+  // One row per object is inserted below; the count is known exactly here, so
+  // preallocate the columns to avoid incremental reallocation.
+  object_table.Reserve(static_cast<uint32_t>(objects.size()));
 
   for (ObjectIndex i = 0; i < objects.size(); ++i) {
     const auto& obj = objects.at(i);
@@ -443,11 +455,8 @@ void ArtHprofParser::PopulateObjects(const HeapGraph& graph,
     object_row.heap_type = obj.GetHeapType();
 
     if (obj.IsRoot() && obj.GetRootType().has_value()) {
-      std::string root_type_str =
-          HeapGraph::GetRootTypeName(obj.GetRootType().value());
-      StringId root_type_id = context_->storage->InternString(
-          base::StringView(root_type_str.data(), root_type_str.size()));
-      object_row.root_type = root_type_id;
+      object_row.root_type = context_->storage->InternString(base::StringView(
+          HeapGraph::GetRootTypeName(obj.GetRootType().value())));
     }
 
     object_row.root_distance = obj.GetRootDistance();
@@ -466,6 +475,10 @@ void ArtHprofParser::PopulateReferences(const HeapGraph& graph) {
   StringId unknown_type_id = context_->storage->InternString("unknown");
   const auto& objects = graph.GetObjects();
 
+  // One reference row is inserted per graph edge; the total is known here, so
+  // preallocate the reference table's columns.
+  reference_table.Reserve(static_cast<uint32_t>(objects.edge_count()));
+
   // Name of the class of each object, used as the field type name of every
   // reference pointing at it.
   const auto& class_table = context_->storage->heap_graph_class_table();
@@ -480,7 +493,7 @@ void ArtHprofParser::PopulateReferences(const HeapGraph& graph) {
   for (ObjectIndex i = 0; i < objects.size(); ++i) {
     const auto& obj = objects.at(i);
 
-    const auto& refs = obj.GetReferences();
+    const auto refs = objects.GetReferences(obj);
     if (refs.empty()) {
       continue;
     }
@@ -551,6 +564,44 @@ void ArtHprofParser::PopulateFieldValues(const HeapGraph& graph) {
   auto& object_table = *context_->storage->mutable_heap_graph_object_table();
 
   const auto& objects = graph.GetObjects();
+
+  // Pre-count primitive-field and data rows so both tables (which reach
+  // millions of rows) are reserved once instead of reallocating as they grow.
+  // An instance's primitive-field count is just (all fields - object fields)
+  // from its class layout, so counting is a cheap upper bound.
+  uint64_t prim_rows = 0;
+  uint64_t data_rows = 0;
+  uint64_t array_blobs = 0;
+  for (ObjectIndex i = 0; i < objects.size(); ++i) {
+    if (object_rows_[i] == kInvalidRow)
+      continue;
+    const auto& obj = objects.at(i);
+    uint32_t prim_count = 0;
+    if (obj.GetObjectType() == ObjectType::kClass) {
+      for (const auto& field : obj.GetFields()) {
+        if (field.GetType() != FieldType::kObject && field.HasValue())
+          ++prim_count;
+      }
+    } else if (obj.GetObjectType() == ObjectType::kInstance) {
+      if (const auto* layout = graph.GetClassFields(obj.GetClassId())) {
+        prim_count = static_cast<uint32_t>(layout->fields.size() -
+                                           layout->object_fields.size());
+      }
+    }
+    prim_rows += prim_count;
+    bool has_array_data = obj.HasArrayData();
+    if (has_array_data)
+      ++array_blobs;
+    if (prim_count > 0 || has_array_data ||
+        obj.GetDecodedString().has_value()) {
+      ++data_rows;
+    }
+  }
+  prim_table.Reserve(static_cast<uint32_t>(prim_rows));
+  data_table.Reserve(static_cast<uint32_t>(data_rows));
+  context_->storage->mutable_hprof_array_blobs()->reserve(
+      static_cast<size_t>(array_blobs));
+
   for (ObjectIndex i = 0; i < objects.size(); ++i) {
     const auto& obj = objects.at(i);
 

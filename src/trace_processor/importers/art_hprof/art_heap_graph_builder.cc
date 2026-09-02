@@ -90,6 +90,10 @@ void HeapGraphBuilder::PushBlob(TraceBlobView&& blob) {
 }
 
 HeapGraph HeapGraphBuilder::BuildGraph() {
+  // The id->row index is built once here, now that every object has been
+  // appended, sized to the exact count so it never rehashes.
+  objects_.BuildIndex();
+
   resolver_ = std::make_unique<HeapGraphResolver>(
       context_, header_, objects_, classes_, roots_, class_fields_,
       string_class_id_, stats_);
@@ -438,11 +442,8 @@ bool HeapGraphBuilder::ParseClassStructure() {
   }
 
   // Static fields
-  // Ensure the class object exists in the heap graph
-  Object& class_obj = objects_[class_id];
-  if (class_obj.GetId() == 0) {
-    class_obj = Object(class_id, class_id, current_heap_, ObjectType::kClass);
-  }
+  Object class_obj =
+      objects_.Append(class_id, class_id, current_heap_, ObjectType::kClass);
 
   uint16_t static_field_count;
   if (!iterator_->ReadU2(static_field_count))
@@ -579,25 +580,10 @@ bool HeapGraphBuilder::ParseInstanceObject() {
     return false;
   }
 
-  // Preserve root metadata if this object was already seen as a root
-  bool was_root = false;
-  std::optional<HprofHeapRootTag> root_type;
-
-  auto it = objects_.Find(object_id);
-  if (it) {
-    was_root = it->IsRoot();
-    root_type = it->GetRootType();
-  }
-
-  // Overwrite or create object
-  Object obj(object_id, class_id, current_heap_, ObjectType::kInstance);
+  Object obj = objects_.Append(object_id, class_id, current_heap_,
+                               ObjectType::kInstance);
   obj.SetRawData(std::move(data));
 
-  if (was_root && root_type.has_value()) {
-    obj.SetRootType(root_type.value());
-  }
-
-  objects_[object_id] = std::move(obj);
   stats_.instance_count++;
   return true;
 }
@@ -631,12 +617,12 @@ bool HeapGraphBuilder::ParseObjectArrayObject() {
     return false;
   }
 
-  Object obj{array_id, array_class_id, current_heap_, ObjectType::kObjectArray};
+  Object obj = objects_.Append(array_id, array_class_id, current_heap_,
+                               ObjectType::kObjectArray);
   obj.SetRawData(std::move(elements));
   obj.SetArrayElementCount(element_count);
   obj.SetArrayElementType(FieldType::kObject);
 
-  objects_[array_id] = std::move(obj);
   stats_.object_array_count++;
 
   return true;
@@ -714,31 +700,39 @@ bool HeapGraphBuilder::ParsePrimitiveArrayObject() {
 
   size_t data_length = static_cast<size_t>(element_count) * type_size;
 
-  Object obj{array_id, class_id, current_heap_, ObjectType::kPrimitiveArray};
+  Object obj = objects_.Append(array_id, class_id, current_heap_,
+                               ObjectType::kPrimitiveArray);
   obj.SetArrayElementType(element_type);
   obj.SetArrayDataBytes(static_cast<uint32_t>(data_length));
 
   if (data_length > 0) {
-    // Array payloads are handed to the storage and live for as long as the
-    // trace is loaded, so they get an exactly sized buffer of their own: a
-    // view would pin the whole trace chunk it points into, however small the
-    // array is.
-    TraceBlob blob = TraceBlob::Allocate(data_length);
-    if (!iterator_->ReadInto(blob.data(), data_length)) {
-      return false;
-    }
-    if (element_type == FieldType::kBoolean) {
-      // Normalise to 0/1 to match the values exposed for boolean arrays.
-      for (size_t i = 0; i < data_length; ++i) {
-        blob.data()[i] = blob.data()[i] != 0 ? 1 : 0;
+    if (element_type == FieldType::kByte) {
+      // Byte arrays need no endian conversion, so reference the trace bytes
+      // directly instead of copying into a new buffer.
+      TraceBlobView view;
+      if (!iterator_->ReadView(view, data_length)) {
+        return false;
       }
+      obj.SetArrayData(std::move(view), element_count);
     } else {
-      ToNativeEndian(blob.data(), element_count, type_size);
+      // Multi-byte elements are byte-swapped (booleans normalised) in place,
+      // so they need their own buffer.
+      TraceBlob blob = TraceBlob::Allocate(data_length);
+      if (!iterator_->ReadInto(blob.data(), data_length)) {
+        return false;
+      }
+      if (element_type == FieldType::kBoolean) {
+        // Normalise to 0/1 to match the values exposed for boolean arrays.
+        for (size_t i = 0; i < data_length; ++i) {
+          blob.data()[i] = blob.data()[i] != 0 ? 1 : 0;
+        }
+      } else {
+        ToNativeEndian(blob.data(), element_count, type_size);
+      }
+      obj.SetArrayData(TraceBlobView(std::move(blob)), element_count);
     }
-    obj.SetArrayData(TraceBlobView(std::move(blob)), element_count);
   }
 
-  objects_[array_id] = std::move(obj);
   stats_.primitive_array_count++;
 
   return true;

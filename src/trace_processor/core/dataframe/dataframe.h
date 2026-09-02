@@ -139,6 +139,15 @@ class Dataframe {
                                ts...);
   }
 
+  // Reserves capacity for `row_count` rows across all columns, to avoid
+  // incremental reallocation when the final count is known before inserting.
+  void Reserve(uint32_t row_count) {
+    PERFETTO_DCHECK(!finalized_);
+    for (auto& col : columns_) {
+      col->storage.Reserve(row_count);
+    }
+  }
+
   // Creates an execution plan for querying the dataframe with specified filters
   // and column selection.
   //

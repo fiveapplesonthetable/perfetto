@@ -21,10 +21,12 @@
 #include "src/trace_processor/storage/trace_storage.h"
 
 #include "perfetto/ext/base/flat_hash_map.h"
+#include "perfetto/ext/base/no_destructor.h"
 #include "perfetto/trace_processor/trace_blob_view.h"
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -173,140 +175,218 @@ class ClassDefinition {
   std::vector<Field> instance_fields_;
 };
 
+// Payload that only class objects carry (static fields and their unresolved
+// references), allocated lazily. Instances and arrays never allocate one:
+// instances carry nothing extra, arrays keep their shape inline in the columns.
+struct ObjectExtra {
+  std::vector<Field> fields;
+  std::vector<PendingReference> pending_references;
+};
+
+// Struct-of-arrays storage for every object in the dump. Replacing a vector of
+// fat Object structs with one array per attribute removes the AoS padding and
+// keeps the hot resolve/BFS passes touching only the columns they need. Objects
+// are addressed by ObjectIndex (row); see the Object handle below.
+struct ObjectColumns {
+  std::vector<uint64_t> id;
+  std::vector<uint64_t> class_id;
+  std::vector<StringId> heap_type;
+  // Instance field bytes / object-array element ids / primitive-array payload:
+  // a view onto the (mmapped) trace, no copy on native builds.
+  std::vector<TraceBlobView> raw_data;
+  // CSR reference range into ObjectStore::edges_.
+  std::vector<uint32_t> ref_begin;
+  std::vector<uint32_t> ref_count;
+  std::vector<uint32_t> array_element_count;
+  std::vector<uint32_t> array_data_bytes;
+  std::vector<int64_t> native_size;
+  // Self size override, or -1 when unset.
+  std::vector<int64_t> self_size;
+  std::vector<int32_t> root_distance;
+  std::vector<StringId> decoded_string;
+  std::vector<ObjectType> type;
+  std::vector<FieldType> array_element_type;
+  // Root tag, valid only when the kRoot flag bit is set.
+  std::vector<HprofHeapRootTag> root_type;
+  std::vector<uint8_t> flags;
+  // Non-null only for class objects.
+  std::vector<std::unique_ptr<ObjectExtra>> extra;
+
+  size_t size() const { return id.size(); }
+
+  ObjectIndex Append(uint64_t oid, uint64_t cid, StringId heap, ObjectType t) {
+    ObjectIndex i = static_cast<ObjectIndex>(id.size());
+    id.push_back(oid);
+    class_id.push_back(cid);
+    heap_type.push_back(heap);
+    raw_data.emplace_back();
+    ref_begin.push_back(0);
+    ref_count.push_back(0);
+    array_element_count.push_back(0);
+    array_data_bytes.push_back(0);
+    native_size.push_back(0);
+    self_size.push_back(-1);
+    root_distance.push_back(-1);
+    decoded_string.push_back(StringId::Null());
+    type.push_back(t);
+    array_element_type.push_back(FieldType::kObject);
+    root_type.push_back(HprofHeapRootTag::kUnknown);
+    flags.push_back(0);
+    extra.emplace_back();
+    return i;
+  }
+
+  void Clear() { *this = ObjectColumns(); }
+
+  // Releases the scalar columns that are only read while populating the object
+  // table (size/heap/root/reachability). Called once that table is written so
+  // they are not resident while the large field-value tables are built.
+  void ClearScalars() {
+    self_size = std::vector<int64_t>();
+    native_size = std::vector<int64_t>();
+    root_distance = std::vector<int32_t>();
+    heap_type = std::vector<StringId>();
+    flags = std::vector<uint8_t>();
+    root_type = std::vector<HprofHeapRootTag>();
+  }
+};
+
+// Lightweight handle to one object's row in ObjectColumns. Cheap to copy (a
+// pointer plus an index); owns nothing. Presents the same API the importer used
+// when Object was a value type, so call sites are unchanged apart from binding
+// it by value instead of by reference.
 class Object {
  public:
-  Object(uint64_t id, uint64_t class_id, StringId heap, ObjectType type)
-      : id_(id), class_id_(class_id), type_(type), heap_type_(heap) {}
-
   Object() = default;
+  Object(ObjectColumns* cols, ObjectIndex idx) : cols_(cols), idx_(idx) {}
 
-  Object(const Object&) = delete;
-  Object& operator=(const Object&) = delete;
-  Object(Object&&) = default;
-  Object& operator=(Object&&) = default;
-  ~Object() = default;
+  bool valid() const { return cols_ != nullptr; }
+  explicit operator bool() const { return cols_ != nullptr; }
+  ObjectIndex index() const { return idx_; }
 
-  uint64_t GetId() const { return id_; }
-  uint64_t GetClassId() const { return class_id_; }
-  StringId GetHeapType() const { return heap_type_; }
-  ObjectType GetObjectType() const { return type_; }
+  uint64_t GetId() const { return cols_->id[idx_]; }
+  uint64_t GetClassId() const { return cols_->class_id[idx_]; }
+  StringId GetHeapType() const { return cols_->heap_type[idx_]; }
+  ObjectType GetObjectType() const { return cols_->type[idx_]; }
+
+  void SetId(uint64_t id) { cols_->id[idx_] = id; }
+  void SetClassId(uint64_t id) { cols_->class_id[idx_] = id; }
+  void SetObjectType(ObjectType t) { cols_->type[idx_] = t; }
+  void SetHeapType(StringId heap) { cols_->heap_type[idx_] = heap; }
 
   void SetRootType(HprofHeapRootTag root_type) {
-    root_type_ = root_type;
-    is_root_ = true;
+    cols_->root_type[idx_] = root_type;
+    cols_->flags[idx_] |= kRoot;
+  }
+  void SetReachable() { cols_->flags[idx_] |= kReachable; }
+
+  bool IsRoot() const { return (cols_->flags[idx_] & kRoot) != 0; }
+  bool IsReachable() const { return (cols_->flags[idx_] & kReachable) != 0; }
+  std::optional<HprofHeapRootTag> GetRootType() const {
+    return IsRoot() ? std::make_optional(cols_->root_type[idx_]) : std::nullopt;
   }
 
-  void SetReachable() { is_reachable_ = true; }
-
-  void SetHeapType(StringId heap_type) { heap_type_ = heap_type; }
-
-  bool IsRoot() const { return is_root_; }
-  bool IsReachable() const { return is_reachable_; }
-  std::optional<HprofHeapRootTag> GetRootType() const { return root_type_; }
-
-  void SetRootDistance(int32_t d) { root_distance_ = d; }
-  int32_t GetRootDistance() const { return root_distance_; }
+  void SetRootDistance(int32_t d) { cols_->root_distance[idx_] = d; }
+  int32_t GetRootDistance() const { return cols_->root_distance[idx_]; }
 
   // Instance data / object array element ids. This is a view onto the trace
-  // bytes themselves: on native builds, where the trace is mmapped, no copy
-  // of the data is ever made. It is released when the graph is torn down at
-  // the end of the import, so it never pins trace chunks beyond that.
-  void SetRawData(TraceBlobView data) { raw_data_ = std::move(data); }
-
-  const uint8_t* GetRawData() const { return raw_data_.data(); }
-  size_t GetRawDataSize() const { return raw_data_.size(); }
-  const TraceBlobView& GetRawDataView() const { return raw_data_; }
-  void ClearRawData() { raw_data_ = TraceBlobView(); }
-
-  void AddReference(StringId field_name,
-                    ObjectIndex target_index,
-                    bool is_weak_referent = false) {
-    references_.emplace_back(field_name, target_index, is_weak_referent);
+  // bytes themselves: on native builds, where the trace is mmapped, no copy of
+  // the data is ever made. Released when the graph is torn down.
+  void SetRawData(TraceBlobView data) {
+    cols_->raw_data[idx_] = std::move(data);
   }
 
-  void ReserveReferences(size_t count) { references_.reserve(count); }
+  const uint8_t* GetRawData() const { return cols_->raw_data[idx_].data(); }
+  size_t GetRawDataSize() const { return cols_->raw_data[idx_].size(); }
+  const TraceBlobView& GetRawDataView() const { return cols_->raw_data[idx_]; }
+  void ClearRawData() { cols_->raw_data[idx_] = TraceBlobView(); }
 
   void AddPendingReference(StringId field_name, uint64_t target_id) {
-    pending_references_.emplace_back(field_name, target_id);
+    EnsureExtra().pending_references.emplace_back(field_name, target_id);
   }
-
-  const std::vector<Reference>& GetReferences() const { return references_; }
-
   const std::vector<PendingReference>& GetPendingReferences() const {
-    return pending_references_;
+    const auto& e = cols_->extra[idx_];
+    return e ? e->pending_references : EmptyPending();
   }
 
-  // Array-specific data
-  void SetArrayElementCount(uint32_t count) { array_element_count_ = count; }
+  // Array shape lives inline in the columns; the payload reuses raw_data_.
+  void SetArrayElementCount(uint32_t count) {
+    cols_->array_element_count[idx_] = count;
+  }
+  void SetArrayElementType(FieldType type) {
+    cols_->array_element_type[idx_] = type;
+  }
+  void SetArrayDataBytes(uint32_t bytes) {
+    cols_->array_data_bytes[idx_] = bytes;
+  }
+  uint32_t GetArrayDataBytes() const { return cols_->array_data_bytes[idx_]; }
+  FieldType GetArrayElementType() const {
+    return cols_->array_element_type[idx_];
+  }
 
-  void SetArrayElementType(FieldType type) { array_element_type_ = type; }
+  void AddField(Field field) {
+    EnsureExtra().fields.push_back(std::move(field));
+  }
+  void ReserveFields(size_t count) { EnsureExtra().fields.reserve(count); }
+  const std::vector<Field>& GetFields() const {
+    const auto& e = cols_->extra[idx_];
+    return e ? e->fields : EmptyFields();
+  }
 
-  // Size in bytes of the array payload as it appeared in the dump. Kept
-  // separately so the raw bytes can be dropped once they have been decoded.
-  void SetArrayDataBytes(uint32_t bytes) { array_data_bytes_ = bytes; }
-  uint32_t GetArrayDataBytes() const { return array_data_bytes_; }
+  int64_t GetNativeSize() const { return cols_->native_size[idx_]; }
+  void AddNativeSize(int64_t size) { cols_->native_size[idx_] += size; }
 
-  FieldType GetArrayElementType() const { return array_element_type_; }
-
-  void AddField(Field field) { fields_.push_back(field); }
-
-  void ReserveFields(size_t count) { fields_.reserve(count); }
-
-  const std::vector<Field>& GetFields() const { return fields_; }
-
-  int64_t GetNativeSize() const { return native_size_; }
-
-  void AddNativeSize(int64_t size) { native_size_ += size; }
-
-  void SetDecodedString(StringId str) { decoded_string_ = str; }
+  void SetDecodedString(StringId str) { cols_->decoded_string[idx_] = str; }
   std::optional<StringId> GetDecodedString() const {
-    return decoded_string_.is_null() ? std::nullopt
-                                     : std::make_optional(decoded_string_);
+    StringId s = cols_->decoded_string[idx_];
+    return s.is_null() ? std::nullopt : std::make_optional(s);
   }
 
-  void SetSelfSizeOverride(size_t size) { self_size_override_ = size; }
+  void SetSelfSizeOverride(size_t size) {
+    cols_->self_size[idx_] = static_cast<int64_t>(size);
+  }
   std::optional<size_t> GetSelfSizeOverride() const {
-    return self_size_override_;
+    int64_t s = cols_->self_size[idx_];
+    return s < 0 ? std::nullopt : std::make_optional(static_cast<size_t>(s));
   }
 
-  // Primitive array payload, decoded to native endianness at parse time. This
-  // is the only copy of the data: it is handed to the storage as-is.
+  // Primitive array payload, decoded to native endianness at parse time. Reuses
+  // the raw_data_ slot (a primitive array has no separate instance data), which
+  // is never cleared for primitive arrays.
   void SetArrayData(TraceBlobView data, uint32_t element_count) {
-    array_data_ = std::move(data);
-    array_element_count_ = element_count;
+    cols_->raw_data[idx_] = std::move(data);
+    cols_->array_element_count[idx_] = element_count;
   }
-
-  bool HasArrayData() const { return array_data_.size() > 0; }
-
-  const TraceBlobView& GetArrayData() const { return array_data_; }
-
-  size_t GetArrayElementCount() const { return array_element_count_; }
+  bool HasArrayData() const {
+    return cols_->type[idx_] == ObjectType::kPrimitiveArray &&
+           cols_->raw_data[idx_].size() > 0;
+  }
+  const TraceBlobView& GetArrayData() const { return cols_->raw_data[idx_]; }
+  size_t GetArrayElementCount() const {
+    return cols_->array_element_count[idx_];
+  }
 
  private:
-  uint64_t id_ = 0;
-  uint64_t class_id_ = 0;
-  ObjectType type_ = ObjectType::kInstance;
-  bool is_root_ = false;
-  bool is_reachable_ = false;
-  int32_t root_distance_ = -1;
-  std::optional<HprofHeapRootTag> root_type_;
-  StringId heap_type_;
+  static constexpr uint8_t kRoot = 1;
+  static constexpr uint8_t kReachable = 2;
 
-  // Data storage - used differently based on object type
-  TraceBlobView raw_data_;
-  std::vector<Reference> references_;
-  std::vector<PendingReference> pending_references_;
-  uint32_t array_element_count_ = 0;
-  uint32_t array_data_bytes_ = 0;
-  FieldType array_element_type_ = FieldType::kObject;
+  ObjectExtra& EnsureExtra() {
+    auto& e = cols_->extra[idx_];
+    if (!e)
+      e = std::make_unique<ObjectExtra>();
+    return *e;
+  }
+  static const std::vector<Field>& EmptyFields() {
+    static base::NoDestructor<std::vector<Field>> empty;
+    return empty.ref();
+  }
+  static const std::vector<PendingReference>& EmptyPending() {
+    static base::NoDestructor<std::vector<PendingReference>> empty;
+    return empty.ref();
+  }
 
-  int64_t native_size_ = 0;
-  std::optional<size_t> self_size_override_;
-  StringId decoded_string_ = StringId::Null();
-
-  // Field values
-  std::vector<Field> fields_;
-  TraceBlobView array_data_;
+  ObjectColumns* cols_ = nullptr;
+  ObjectIndex idx_ = kInvalidObjectIndex;
 };
 
 // An object-typed field, at its fixed offset in the instance data.
@@ -328,19 +408,18 @@ struct ClassFieldLayout {
 
 using ClassFieldLayouts = base::FlatHashMap<uint64_t, ClassFieldLayout>;
 
-// Stores all the objects in a dump contiguously, with a side map from hprof
-// object id to index. Keeping the (large) Object payloads out of the hash map
-// keeps probes cache friendly and avoids moving objects around on rehash.
+// Stores all the objects in a dump column-wise, with a side map from hprof
+// object id to row index. Object handles are cheap views over the columns.
 class ObjectStore {
  public:
-  Object* Find(uint64_t id) {
+  Object Find(uint64_t id) {
     ObjectIndex* idx = index_.Find(id);
-    return idx ? &objects_[*idx] : nullptr;
+    return idx ? Object(&cols_, *idx) : Object();
   }
 
-  const Object* Find(uint64_t id) const {
+  Object Find(uint64_t id) const {
     const ObjectIndex* idx = index_.Find(id);
-    return idx ? &objects_[*idx] : nullptr;
+    return idx ? Object(const_cast<ObjectColumns*>(&cols_), *idx) : Object();
   }
 
   ObjectIndex FindIndex(uint64_t id) const {
@@ -348,30 +427,105 @@ class ObjectStore {
     return idx ? *idx : kInvalidObjectIndex;
   }
 
-  // Returns the object with `id`, default constructing it if it does not
-  // exist yet.
-  Object& operator[](uint64_t id) {
-    auto res = index_.Insert(id, static_cast<ObjectIndex>(objects_.size()));
+  // Returns the object with `id`, appending a default row if it does not exist
+  // yet. The caller sets the row's attributes through the returned handle.
+  Object operator[](uint64_t id) {
+    auto res = index_.Insert(id, static_cast<ObjectIndex>(cols_.size()));
     if (res.second) {
-      objects_.emplace_back();
+      cols_.Append(0, 0, StringId::Null(), ObjectType::kInstance);
     }
-    return objects_[*res.first];
+    return Object(&cols_, *res.first);
   }
 
-  Object& at(ObjectIndex index) { return objects_[index]; }
-  const Object& at(ObjectIndex index) const { return objects_[index]; }
+  Object at(ObjectIndex index) { return Object(&cols_, index); }
+  Object at(ObjectIndex index) const {
+    return Object(const_cast<ObjectColumns*>(&cols_), index);
+  }
 
-  size_t size() const { return objects_.size(); }
+  size_t size() const { return cols_.size(); }
+
+  // Appends a new object row without touching the id index. Used during the
+  // parse phase; the index is built once afterwards via BuildIndex(). This
+  // avoids rehashing the id map as millions of objects are inserted.
+  Object Append(uint64_t id,
+                uint64_t class_id,
+                StringId heap,
+                ObjectType type) {
+    return Object(&cols_, cols_.Append(id, class_id, heap, type));
+  }
+
+  // Builds the id->row index once, after all objects are appended. The
+  // capacity is sized to the exact object count (rounded to a power of two, as
+  // FlatHashMapV1 requires) so no rehash happens. First row wins on the (rare)
+  // duplicate id, matching the previous get-or-create behaviour.
+  void BuildIndex() {
+    size_t n = cols_.size();
+    size_t cap = 128;
+    while (cap * 3 < n * 4)
+      cap <<= 1;
+    index_ = base::FlatHashMap<uint64_t, ObjectIndex>(cap);
+    for (ObjectIndex i = 0; i < n; ++i)
+      index_.Insert(cols_.id[i], i);
+  }
+
+  // A contiguous view of one object's references within edges_.
+  struct RefSpan {
+    const Reference* begin_;
+    const Reference* end_;
+    const Reference* begin() const { return begin_; }
+    const Reference* end() const { return end_; }
+    size_t size() const { return static_cast<size_t>(end_ - begin_); }
+    bool empty() const { return begin_ == end_; }
+  };
+
+  // References are stored CSR-style: every object's references occupy a
+  // contiguous run in edges_. Objects are resolved in index order and each
+  // object's references are appended consecutively, so runs never interleave.
+  void AddReference(Object& obj,
+                    StringId field_name,
+                    ObjectIndex target_index,
+                    bool is_weak_referent = false) {
+    ObjectIndex i = obj.index();
+    if (cols_.ref_count[i] == 0)
+      cols_.ref_begin[i] = static_cast<uint32_t>(edges_.size());
+    edges_.emplace_back(field_name, target_index, is_weak_referent);
+    ++cols_.ref_count[i];
+  }
+
+  RefSpan GetReferences(const Object& obj) const {
+    ObjectIndex i = obj.index();
+    const Reference* base = edges_.data();
+    return {base + cols_.ref_begin[i],
+            base + cols_.ref_begin[i] + cols_.ref_count[i]};
+  }
+
+  // Total number of reference edges across all objects. Known once the graph is
+  // resolved; used to exactly size the reference output table.
+  size_t edge_count() const { return edges_.size(); }
+
+  // Releases the id->row map once nothing else needs id lookups (after the
+  // class table is populated), so it is not resident while the large field/
+  // reference tables are built.
+  void ClearIndex() { index_ = base::FlatHashMap<uint64_t, ObjectIndex>(); }
+
+  // Releases the CSR edge array once references have been written out.
+  void ClearEdges() { edges_ = std::vector<Reference>(); }
+
+  // Releases the object scalar columns once the object table is populated.
+  void ClearScalars() { cols_.ClearScalars(); }
 
   void Clear() {
     index_.Clear();
-    objects_.clear();
-    objects_.shrink_to_fit();
+    cols_.Clear();
+    edges_.clear();
+    edges_.shrink_to_fit();
   }
 
  private:
   base::FlatHashMap<uint64_t, ObjectIndex> index_;
-  std::vector<Object> objects_;
+  ObjectColumns cols_;
+  // CSR reference edges shared by all objects; see AddReference.
+  std::vector<Reference> edges_;
 };
 
 }  // namespace perfetto::trace_processor::art_hprof
