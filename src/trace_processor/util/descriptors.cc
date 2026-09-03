@@ -179,6 +179,16 @@ bool FieldBoolOption(const FieldDescriptor& field, uint32_t option_number) {
   return f.valid() && f.as_bool();
 }
 
+std::optional<std::string> FieldStringOption(const FieldDescriptor& field,
+                                             uint32_t option_number) {
+  protozero::ProtoDecoder opt(field.options().data(), field.options().size());
+  auto f = opt.FindField(option_number);
+  if (!f.valid()) {
+    return std::nullopt;
+  }
+  return f.as_std_string();
+}
+
 }  // namespace
 
 std::optional<uint32_t> DescriptorPool::ResolveShortType(
@@ -663,6 +673,18 @@ DescriptorPool::CustomOptionNumbers DescriptorPool::FindCustomOptionNumbers()
   if (const auto* opt = field_options.FindFieldByName("is_tid")) {
     numbers.tid = opt->number();
   }
+  if (const auto* opt = field_options.FindFieldByName("state_cur")) {
+    numbers.state_cur = opt->number();
+  }
+  if (const auto* opt = field_options.FindFieldByName("state_prev")) {
+    numbers.state_prev = opt->number();
+  }
+  if (const auto* opt = field_options.FindFieldByName("state_snapshot")) {
+    numbers.state_snapshot = opt->number();
+  }
+  if (const auto* opt = field_options.FindFieldByName("state_key")) {
+    numbers.state_key = opt->number();
+  }
   return numbers;
 }
 
@@ -678,6 +700,27 @@ void DescriptorPool::ResolveCustomFieldOptions(
   }
   if (numbers.tid && FieldBoolOption(*field, *numbers.tid)) {
     field->set_is_tid(true);
+  }
+  if (numbers.state_cur) {
+    if (auto s = FieldStringOption(*field, *numbers.state_cur)) {
+      field->set_state_role(FieldDescriptor::StateRole::kCur);
+      field->set_state_name(std::move(*s));
+    }
+  }
+  if (numbers.state_prev) {
+    if (auto s = FieldStringOption(*field, *numbers.state_prev)) {
+      field->set_state_role(FieldDescriptor::StateRole::kPrev);
+      field->set_state_name(std::move(*s));
+    }
+  }
+  if (numbers.state_snapshot) {
+    if (auto s = FieldStringOption(*field, *numbers.state_snapshot)) {
+      field->set_state_role(FieldDescriptor::StateRole::kSnapshot);
+      field->set_state_name(std::move(*s));
+    }
+  }
+  if (numbers.state_key && FieldBoolOption(*field, *numbers.state_key)) {
+    field->set_state_role(FieldDescriptor::StateRole::kKey);
   }
 }
 

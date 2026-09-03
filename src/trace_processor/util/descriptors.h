@@ -56,6 +56,13 @@ class FieldDescriptor {
   }
   bool is_pid() const { return is_pid_; }
   bool is_tid() const { return is_tid_; }
+
+  // Generic state tracks: the role this field plays in a state change/snapshot
+  // message and the (globally namespaced) state name it refers to.
+  enum class StateRole { kNone, kCur, kPrev, kSnapshot, kKey };
+  StateRole state_role() const { return state_role_; }
+  const std::string& state_name() const { return state_name_; }
+
   bool is_repeated() const { return is_repeated_; }
   bool is_packed() const { return is_packed_; }
   bool is_extension() const { return is_extension_; }
@@ -80,6 +87,9 @@ class FieldDescriptor {
   void set_is_pid(bool is_pid) { is_pid_ = is_pid; }
   void set_is_tid(bool is_tid) { is_tid_ = is_tid; }
 
+  void set_state_role(StateRole role) { state_role_ = role; }
+  void set_state_name(std::string name) { state_name_ = std::move(name); }
+
   void set_extension_full_name(const std::string& extension_full_name) {
     extension_full_name_ = extension_full_name;
   }
@@ -93,6 +103,8 @@ class FieldDescriptor {
   std::optional<uint32_t> flags_enum_descriptor_idx_;
   bool is_pid_ = false;
   bool is_tid_ = false;
+  StateRole state_role_ = StateRole::kNone;
+  std::string state_name_;
   std::vector<uint8_t> options_;
   std::optional<std::string> default_value_;
   bool is_repeated_;
@@ -315,6 +327,10 @@ class DescriptorPool {
     std::optional<uint32_t> flags_enum;
     std::optional<uint32_t> pid;
     std::optional<uint32_t> tid;
+    std::optional<uint32_t> state_cur;
+    std::optional<uint32_t> state_prev;
+    std::optional<uint32_t> state_snapshot;
+    std::optional<uint32_t> state_key;
   };
   CustomOptionNumbers FindCustomOptionNumbers() const;
   void ResolveCustomFieldOptions(const ProtoDescriptor& descriptor,
