@@ -34,4 +34,25 @@ extend google.protobuf.FieldOptions {
   // Marks an int field as a thread id; trace_processor emits a companion
   // "<...>utid" arg (a trailing "tid" replaced with "utid").
   optional bool is_tid = 73923;
+
+  // Generic state tracks: these let trace_processor reconstruct the full
+  // timeline of a value that changes over time (including the value it held
+  // before the trace started) with no per-feature importer. A "change" message
+  // carries, per state, a prev/cur pair plus a key; a "snapshot" message
+  // carries the current value plus a key and a position (start/end). The
+  // annotation string is the (globally namespaced) state name and is the join
+  // key between the change stream and the snapshot.
+
+  // Marks a field as the CURRENT value of the named state (in a change message).
+  optional string state_cur = 73930;
+
+  // Marks a field as the PREVIOUS value of the named state (change message).
+  optional string state_prev = 73931;
+
+  // Marks a field as the value of the named state (in a snapshot record).
+  optional string state_snapshot = 73932;
+
+  // Marks a field as part of the entity key identifying whose state this is.
+  // is_pid / is_tid also imply a key part (and resolve to upid / utid).
+  optional bool state_key = 73933;
 }
