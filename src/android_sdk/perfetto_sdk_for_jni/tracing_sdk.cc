@@ -19,8 +19,17 @@
 #include <sys/types.h>
 
 #include <cstdarg>
-#include <mutex>
+#include <string_view>
 #include <utility>
+
+#if defined(__ANDROID__)
+#include <fcntl.h>
+#include <sys/system_properties.h>
+#include <unistd.h>
+
+#include <cstring>
+#include <string>
+#endif
 
 #include "perfetto/public/abi/producer_abi.h"
 #include "perfetto/public/producer.h"
@@ -29,16 +38,71 @@
 
 namespace perfetto {
 namespace sdk_for_jni {
-void register_perfetto(bool backend_in_process) {
-  static std::once_flag registration;
-  std::call_once(registration, [backend_in_process]() {
+namespace {
+
+#if defined(__ANDROID__)
+// Processes allowed to connect to the system tracing backend. Anything not on
+// this list (and without the debug sysprop) is left uninitialized.
+constexpr const char* kAllowlist[] = {
+    "system_server",
+    "com.google.android.youtube",
+    "com.google.android.googlequicksearchbox",
+    "com.android.systemui",
+};
+
+bool IsSystemRegistrationAllowed() {
+  // Read argv[0] (the process/package name) from /proc/self/cmdline.
+  char cmdline[256] = {};
+  int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1);
+    close(fd);
+    if (n < 0)
+      cmdline[0] = '\0';
+  }
+
+  // Multi-process apps append ":subprocess"; compare only the package name.
+  std::string_view name(cmdline);
+  name = name.substr(0, name.find(':'));
+  for (const char* allowed : kAllowlist) {
+    if (name == allowed)
+      return true;
+  }
+
+  // Debug override: allow every app when the sysprop is set to "1".
+  char val[PROP_VALUE_MAX] = {};
+  int len = __system_property_get(
+      "persist.debug.perfetto.sdk_enable_tracing_all_apps", val);
+  return len == 1 && val[0] == '1';
+}
+#else
+bool IsSystemRegistrationAllowed() {
+  return true;  // Host builds are unconditionally allowed.
+}
+#endif
+
+}  // namespace
+
+bool register_perfetto(bool backend_in_process) {
+  // Function-local static: the init decision runs exactly once (thread-safe in
+  // C++11) and every subsequent call returns the same result -- no once_flag
+  // and no separate "initialized" bookkeeping needed.
+  static const bool initialized = [backend_in_process]() -> bool {
+    // The in-process backend (tests/benchmarks) is always allowed. The system
+    // backend is gated: if this process isn't allowlisted we return without
+    // initializing, so no muxer thread or backend is created for it.
+    if (!backend_in_process && !IsSystemRegistrationAllowed())
+      return false;
+
     struct PerfettoProducerInitArgs args = PERFETTO_PRODUCER_INIT_ARGS_INIT();
     args.backends = backend_in_process ? PERFETTO_BACKEND_IN_PROCESS
                                        : PERFETTO_BACKEND_SYSTEM;
     args.shmem_size_hint_kb = 1024;
     PerfettoProducerInit(args);
     PerfettoTeInit();
-  });
+    return true;
+  }();
+  return initialized;
 }
 
 void trace_event(int type,
@@ -222,7 +286,10 @@ RegisteredTrack::RegisteredTrack(uint64_t id,
       is_counter_(is_counter),
       is_name_static_(is_name_static),
       is_state_(is_state) {
-  register_track();
+  // Construction is inert (mirrors Category): registration calls into
+  // PerfettoTe* and therefore requires perfetto to be initialized, so it is an
+  // explicit step the caller performs only when register_perfetto() returned
+  // true. See dev_perfetto_sdk_PerfettoTrackEventExtra*Track_init.
 }
 
 RegisteredTrack::~RegisteredTrack() {

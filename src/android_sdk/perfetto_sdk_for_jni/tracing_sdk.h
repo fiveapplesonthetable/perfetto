@@ -58,9 +58,18 @@ namespace perfetto {
 namespace sdk_for_jni {
 /**
  * @brief Initializes the global perfetto instance.
+ *
+ * For the system backend, initialization only happens for allowlisted
+ * processes (see tracing_sdk.cc); non-allowlisted processes are left
+ * uninitialized so that no muxer thread or tracing backend is created for them.
+ * The in-process backend is always initialized.
+ *
  * @param backend_in_process use in-process or system backend
+ * @return true if perfetto is initialized (i.e. tracing is usable in this
+ *         process). Callers must not emit trace events / register categories or
+ *         tracks when this returns false.
  */
-void register_perfetto(bool backend_in_process = false);
+bool register_perfetto(bool backend_in_process = false);
 
 /**
  * @brief Represents extra data associated with a trace event.

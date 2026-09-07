@@ -472,10 +472,12 @@ static jlong dev_perfetto_sdk_PerfettoTrackEventExtraCounterTrack_init(
     jstring name,
     jlong parent_uuid,
     jboolean is_name_static) {
-  return toJLong(new sdk_for_jni::RegisteredTrack(
+  auto* track = new sdk_for_jni::RegisteredTrack(
       // id disambiguates same-named named-tracks; unused for counter/state.
       /*id=*/0, parent_uuid, StringBuffer::utf16_to_ascii(env, name).data(),
-      /*is_counter=*/true, is_name_static, /*is_state=*/false));
+      /*is_counter=*/true, is_name_static, /*is_state=*/false);
+  track->register_track();
+  return toJLong(track);
 }
 
 static jlong dev_perfetto_sdk_PerfettoTrackEventExtraCounterTrack_delete(
@@ -496,10 +498,12 @@ static jlong dev_perfetto_sdk_PerfettoTrackEventExtraStateTrack_init(
     jstring name,
     jlong parent_uuid,
     jboolean is_name_static) {
-  return toJLong(new sdk_for_jni::RegisteredTrack(
+  auto* track = new sdk_for_jni::RegisteredTrack(
       // id disambiguates same-named named-tracks; unused for counter/state.
       /*id=*/0, parent_uuid, StringBuffer::utf16_to_ascii(env, name).data(),
-      /*is_counter=*/false, is_name_static, /*is_state=*/true));
+      /*is_counter=*/false, is_name_static, /*is_state=*/true);
+  track->register_track();
+  return toJLong(track);
 }
 
 static jlong dev_perfetto_sdk_PerfettoTrackEventExtraStateTrack_delete(
