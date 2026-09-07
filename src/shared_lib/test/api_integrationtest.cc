@@ -1053,6 +1053,26 @@ TEST_F(SharedLibDataSourceTest, FlushDone) {
   t.join();
 }
 
+TEST_F(SharedLibDataSourceTest, FlushFlags) {
+  TracingSession tracing_session =
+      TracingSession::Builder().set_data_source_name(kDataSourceName2).Build();
+
+  std::atomic<uint64_t> seen_flush_flags{0};
+
+  EXPECT_CALL(ds2_callbacks_, OnFlush(_, _, kDataSource2UserArg, _, _))
+      .WillOnce([&](struct PerfettoDsImpl*, PerfettoDsInstanceIndex, void*,
+                    void*, struct PerfettoDsOnFlushArgs* args) {
+        seen_flush_flags.store(PerfettoDsOnFlushArgsGetFlushFlags(args));
+      });
+
+  tracing_session.FlushBlocking(/*timeout_ms=*/10000);
+
+  // A consumer-initiated flush is reported to the data source as an explicit
+  // flush (reason is the low 4 bits of the flags, see flush_flags.h).
+  EXPECT_EQ(seen_flush_flags.load() & 0xF,
+            static_cast<uint64_t>(PERFETTO_DS_ON_FLUSH_REASON_EXPLICIT));
+}
+
 TEST_F(SharedLibDataSourceTest, ThreadLocalState) {
   bool ignored = false;
   void* const kTlsPtr = &ignored;

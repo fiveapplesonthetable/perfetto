@@ -144,6 +144,32 @@ PerfettoDsOnFlushArgsPostpone(struct PerfettoDsOnFlushArgs*);
 // PerfettoDsOnFlushArgsPostpone).
 PERFETTO_SDK_EXPORT void PerfettoDsFlushDone(struct PerfettoDsAsyncFlusher*);
 
+// Reason bits (bits [0..4)) of the value returned by
+// PerfettoDsOnFlushArgsGetFlushFlags(). Mirrors perfetto::FlushFlags::Reason.
+enum PerfettoDsOnFlushReason {
+  PERFETTO_DS_ON_FLUSH_REASON_UNKNOWN = 0,
+  PERFETTO_DS_ON_FLUSH_REASON_PERIODIC = 1,
+  PERFETTO_DS_ON_FLUSH_REASON_TRACE_STOP = 2,
+  PERFETTO_DS_ON_FLUSH_REASON_TRACE_CLONE = 3,
+  PERFETTO_DS_ON_FLUSH_REASON_EXPLICIT = 4,
+};
+
+// Returns the flush flags for this flush, describing why the service requested
+// it. This mirrors perfetto::FlushFlags and is a bitfield with the following
+// layout (flush_flags.h is the source of truth for this ABI):
+//   bits [0..4):   reason        (see enum PerfettoDsOnFlushReason)
+//   bits [4..8):   initiator     (1=traced, 2=perfetto_cmd, 3=consumer sdk)
+//   bits [8..12):  clone target  (1=bugreport)
+// A data source that only wants to emit a final snapshot of its state (e.g. at
+// trace stop, or when a session is cloned/snapshotted) can read the reason and
+// skip periodic/explicit flushes, e.g.:
+//   uint64_t f = PerfettoDsOnFlushArgsGetFlushFlags(args);
+//   uint32_t reason = (uint32_t)(f & 0xF);
+//   if (reason == PERFETTO_DS_ON_FLUSH_REASON_TRACE_CLONE ||
+//       reason == PERFETTO_DS_ON_FLUSH_REASON_TRACE_STOP) { ... }
+PERFETTO_SDK_EXPORT uint64_t
+PerfettoDsOnFlushArgsGetFlushFlags(struct PerfettoDsOnFlushArgs*);
+
 // Called when the tracing service requires all the pending tracing data to be
 // flushed for a data source instance. `user_arg` is the value passed to
 // PerfettoDsSetCbUserArg(). `inst_ctx` is the return value of

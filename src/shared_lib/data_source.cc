@@ -457,6 +457,11 @@ PerfettoDsAsyncFlusher* PerfettoDsOnFlushArgsPostpone(
   return reinterpret_cast<PerfettoDsAsyncFlusher*>(cb);
 }
 
+uint64_t PerfettoDsOnFlushArgsGetFlushFlags(PerfettoDsOnFlushArgs* args) {
+  return reinterpret_cast<const ShlibDataSource::FlushArgs*>(args)
+      ->flush_flags.flags();
+}
+
 void PerfettoDsFlushDone(PerfettoDsAsyncFlusher* stopper) {
   auto* cb = reinterpret_cast<std::function<void()>*>(stopper);
   (*cb)();
