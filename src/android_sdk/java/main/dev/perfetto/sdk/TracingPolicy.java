@@ -45,16 +45,19 @@ final class TracingPolicy {
   private static final String FRAMEWORK_PREFIX = "com.android.internal.";
   private static final String LIBCORE_PREFIX = "dalvik.system.";
 
+  // Entries are regexes matched against the full process name (same idiom as
+  // producer_name_regex_filter in the trace config). "(:.*)?" also matches an
+  // app's sub-processes, e.g. "com.example:sandbox".
   private static final String[] LIBCORE_ALLOWLIST = {
     "system_server",
-    "com.android.systemui",
+    "com\\.android\\.systemui(:.*)?",
   };
 
   private static final String[] FRAMEWORK_ALLOWLIST = {
     "system_server",
-    "com.android.systemui",
-    "com.google.android.youtube",
-    "com.google.android.googlequicksearchbox",
+    "com\\.android\\.systemui(:.*)?",
+    "com\\.google\\.android\\.youtube(:.*)?",
+    "com\\.google\\.android\\.googlequicksearchbox(:.*)?",
   };
 
   private static final String PROP_ENABLE_ALL =
@@ -79,10 +82,8 @@ final class TracingPolicy {
     if (processName == null || processName.isEmpty()) {
       return false;
     }
-    int colon = processName.indexOf(':'); // Multi-process apps append ":subprocess".
-    String pkg = colon < 0 ? processName : processName.substring(0, colon);
-    for (String entry : allowlist) {
-      if (pkg.equals(entry)) {
+    for (String pattern : allowlist) {
+      if (processName.matches(pattern)) {
         return true;
       }
     }
