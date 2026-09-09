@@ -821,12 +821,14 @@ std::pair<StringPool::Id, StringPool::Id> ProtoToArgsParser::InternSuffixedKeys(
 
 void ProtoToArgsParser::AddPid(int64_t pid, Delegate& delegate) {
   auto [fk, k] = InternSuffixedKeys(delegate, "pid", "upid");
-  delegate.AddUpid(fk, k, pid);
+  auto name_k = InternSuffixedKeys(delegate, "pid", "process_name").second;
+  delegate.AddUpid(fk, k, name_k, pid);
 }
 
 void ProtoToArgsParser::AddTid(int64_t tid, Delegate& delegate) {
   auto [fk, k] = InternSuffixedKeys(delegate, "tid", "utid");
-  delegate.AddUtid(fk, k, tid);
+  auto name_k = InternSuffixedKeys(delegate, "tid", "thread_name").second;
+  delegate.AddUtid(fk, k, name_k, tid);
 }
 
 // ===========================================================================

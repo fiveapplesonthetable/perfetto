@@ -107,7 +107,9 @@ ArgsInserter::~ArgsInserter() {
 ArgsInserter& ArgsInserter::AddArg(StringId flat_key,
                                    StringId key,
                                    Variadic value,
-                                   UpdatePolicy update_policy) {
+                                   UpdatePolicy update_policy,
+                                   StringId annotation,
+                                   StringId name_key) {
   std::vector<CompactArg>& args = buffer_->args;
   base::FlatHashMap<StringId, uint32_t>& key_index = buffer_->key_index;
 
@@ -138,11 +140,14 @@ ArgsInserter& ArgsInserter::AddArg(StringId flat_key,
     existing->flat_key = flat_key;
     existing->value = value;
     existing->update_policy = update_policy;
+    existing->annotation = annotation;
+    existing->name_key = name_key;
     return *this;
   }
 
   auto new_index = static_cast<uint32_t>(args.size());
-  args.emplace_back(CompactArg{flat_key, key, value, update_policy});
+  args.emplace_back(
+      CompactArg{flat_key, key, value, update_policy, annotation, name_key});
   if (key_index.size() != 0) {
     key_index.Insert(key, new_index);
   } else if (args.size() >= kKeyIndexThreshold) {

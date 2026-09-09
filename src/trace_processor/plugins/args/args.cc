@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "perfetto/base/compiler.h"
+#include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "src/trace_processor/containers/null_term_string_view.h"
 #include "src/trace_processor/core/plugin/plugin.h"
@@ -220,13 +221,45 @@ void ArgSetToJson::Step(sqlite3_context* ctx, int, sqlite3_value** argv) {
   args_cursor.SetFilterValueUnchecked(0, arg_set_id);
   args_cursor.Execute();
 
+  auto& companion_by_key = user_data->companion_by_key;
+  if (!user_data->annotations_loaded) {
+    StringId upid_ann = storage->InternString("upid");
+    StringId utid_ann = storage->InternString("utid");
+    auto& cursor = user_data->annotation_cursor;
+    cursor.Execute();
+    for (; !cursor.Eof(); cursor.Next()) {
+      bool is_upid = cursor.annotation() == upid_ann;
+      if (!is_upid && cursor.annotation() != utid_ann) {
+        continue;
+      }
+      companion_by_key.Insert(cursor.key(), {is_upid, cursor.name_key()});
+    }
+    user_data->annotations_loaded = true;
+  }
+
   // Reuse arg_set - clear but retain capacity
   arg_set.Clear();
   for (; !args_cursor.Eof(); args_cursor.Next()) {
-    const auto result = arg_set.AppendArg(storage->GetString(args_cursor.key()),
-                                          GetArgValue(*storage, args_cursor));
-    if (!result.ok()) {
-      return sqlite::result::Error(ctx, result.c_message());
+    NullTermStringView key = storage->GetString(args_cursor.key());
+    Variadic v = GetArgValue(*storage, args_cursor);
+    if (auto r = arg_set.AppendArg(key, v); !r.ok()) {
+      return sqlite::result::Error(ctx, r.c_message());
+    }
+    // A resolved upid/utid arg also emits a companion process/thread name.
+    const auto* companion = companion_by_key.Find(args_cursor.key());
+    if (companion != nullptr) {
+      auto id = static_cast<uint32_t>(v.int_value);
+      StringId name =
+          companion->is_upid
+              ? storage->process_table()[id].name().value_or(kNullStringId)
+              : storage->thread_table()[id].name().value_or(kNullStringId);
+      if (!name.is_null()) {
+        if (auto r = arg_set.AppendArg(storage->GetString(companion->name_key),
+                                       Variadic::String(name));
+            !r.ok()) {
+          return sqlite::result::Error(ctx, r.c_message());
+        }
+      }
     }
   }
 

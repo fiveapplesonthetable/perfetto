@@ -47,8 +47,8 @@ class ArgsParser : public util::ProtoToArgsParser::Delegate {
   void AddDouble(Id flat_key, Id key, double) override;
   void AddPointer(Id flat_key, Id key, uint64_t) override;
   void AddBoolean(Id flat_key, Id key, bool) override;
-  void AddUpid(Id flat_key, Id key, int64_t pid) override;
-  void AddUtid(Id flat_key, Id key, int64_t tid) override;
+  void AddUpid(Id flat_key, Id key, Id name_key, int64_t pid) override;
+  void AddUtid(Id flat_key, Id key, Id name_key, int64_t tid) override;
   void AddBytes(Id flat_key, Id key, const protozero::ConstBytes&) override;
   bool AddJson(Id flat_key, Id key, const protozero::ConstChars&) override;
   void AddNull(Id flat_key, Id key) override;

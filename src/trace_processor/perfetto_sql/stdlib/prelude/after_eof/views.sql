@@ -270,6 +270,18 @@ SELECT
   END AS display_value
 FROM __intrinsic_args;
 
+-- Semantic annotations on arg keys, joined to `args` by key.
+CREATE PERFETTO VIEW arg_annotation(
+  -- The key of the annotated arg.
+  key STRING,
+  -- The annotation (e.g. 'upid', 'utid').
+  annotation STRING,
+  -- The key under which the resolved process/thread name is emitted.
+  name_key STRING
+)
+AS
+SELECT key, annotation, name_key FROM __intrinsic_arg_annotation;
+
 -- Contains all Linux perf sessions in the trace, including sessions which
 -- only recorded counters and did not capture any callstacks.
 CREATE PERFETTO VIEW perf_session(

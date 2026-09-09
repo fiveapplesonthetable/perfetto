@@ -144,13 +144,13 @@ class ProtoToArgsParserTest : public ::testing::Test,
     args_.push_back(ss.str());
   }
 
-  void AddUpid(Id fk, Id k, int64_t pid) override {
+  void AddUpid(Id fk, Id k, Id /*name_key*/, int64_t pid) override {
     std::stringstream ss;
     ss << K(fk) << " " << K(k) << " upid_of(" << pid << ")";
     args_.push_back(ss.str());
   }
 
-  void AddUtid(Id fk, Id k, int64_t tid) override {
+  void AddUtid(Id fk, Id k, Id /*name_key*/, int64_t tid) override {
     std::stringstream ss;
     ss << K(fk) << " " << K(k) << " utid_of(" << tid << ")";
     args_.push_back(ss.str());
@@ -843,13 +843,13 @@ class DebugAnnotationParserTest : public ::testing::Test,
     args_.push_back(ss.str());
   }
 
-  void AddUpid(Id fk, Id k, int64_t pid) override {
+  void AddUpid(Id fk, Id k, Id /*name_key*/, int64_t pid) override {
     std::stringstream ss;
     ss << K(fk) << " " << K(k) << " upid_of(" << pid << ")";
     args_.push_back(ss.str());
   }
 
-  void AddUtid(Id fk, Id k, int64_t tid) override {
+  void AddUtid(Id fk, Id k, Id /*name_key*/, int64_t tid) override {
     std::stringstream ss;
     ss << K(fk) << " " << K(k) << " utid_of(" << tid << ")";
     args_.push_back(ss.str());

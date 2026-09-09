@@ -121,8 +121,12 @@ class ProtoToArgsParser {
     virtual void AddDouble(Id flat_key, Id key, double value) = 0;
     virtual void AddPointer(Id flat_key, Id key, uint64_t value) = 0;
     virtual void AddBoolean(Id flat_key, Id key, bool value) = 0;
-    virtual void AddUpid(Id, Id, int64_t) {}
-    virtual void AddUtid(Id, Id, int64_t) {}
+    // `name_key` is the key under which the delegate may emit the resolved
+    // process/thread name (e.g. "foo_process_name" for key "foo_upid").
+    virtual void AddUpid(Id /*flat_key*/, Id /*key*/, Id /*name_key*/, int64_t) {
+    }
+    virtual void AddUtid(Id /*flat_key*/, Id /*key*/, Id /*name_key*/, int64_t) {
+    }
     virtual void AddBytes(Id flat_key,
                           Id key,
                           const protozero::ConstBytes& value) {

@@ -17,6 +17,7 @@
 
 #include <optional>
 
+#include "perfetto/ext/base/flat_hash_map.h"
 #include "src/trace_processor/core/dataframe/specs.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_function.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_value.h"
@@ -58,10 +59,21 @@ struct ArgSetToJson : public sqlite::Function<ArgSetToJson> {
               0,
               dataframe::Eq{},
               std::nullopt,
-          }})) {}
+          }})),
+          annotation_cursor(s->arg_annotation_table().CreateCursor()) {}
+
+    // A resolved upid/utid arg and the key its name is emitted under.
+    struct Companion {
+      bool is_upid;
+      StringId name_key;
+    };
 
     TraceStorage* storage;
     tables::ArgTable::ConstCursor arg_cursor;
+    tables::ArgAnnotationTable::ConstCursor annotation_cursor;
+    // Annotated arg key -> its name companion, built once on first use.
+    base::FlatHashMap<StringId, Companion> companion_by_key;
+    bool annotations_loaded = false;
     json::JsonSerializer json_serializer;
     ArgSet arg_set;
   };
