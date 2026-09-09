@@ -35,6 +35,7 @@
 #include "perfetto/public/abi/data_source_abi.h"
 #include "perfetto/public/abi/stream_writer_abi.h"
 #include "perfetto/tracing/buffer_exhausted_policy.h"
+#include "perfetto/tracing/core/flush_flags.h"
 #include "perfetto/tracing/core/forward_decls.h"
 #include "perfetto/tracing/data_source.h"
 #include "perfetto/tracing/internal/basic_types.h"
@@ -461,6 +462,33 @@ void PerfettoDsFlushDone(PerfettoDsAsyncFlusher* stopper) {
   auto* cb = reinterpret_cast<std::function<void()>*>(stopper);
   (*cb)();
   delete cb;
+}
+
+enum PerfettoDsFlushReason PerfettoDsOnFlushArgsGetReason(
+    PerfettoDsOnFlushArgs* args) {
+  // The public C enum and perfetto::FlushFlags::Reason are separate ABI
+  // definitions (the pure-C public header cannot see the C++ enum class).
+  // Nothing shares them, so pin the values together here.
+  static_assert(
+      static_cast<uint64_t>(perfetto::FlushFlags::Reason::kUnknown) ==
+              PERFETTO_DS_FLUSH_REASON_UNKNOWN &&
+          static_cast<uint64_t>(perfetto::FlushFlags::Reason::kPeriodic) ==
+              PERFETTO_DS_FLUSH_REASON_PERIODIC &&
+          static_cast<uint64_t>(perfetto::FlushFlags::Reason::kTraceStop) ==
+              PERFETTO_DS_FLUSH_REASON_TRACE_STOP &&
+          static_cast<uint64_t>(perfetto::FlushFlags::Reason::kTraceClone) ==
+              PERFETTO_DS_FLUSH_REASON_TRACE_CLONE &&
+          static_cast<uint64_t>(perfetto::FlushFlags::Reason::kExplicit) ==
+              PERFETTO_DS_FLUSH_REASON_EXPLICIT,
+      "PerfettoDsFlushReason must stay in sync with FlushFlags::Reason");
+  if (!args) {
+    return PERFETTO_DS_FLUSH_REASON_UNKNOWN;
+  }
+  auto* flush_args = reinterpret_cast<const ShlibDataSource::FlushArgs*>(args);
+  // reason() clamps unknown/future values to kUnknown, so the cast is always a
+  // valid PerfettoDsFlushReason.
+  return static_cast<enum PerfettoDsFlushReason>(
+      flush_args->flush_flags.reason());
 }
 
 void* PerfettoDsImplGetInstanceLocked(struct PerfettoDsImpl* ds_impl,

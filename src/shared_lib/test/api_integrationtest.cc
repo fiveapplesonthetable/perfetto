@@ -1053,6 +1053,29 @@ TEST_F(SharedLibDataSourceTest, FlushDone) {
   t.join();
 }
 
+TEST_F(SharedLibDataSourceTest, FlushReason) {
+  TracingSession tracing_session =
+      TracingSession::Builder().set_data_source_name(kDataSourceName2).Build();
+
+  enum PerfettoDsFlushReason reason = PERFETTO_DS_FLUSH_REASON_PERIODIC;
+  WaitableEvent flush_called;
+
+  EXPECT_CALL(ds2_callbacks_, OnFlush(_, _, kDataSource2UserArg, _, _))
+      .WillOnce([&](struct PerfettoDsImpl*, PerfettoDsInstanceIndex, void*,
+                    void*, struct PerfettoDsOnFlushArgs* args) {
+        reason = PerfettoDsOnFlushArgsGetReason(args);
+        flush_called.Notify();
+      });
+
+  tracing_session.FlushBlocking(/*timeout_ms=*/10000);
+  flush_called.WaitForNotification();
+  // An explicit consumer-initiated flush must be reported as EXPLICIT.
+  EXPECT_EQ(reason, PERFETTO_DS_FLUSH_REASON_EXPLICIT);
+  // A NULL args must be reported as UNKNOWN rather than crashing.
+  EXPECT_EQ(PerfettoDsOnFlushArgsGetReason(nullptr),
+            PERFETTO_DS_FLUSH_REASON_UNKNOWN);
+}
+
 TEST_F(SharedLibDataSourceTest, ThreadLocalState) {
   bool ignored = false;
   void* const kTlsPtr = &ignored;

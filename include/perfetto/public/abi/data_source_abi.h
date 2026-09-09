@@ -144,6 +144,23 @@ PerfettoDsOnFlushArgsPostpone(struct PerfettoDsOnFlushArgs*);
 // PerfettoDsOnFlushArgsPostpone).
 PERFETTO_SDK_EXPORT void PerfettoDsFlushDone(struct PerfettoDsAsyncFlusher*);
 
+// Reason a flush was requested. Mirrors perfetto::FlushFlags::Reason; the values
+// are part of the tracing protocol ABI, do not renumber. Unknown or future
+// values are reported as PERFETTO_DS_FLUSH_REASON_UNKNOWN.
+enum PerfettoDsFlushReason {
+  PERFETTO_DS_FLUSH_REASON_UNKNOWN = 0,
+  PERFETTO_DS_FLUSH_REASON_PERIODIC = 1,
+  PERFETTO_DS_FLUSH_REASON_TRACE_STOP = 2,
+  PERFETTO_DS_FLUSH_REASON_TRACE_CLONE = 3,
+  PERFETTO_DS_FLUSH_REASON_EXPLICIT = 4,
+};
+
+// Returns why the current flush was requested. Only valid from within the
+// OnFlush callback; `args` is that callback's flush args (may be NULL, in which
+// case PERFETTO_DS_FLUSH_REASON_UNKNOWN is returned).
+PERFETTO_SDK_EXPORT enum PerfettoDsFlushReason PerfettoDsOnFlushArgsGetReason(
+    struct PerfettoDsOnFlushArgs*);
+
 // Called when the tracing service requires all the pending tracing data to be
 // flushed for a data source instance. `user_arg` is the value passed to
 // PerfettoDsSetCbUserArg(). `inst_ctx` is the return value of
