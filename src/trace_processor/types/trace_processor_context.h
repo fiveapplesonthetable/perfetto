@@ -326,6 +326,16 @@ class TraceProcessorContext::ForkedContextState {
       trace_and_machine_to_context;
   base::FlatHashMap<uint32_t, TraceProcessorContext*> trace_to_context;
   base::FlatHashMap<int64_t, TraceProcessorContext*> machine_to_context;
+
+  // One entry per distinct boot/device fingerprint seen across merged trace
+  // files; files matching an entry share its machine. Populated by
+  // ForwardingTraceParser for files with no other machine attribution.
+  struct BootMachine {
+    int64_t boot_offset_ns;
+    uint64_t device_hash;
+    int64_t raw_machine_id;
+  };
+  std::vector<BootMachine> boot_machines;
 };
 
 }  // namespace perfetto::trace_processor

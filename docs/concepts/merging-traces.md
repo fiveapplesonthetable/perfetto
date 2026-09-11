@@ -117,6 +117,15 @@ merging populates it from several sources:
   machines get synthetic `raw_id` values starting at 2^32, outside the
   32-bit embedded-id space; the same name used for several files means one
   shared machine.
+- **Boot fingerprints.** A proto file with no other attribution is keyed on
+  the boot it was recorded on, read from its first `ClockSnapshot`
+  (`REALTIME - BOOTTIME` is the wall-clock time the kernel booted) and
+  `SystemInfo` identity packets. Files from the same boot share a machine,
+  so two recordings of one boot merge onto one timeline; files from
+  different boots or devices each get their own machine, so independent
+  recordings never interleave their scheduling data or per-cpu counters. A
+  manifest declaration always takes precedence, and files without a
+  fingerprint (e.g. clockless JSON) share the host machine as before.
 - **`SystemInfo.machine_name`.** A producer can set a human-readable name in
   its `SystemInfo` packet, which fills the `machine.name` column. Nothing
   sets this automatically; without it (or a manifest name) UIs fall back to

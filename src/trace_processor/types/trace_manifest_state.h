@@ -32,6 +32,11 @@ namespace perfetto::trace_processor {
 // raw machine ids are int64 throughout trace_processor.
 constexpr int64_t kFirstManifestMachineId = 1ll << 32;
 
+// Synthetic ids for machines derived from boot fingerprints (see
+// ForwardingTraceParser) start here, above the manifest space so the two
+// allocators never collide.
+constexpr int64_t kFirstBootMachineId = 1ll << 33;
+
 // Parsed contents of a perfetto_manifest sidecar file: a JSON file which,
 // as the first file of the trace (typically inside an archive, where sorting
 // puts it first), overrides clock and machine handling for the files that

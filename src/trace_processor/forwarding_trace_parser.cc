@@ -42,7 +42,13 @@
 #include "src/trace_processor/util/clock_synchronizer.h"
 #include "src/trace_processor/util/trace_type.h"
 
+#include "perfetto/ext/base/fnv_hash.h"
+#include "perfetto/protozero/proto_decoder.h"
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
+#include "protos/perfetto/common/system_info.pbzero.h"
+#include "protos/perfetto/trace/clock_snapshot.pbzero.h"
+#include "protos/perfetto/trace/trace.pbzero.h"
+#include "protos/perfetto/trace/trace_packet.pbzero.h"
 
 namespace perfetto::trace_processor {
 namespace {
@@ -72,6 +78,99 @@ std::optional<TraceSorter::SortingMode> GetMinimumSortingMode(
       return std::nullopt;
   }
   PERFETTO_FATAL("For GCC");
+}
+
+// A file's boot/device fingerprint, read from the packets in its first
+// chunk: REALTIME - BOOTTIME is the wall-clock time the kernel booted,
+// identifying the boot; the SystemInfo identity fields distinguish devices
+// whose boots happen to coincide.
+struct BootFingerprint {
+  int64_t boot_offset_ns = 0;
+  uint64_t device_hash = 0;
+};
+
+// Boot-offset tolerance for "same boot": REALTIME can be adjusted (NTP)
+// between two recordings of one boot, while distinct boots differ by at
+// least the earlier boot's whole uptime plus the reboot itself.
+constexpr int64_t kSameBootToleranceNs = 10ll * 1000 * 1000 * 1000;
+
+std::optional<BootFingerprint> ScanBootFingerprint(const TraceBlobView& blob) {
+  protozero::ProtoDecoder trace(blob.data(), blob.length());
+  std::optional<int64_t> boot_offset;
+  std::optional<uint64_t> device_hash;
+  for (auto f = trace.ReadField(); f.valid(); f = trace.ReadField()) {
+    if (f.id() != protos::pbzero::Trace::kPacketFieldNumber) {
+      continue;
+    }
+    protos::pbzero::TracePacket::Decoder packet(f.as_bytes());
+    if (packet.has_machine_id()) {
+      continue;  // Remote-machine data does not describe this file's host.
+    }
+    if (!boot_offset && packet.has_clock_snapshot()) {
+      protos::pbzero::ClockSnapshot::Decoder snapshot(packet.clock_snapshot());
+      std::optional<int64_t> boottime;
+      std::optional<int64_t> realtime;
+      for (auto it = snapshot.clocks(); it; ++it) {
+        protos::pbzero::ClockSnapshot::Clock::Decoder clock(*it);
+        if (clock.clock_id() == protos::pbzero::BUILTIN_CLOCK_BOOTTIME) {
+          boottime = static_cast<int64_t>(clock.timestamp());
+        } else if (clock.clock_id() == protos::pbzero::BUILTIN_CLOCK_REALTIME) {
+          realtime = static_cast<int64_t>(clock.timestamp());
+        }
+      }
+      if (boottime && realtime) {
+        boot_offset = *realtime - *boottime;
+      }
+    }
+    if (!device_hash && packet.has_system_info()) {
+      protos::pbzero::SystemInfo::Decoder info(packet.system_info());
+      base::FnvHasher hasher;
+      if (info.has_utsname()) {
+        protos::pbzero::Utsname::Decoder utsname(info.utsname());
+        hasher.Update(utsname.sysname().ToStdStringView());
+        hasher.Update(utsname.release().ToStdStringView());
+        hasher.Update(utsname.version().ToStdStringView());
+        hasher.Update(utsname.machine().ToStdStringView());
+      }
+      hasher.Update(info.android_build_fingerprint().ToStdStringView());
+      device_hash = hasher.digest();
+    }
+    if (boot_offset && device_hash) {
+      break;
+    }
+  }
+  if (!boot_offset) {
+    return std::nullopt;
+  }
+  return BootFingerprint{*boot_offset, device_hash.value_or(0)};
+}
+
+// The machine for a fingerprinted file: files whose fingerprints match share
+// a machine. The first fingerprinted file claims the host machine (raw id 0);
+// each later distinct boot gets its own synthetic machine, so independent
+// recordings never interleave their machine-scoped data (sched, cpu and gpu
+// counters, ...) on one machine.
+int64_t ResolveBootMachine(TraceProcessorContext* context,
+                           const BootFingerprint& fingerprint,
+                           bool* allocated_synthetic) {
+  auto& machines = context->forked_context_state->boot_machines;
+  *allocated_synthetic = false;
+  for (const auto& m : machines) {
+    if (m.device_hash == fingerprint.device_hash &&
+        std::abs(m.boot_offset_ns - fingerprint.boot_offset_ns) <=
+            kSameBootToleranceNs) {
+      return m.raw_machine_id;
+    }
+  }
+  int64_t raw_machine_id = 0;
+  if (!machines.empty()) {
+    raw_machine_id =
+        kFirstBootMachineId + static_cast<int64_t>(machines.size()) - 1;
+    *allocated_synthetic = true;
+  }
+  machines.push_back(
+      {fingerprint.boot_offset_ns, fingerprint.device_hash, raw_machine_id});
+  return raw_machine_id;
 }
 
 }  // namespace
@@ -151,12 +250,31 @@ base::Status ForwardingTraceParser::Init(const TraceBlobView& blob) {
     int64_t raw_machine_id = manifest_entry && manifest_entry->machine_id
                                  ? *manifest_entry->machine_id
                                  : 0;
+    // Without any explicit attribution, key the file's machine on the boot
+    // (and device) it was recorded on: files from the same boot share a
+    // machine, independent recordings get their own. A manifest entry always
+    // takes precedence.
+    bool synthetic_boot_machine = false;
+    if (raw_machine_id == 0 && desc->has_boot_fingerprint) {
+      if (auto fingerprint = ScanBootFingerprint(blob)) {
+        raw_machine_id = ResolveBootMachine(input_context_, *fingerprint,
+                                            &synthetic_boot_machine);
+      }
+    }
     // TODO(b/334978369) Make sure proto and systrace traces are parsed first so
     // that we do not get issues with SetPidZeroIsUpidZeroIdleProcess()
     // The machine row was pre-allocated by the manifest reader (which also
     // named it); this fork reuses it via MachineTracker.
     trace_context_ =
         input_context_->ForkContextForTrace(file_id_, raw_machine_id);
+    if (synthetic_boot_machine) {
+      // Label the machine with the file it came from, pending a
+      // SystemInfo.machine_name from the trace itself.
+      StringId name = input_context_->trace_file_tracker->GetName(file_id_);
+      if (name != kNullStringId) {
+        trace_context_->machine_tracker->SetMachineName(name);
+      }
+    }
     if (desc->pid_zero_is_idle) {
       trace_context_->process_tracker->SetPidZeroIsUpidZeroIdleProcess();
     }

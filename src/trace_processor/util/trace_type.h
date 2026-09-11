@@ -77,6 +77,10 @@ struct TraceTypeDescriptor {
   //   The perfetto_manifest sidecar: a config file rather than a trace. It must
   //   be the first file in the input, and gates manifest-specific handling.
   bool is_manifest = false;
+  //   proto: the head of the file carries ClockSnapshot/SystemInfo packets
+  //   identifying the boot and device it was recorded on, which
+  //   ForwardingTraceParser uses to attribute merged files to machines.
+  bool has_boot_fingerprint = false;
 };
 
 // Compile-time identity tag for a trace importer class (mirrors PluginTag).

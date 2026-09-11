@@ -1362,6 +1362,7 @@ class ProtoImporter : public TraceImporter<ProtoImporter> {
     d.archive_priority = 0;
     d.pid_zero_is_idle = true;
     d.detection_priority = 230;
+    d.has_boot_fingerprint = true;
     return d;
   }
 };
