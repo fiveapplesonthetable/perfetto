@@ -97,6 +97,41 @@ export function findWholeTraceSliceDataset(trace: Trace): Dataset | undefined {
   return UnionDataset.create(datasets);
 }
 
+// Builds the node set feeding the distribution panel's slice flamegraph: the
+// slices currently matched by the panel (its materialized, name/scope-filtered
+// source table, narrowed to the brushed value (duration) range when active) as
+// the flamegraph roots, plus all of their descendant slices. Roots have their
+// parent_id nulled so they anchor the tree; the flamegraph then shows where the
+// time inside the matched slices goes, aggregated across every matched
+// instance. Works for any slices, since it uses the slice hierarchy rather than
+// captured call stacks.
+export function buildSliceFlamegraphNodesSql(ctx: {
+  readonly sourceTable: string;
+  readonly idColumn: string;
+  readonly valueColumn: string;
+  readonly brush?: {readonly start: number; readonly end: number};
+}): string {
+  const {sourceTable, idColumn, valueColumn, brush} = ctx;
+  const range =
+    brush === undefined
+      ? ''
+      : ` AND src.${valueColumn} BETWEEN ${brush.start} AND ${brush.end}`;
+  return `
+    WITH matching AS (
+      SELECT src.${idColumn} AS id
+      FROM ${sourceTable} src
+      WHERE src.${idColumn} IS NOT NULL${range}
+    )
+    SELECT s.id, s.dur, s.name, NULL AS parent_id
+    FROM slice s
+    JOIN matching USING (id)
+    UNION
+    SELECT d.id, d.dur, d.name, d.parent_id
+    FROM matching AS m, descendant_slice(m.id) AS d
+    WHERE d.id NOT IN (SELECT id FROM matching)
+  `;
+}
+
 export function sliceDistributionConfig(
   trace: Trace,
   sliceName: string,
@@ -113,6 +148,7 @@ export function sliceDistributionConfig(
     sqlTable: 'slice',
     displayColumns: ['ts', 'dur'],
     cellRenderers: sliceDistributionCellRenderers(trace),
+    flamegraphNodesSql: buildSliceFlamegraphNodesSql,
   };
 }
 

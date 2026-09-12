@@ -40,6 +40,7 @@ import {Tooltip} from '../widgets/tooltip';
 import {Tree, TreeNode} from '../widgets/tree';
 import {extensions} from './extensions';
 import {DurationWidget} from './widgets/duration';
+import {SliceFlamegraph} from './slice_flamegraph';
 import {HistogramSvg} from './widgets/charts_svg/histogram_svg';
 import {
   type HistogramData,
@@ -115,6 +116,13 @@ export const HISTOGRAM_HELP =
   'investigating. The stats below summarize the same values; brushing a ' +
   'range on the chart focuses both the stats and the instances list on ' +
   'that subset.';
+
+export const FLAMEGRAPH_HELP =
+  'A slice flamegraph of the slices currently matched by the histogram, ' +
+  'aggregated by their nested slice tree and weighted by self duration: brush ' +
+  'a range (bucket) above and the flamegraph is recomputed over just the ' +
+  'slices whose value falls in that range, showing where the time inside them ' +
+  'goes.';
 
 export const INSTANCES_HELP =
   'Every individual slice that matches the filter, one row per ' +
@@ -364,6 +372,18 @@ export interface DistributionPanelAttrs extends DistributionInputs {
   >;
 
   readonly title?: string;
+
+  // Optional: when provided, adds a "Flamegraph" pane showing a slice
+  // flamegraph of the rows currently matched by the panel (scope + name +
+  // brushed range). Given the materialized source table, its id/value columns
+  // and the active brush, it returns the node-set SQL (yielding
+  // (id, dur, name, parent_id) rows) that feeds the flamegraph.
+  readonly flamegraphNodesSql?: (ctx: {
+    readonly sourceTable: string;
+    readonly idColumn: string;
+    readonly valueColumn: string;
+    readonly brush?: {readonly start: number; readonly end: number};
+  }) => string;
 }
 
 // Two-pane "value distribution" tab: instances grid + histogram summary,
@@ -393,6 +413,33 @@ export class DistributionPanel implements m.ClassComponent<DistributionPanelAttr
         '.pf-distribution-panel',
         this.renderInstancesPane(attrs, tableEntity),
         this.renderHistogramPane(attrs, tableEntity),
+        this.renderFlamegraphPane(attrs, tableEntity),
+      ),
+    );
+  }
+
+  private renderFlamegraphPane(
+    attrs: DistributionPanelAttrs,
+    tableEntity: DisposableSqlEntity | undefined,
+  ): m.Children {
+    const nodesSqlFn = attrs.flamegraphNodesSql;
+    if (nodesSqlFn === undefined) return undefined;
+    return m(
+      '.pf-distribution-panel__flamegraph',
+      m(
+        Section,
+        {title: titleWithHelp('Flamegraph', FLAMEGRAPH_HELP)},
+        tableEntity === undefined
+          ? m(Spinner, {easing: true})
+          : m(SliceFlamegraph, {
+              trace: attrs.trace,
+              nodesSql: nodesSqlFn({
+                sourceTable: tableEntity.name,
+                idColumn: attrs.idColumn,
+                valueColumn: attrs.valueColumn,
+                brush: this.brush,
+              }),
+            }),
       ),
     );
   }
