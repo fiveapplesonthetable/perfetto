@@ -14,6 +14,7 @@
 
 import("../../../../gn/perfetto.gni")
 import("../../../../gn/perfetto_tp_tables.gni")
+import("../../../../gn/test.gni")
 
 assert(enable_perfetto_trace_processor_sqlite)
 
@@ -30,12 +31,16 @@ source_set("android_process_state") {
     "android_process_state_module.h",
     "android_process_state_tracker.cc",
     "android_process_state_tracker.h",
+    "android_process_tracker.cc",
+    "android_process_tracker.h",
   ]
   public_deps = [ ":tables" ]
   deps = [
     "../../../../gn:default_deps",
     "../../../../include/perfetto/ext/base",
     "../../../../protos/perfetto/common:zero",
+    "../../../../protos/perfetto/config:zero",
+    "../../../../protos/perfetto/config/android:zero",
     "../../../../protos/perfetto/trace:zero",
     "../../../../protos/third_party/android/frameworks/base/proto/tracing:frameworks_base_common_zero",
     "../../../../protos/third_party/android/frameworks/base/proto/tracing:frameworks_base_trace_packet_zero",
@@ -52,4 +57,17 @@ source_set("android_process_state") {
     "../../types",
     "../../util:descriptors",
   ]
+}
+
+perfetto_unittest_source_set("unittests") {
+  testonly = true
+  deps = [
+    ":android_process_state",
+    "../../../../gn:default_deps",
+    "../../../../gn:gtest_and_gmock",
+    "../../importers/common",
+    "../../storage",
+    "../../types",
+  ]
+  sources = [ "android_process_tracker_unittest.cc" ]
 }

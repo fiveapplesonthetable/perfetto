@@ -23,6 +23,9 @@
 #include "src/trace_processor/tables/slice_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
 
+#include "protos/perfetto/config/android/android_process_state_config.pbzero.h"
+#include "protos/perfetto/config/data_source_config.pbzero.h"
+#include "protos/perfetto/config/trace_config.pbzero.h"
 #include "protos/third_party/android/frameworks/base/proto/tracing/frameworks_base_trace_packet.pbzero.h"
 #include "protos/third_party/android/frameworks/base/proto/tracing/frameworks_base_track_event.pbzero.h"
 
@@ -43,6 +46,23 @@ AndroidProcessStateModule::AndroidProcessStateModule(
 
 AndroidProcessStateModule::~AndroidProcessStateModule() = default;
 
+void AndroidProcessStateModule::TokenizeTraceConfig(
+    const protos::pbzero::TraceConfig_Decoder& config) {
+  for (auto it = config.data_sources(); it; ++it) {
+    protos::pbzero::TraceConfig::DataSource::Decoder ds(*it);
+    protos::pbzero::DataSourceConfig::Decoder cfg(ds.config());
+    if (cfg.name().ToStdStringView() != "android.process_state" ||
+        !cfg.has_android_process_state_config()) {
+      continue;
+    }
+    protos::pbzero::AndroidProcessStateConfig::Decoder aps(
+        cfg.android_process_state_config());
+    if (aps.dump_process_metadata()) {
+      tracker_->SetFrameworkIsProcessAuthority();
+    }
+  }
+}
+
 void AndroidProcessStateModule::ParseField(const ParseFieldArgs& args) {
   switch (args.field.id()) {
     case fb::FrameworksBaseTracePacket::kAndroidProcessStateFieldNumber:
@@ -50,11 +70,13 @@ void AndroidProcessStateModule::ParseField(const ParseFieldArgs& args) {
           args.field
               .Cast<fb::FrameworksBaseTracePacket::kAndroidProcessState>());
       break;
-    case fb::FrameworksBaseTracePacket::kAndroidFreezerStateFieldNumber:
-      tracker_->ParseFreezerDump(
+    case fb::FrameworksBaseTracePacket::kAndroidFreezerStateFieldNumber: {
+      protozero::ConstBytes bytes =
           args.field
-              .Cast<fb::FrameworksBaseTracePacket::kAndroidFreezerState>());
+              .Cast<fb::FrameworksBaseTracePacket::kAndroidFreezerState>();
+      tracker_->SaveFreezerDump(args.data.packet.slice(bytes.data, bytes.size));
       break;
+    }
     default:
       break;
   }

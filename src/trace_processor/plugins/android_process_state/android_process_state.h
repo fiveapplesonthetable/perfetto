@@ -17,7 +17,22 @@
 #ifndef SRC_TRACE_PROCESSOR_PLUGINS_ANDROID_PROCESS_STATE_ANDROID_PROCESS_STATE_H_
 #define SRC_TRACE_PROCESSOR_PLUGINS_ANDROID_PROCESS_STATE_ANDROID_PROCESS_STATE_H_
 
+namespace perfetto::trace_processor {
+class PluginBase;
+class TraceProcessorContext;
+}  // namespace perfetto::trace_processor
+
 namespace perfetto::trace_processor::android_process_state {
+
+class AndroidProcessState;
+class AndroidProcessTracker;
+
+// Returns the AndroidProcessTracker owned by |plugin|, which must be the
+// AndroidProcessState plugin. Plugin::dependency<T>() cannot be used from
+// other plugins as it needs the complete type.
+AndroidProcessTracker* EnsureAndroidProcessTracker(
+    PluginBase* plugin,
+    TraceProcessorContext* trace_context);
 
 void RegisterPlugin();
 

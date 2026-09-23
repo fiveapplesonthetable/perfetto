@@ -35,6 +35,8 @@ class AndroidProcessStateModule : public ProtoImporterModule {
                             AndroidProcessStateTracker* tracker);
   ~AndroidProcessStateModule() override;
 
+  void TokenizeTraceConfig(
+      const protos::pbzero::TraceConfig_Decoder& config) override;
   void ParseField(const ParseFieldArgs& args) override;
   void OnEventsFullyExtracted() override;
 
