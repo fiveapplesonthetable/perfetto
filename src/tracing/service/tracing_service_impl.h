@@ -338,9 +338,12 @@ class TracingServiceImpl : public TracingService {
                                        bool* has_more);
 
   // If `*tracing_session` has a filter, applies it to `*packets`. Doesn't
-  // change the number of `*packets`, only their content.
+  // change the number of `*packets`, only their content. Packets in
+  // [pass_through_begin, pass_through_end) bypass the filter.
   void MaybeFilterPackets(TracingSession* tracing_session,
-                          std::vector<TracePacket>* packets);
+                          std::vector<TracePacket>* packets,
+                          size_t pass_through_begin,
+                          size_t pass_through_end);
 
   // If `*tracing_session` has compression enabled, compress `*packets`.
   // `skip_compression_of_first_n_packets` is the number of packets to skip

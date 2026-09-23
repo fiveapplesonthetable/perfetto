@@ -2721,10 +2721,17 @@ std::vector<TracePacket> TracingServiceImpl::ReadBuffers(
     MaybeEmitCloneTrigger(tracing_session, &packets);
     MaybeEmitReceivedTriggers(tracing_session, &packets);
   }
+  // Extension descriptors carry only proto schema, never trace data. Filtering
+  // them away would keep the extension fields the filter did allow through but
+  // discard the schema needed to read them, so remember where they are and let
+  // them past the filter untouched.
+  size_t ext_descriptors_begin = packets.size();
+  size_t ext_descriptors_end = packets.size();
   if (!tracing_session->did_emit_initial_packets) {
     if (!tracing_session->config.builtin_data_sources()
              .disable_extension_descriptors()) {
       EmitExtensionDescriptors(tracing_session, &packets);
+      ext_descriptors_end = packets.size();
     }
     EmitTraceProvenance(tracing_session, &packets);
     if (!tracing_session->config.builtin_data_sources().disable_system_info()) {
@@ -2857,7 +2864,8 @@ std::vector<TracePacket> TracingServiceImpl::ReadBuffers(
     EmitLifecycleEvents(tracing_session, &packets);
   }
 
-  MaybeFilterPackets(tracing_session, &packets);
+  MaybeFilterPackets(tracing_session, &packets, ext_descriptors_begin,
+                     ext_descriptors_end);
 
   // Only emit the stats when there is no more trace data is available to read.
   // That way, any problems that occur while reading from the buffers are
@@ -2889,7 +2897,9 @@ std::vector<TracePacket> TracingServiceImpl::ReadBuffers(
 }
 
 void TracingServiceImpl::MaybeFilterPackets(TracingSession* tracing_session,
-                                            std::vector<TracePacket>* packets) {
+                                            std::vector<TracePacket>* packets,
+                                            size_t pass_through_begin,
+                                            size_t pass_through_end) {
   // If the tracing session specified a filter, run all packets through the
   // filter and replace them with the filter results.
   // The process below mantains the cardinality of input packets. Even if an
@@ -2905,7 +2915,16 @@ void TracingServiceImpl::MaybeFilterPackets(TracingSession* tracing_session,
   PERFETTO_DCHECK(trace_filter.config().root_msg_index() != 0);
   std::vector<protozero::MessageFilter::InputSlice> filter_input;
   auto start = clock_->GetWallTimeNs();
-  for (TracePacket& packet : *packets) {
+  for (size_t packet_idx = 0; packet_idx < packets->size(); ++packet_idx) {
+    TracePacket& packet = (*packets)[packet_idx];
+    if (packet_idx >= pass_through_begin && packet_idx < pass_through_end) {
+      // Passed through verbatim, so it is both input and output.
+      const size_t size = packet.size();
+      ++tracing_session->filter_input_packets;
+      tracing_session->filter_input_bytes += size;
+      tracing_session->filter_output_bytes += size;
+      continue;
+    }
     const auto& packet_slices = packet.slices();
     const size_t input_packet_size = packet.size();
     filter_input.clear();

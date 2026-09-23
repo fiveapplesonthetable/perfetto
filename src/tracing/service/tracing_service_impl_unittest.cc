@@ -9342,6 +9342,73 @@ TEST_F(TracingServiceImplTest, ExtensionDescriptors) {
   consumer->WaitForTracingDisabled();
 }
 
+TEST_F(TracingServiceImplTest, ExtensionDescriptorsSurviveTraceFilter) {
+  // Extension descriptors must survive filtering: without the schema, the
+  // extension fields a filter does allow through cannot be parsed at all.
+  const uint8_t kRawBlob[] = {0x0a, 0x04, 't', 'e', 's', 't'};
+
+  TracingService::InitOpts init_opts;
+  init_opts.extension_descriptors.push_back(
+      {"raw.descriptor", kRawBlob, sizeof(kRawBlob), /*gzipped=*/false});
+  InitializeSvcWithOpts(init_opts);
+
+  std::unique_ptr<MockConsumer> consumer = CreateMockConsumer();
+  consumer->Connect(svc.get());
+
+  std::unique_ptr<MockProducer> producer = CreateMockProducer();
+  producer->Connect(svc.get(), "mock_producer");
+  producer->RegisterDataSource("data_source");
+
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(4);
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("data_source");
+  ds_config->set_target_buffer(0);
+
+  protozero::FilterBytecodeGenerator filt;
+  // Message 0: root Trace proto.
+  filt.AddNestedField(1 /* root trace.packet */, 1);
+  filt.EndMessage();
+  // Message 1: TracePacket. Allows `for_testing` only; notably not
+  // `extension_descriptor`.
+  filt.AddSimpleField(protos::pbzero::TracePacket::kForTestingFieldNumber);
+  filt.EndMessage();
+  trace_config.mutable_trace_filter()->set_bytecode_v2(
+      filt.Serialize().bytecode);
+
+  consumer->EnableTracing(trace_config);
+  producer->WaitForTracingSetup();
+  producer->WaitForDataSourceSetup("data_source");
+  producer->WaitForDataSourceStart("data_source");
+
+  std::unique_ptr<TraceWriter> writer =
+      producer->CreateTraceWriter("data_source");
+  {
+    auto tp = writer->NewTracePacket();
+    tp->set_for_testing()->set_str("payload");
+  }
+
+  auto flush_request = consumer->Flush();
+  producer->ExpectFlush(writer.get());
+  ASSERT_TRUE(flush_request.WaitForReply());
+
+  auto packets = consumer->ReadBuffers();
+
+  bool found_descriptor = false;
+  for (const auto& packet : packets) {
+    if (!packet.has_extension_descriptor())
+      continue;
+    found_descriptor = true;
+    EXPECT_EQ(packet.extension_descriptor().file_name(), "raw.descriptor");
+    EXPECT_TRUE(packet.extension_descriptor().has_extension_set());
+  }
+  EXPECT_TRUE(found_descriptor);
+
+  consumer->DisableTracing();
+  producer->WaitForDataSourceStop("data_source");
+  consumer->WaitForTracingDisabled();
+}
+
 }  // namespace
 
 }  // namespace perfetto::tracing_service
