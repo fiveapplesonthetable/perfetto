@@ -47,20 +47,8 @@ class AndroidJobSchedulerTracker : public TrackEventExtensionParser {
                            const TrackEventFieldContext& event) override;
 
  private:
-  // Caches both the protobuf descriptor and the resolved StringId per integer
-  // enum value.
-  //
-  // In steady-state trace processing, each JobScheduler event queries ~10+
-  // enums (state, priorities, bucket, stop reasons, pending reasons). Without
-  // this cache, every event would:
-  //   1) Incur heap allocation from DescriptorPool::FindEnumString returning
-  //      std::optional<std::string> by value.
-  //   2) Incur a second heap copy via the ternary (*name vs fallback).
-  //   3) Compute MurmurHash64 and probe the StringPool hash table.
-  //
-  // Since enums have a tiny domain of values (~5-25 per enum), caching
-  // int32_t -> StringId turns steady-state lookups into allocation-free,
-  // string-hash-free O(1) integer table lookups.
+  // Enum values have a tiny domain: cache the interned StringId per value so
+  // the steady state skips the descriptor lookup and string hashing.
   struct EnumCache {
     DescriptorPool::CachedDescriptor descriptor;
     base::FlatHashMap<int32_t, StringId> string_ids;

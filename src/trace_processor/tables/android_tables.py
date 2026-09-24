@@ -635,7 +635,7 @@ ANDROID_JOB_SCHEDULER_PENDING_REASONS_TRACK_EVENT_TABLE = Table(
           cpp_access=CppAccess.READ),
         C(
             'reason_index',
-            CppInt32(),
+            CppUint32(),
             cpp_access=CppAccess.READ_AND_LOW_PERF_WRITE,
         ),
         C(
@@ -645,7 +645,7 @@ ANDROID_JOB_SCHEDULER_PENDING_REASONS_TRACK_EVENT_TABLE = Table(
         ),
         C(
             'pending_duration_ms',
-            CppInt64(),
+            CppOptional(CppInt64()),
             cpp_access=CppAccess.READ_AND_LOW_PERF_WRITE,
         ),
     ],
@@ -663,7 +663,8 @@ ANDROID_JOB_SCHEDULER_PENDING_REASONS_TRACK_EVENT_TABLE = Table(
             'pending_reason':
                 'Enum string representation of the pending reason.',
             'pending_duration_ms':
-                ('Duration in milliseconds spent waiting for this reason.'),
+                ('Duration in milliseconds spent waiting for this reason. '
+                 'NULL if the trace had no matching duration entry.'),
         },
     ),
 )

@@ -28,6 +28,10 @@ namespace perfetto::trace_processor::stats {
        "Errors occurred during the collection of Android aconfig flags by the "\
        "android.aflags data source. This typically happens if the aflags tool "\
        "fails or its output is malformed."),                                   \
+  F(android_job_scheduler_pending_reasons_mismatch, kSingle, kError, kAnalysis, Scope::kMachineAndTrace, \
+      "AndroidJobSchedulerJob had a different number of pending_reasons and "  \
+      "pending_durations_ms entries. Reasons without a duration have a NULL "  \
+      "pending_duration_ms; extra durations are dropped."),                     \
   F(android_br_parse_errors,              kSingle,  kError,    kTrace, Scope::kMachineAndTrace,    ""), \
   F(android_log_num_failed,               kSingle,  kError,    kTrace, Scope::kMachineAndTrace,    ""), \
   F(android_log_format_invalid,           kSingle,  kError,    kTrace, Scope::kMachineAndTrace,    ""), \

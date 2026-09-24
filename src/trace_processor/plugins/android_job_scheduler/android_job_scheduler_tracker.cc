@@ -26,7 +26,9 @@
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/string_view.h"
 #include "src/trace_processor/importers/common/parser_types.h"
+#include "src/trace_processor/importers/common/stats_tracker.h"
 #include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/android_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
@@ -155,13 +157,12 @@ TrackEventExtensionParser::Result AndroidJobSchedulerTracker::OnTrackEventField(
                  ProtoJob::BACKOFF_POLICY_UNKNOWN),
   });
 
-  auto rr = row_id.row_reference;
-
   if (job.has_job_state_flags()) {
     // The bit layout of job_state_flags matches the constraints defined in
     // frameworks/base/services/core/java/com/android/server/job/controllers/JobStatus.java
     // and documented in frameworks_base_track_event.proto.
     uint64_t flags = static_cast<uint64_t>(job.job_state_flags());
+    auto rr = row_id.row_reference;
     rr.set_has_charging_constraint(
         (flags & ProtoJob::JOB_STATE_FLAG_HAS_CHARGING_CONSTRAINT) ? 1u : 0u);
     rr.set_has_battery_not_low_constraint(
@@ -209,28 +210,29 @@ TrackEventExtensionParser::Result AndroidJobSchedulerTracker::OnTrackEventField(
                                                                           : 0u);
   }
 
-  const bool is_pending_exit_state =
-      job.has_state() && (job.state() == ProtoJob::JOB_STATE_STARTED ||
-                          job.state() == ProtoJob::JOB_STATE_CANCELLED);
-
-  if (is_pending_exit_state) {
-    auto* pending_table =
-        trace_context_->storage
-            ->mutable_android_job_scheduler_pending_reasons_track_event_table();
-    auto r_it = job.pending_reasons();
-    auto d_it = job.pending_durations_ms();
-    for (int32_t idx = 0; r_it; ++r_it, ++idx) {
-      int64_t dur_ms = 0;
-      if (d_it) {
-        dur_ms = d_it->as_int64();
-        ++d_it;
-      }
-      StringId reason_id = InternEnum(
-          pending_reason_cache_,
-          ".com.android.internal.AndroidJobSchedulerJob.PendingJobReason",
-          r_it->as_int32(), ProtoJob::PENDING_JOB_REASON_UNDEFINED);
-      pending_table->Insert({slice_id, idx, reason_id, dur_ms});
+  auto* pending_table =
+      trace_context_->storage
+          ->mutable_android_job_scheduler_pending_reasons_track_event_table();
+  auto r_it = job.pending_reasons();
+  auto d_it = job.pending_durations_ms();
+  bool mismatched_lengths = false;
+  for (uint32_t idx = 0; r_it; ++r_it, ++idx) {
+    std::optional<int64_t> dur_ms;
+    if (d_it) {
+      dur_ms = d_it->as_int64();
+      ++d_it;
+    } else {
+      mismatched_lengths = true;
     }
+    StringId reason_id = InternEnum(
+        pending_reason_cache_,
+        ".com.android.internal.AndroidJobSchedulerJob.PendingJobReason",
+        r_it->as_int32(), ProtoJob::PENDING_JOB_REASON_UNDEFINED);
+    pending_table->Insert({slice_id, idx, reason_id, dur_ms});
+  }
+  if (mismatched_lengths || d_it) {
+    trace_context_->stats_tracker->IncrementStats(
+        stats::android_job_scheduler_pending_reasons_mismatch);
   }
 
   // Return kIgnored so that the core parser still populates the generic args

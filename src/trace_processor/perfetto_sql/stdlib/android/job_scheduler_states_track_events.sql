@@ -76,20 +76,8 @@ RETURNS STRING
 AS
 SELECT coalesce(regexp_extract($job_name, '@([^@]+)@'), '');
 
--- Create a view containing all JobScheduler job state changes from slices.
-CREATE PERFETTO VIEW _android_js_job_state_events AS
-WITH
-  pending_summaries AS (
-    SELECT
-      slice_id,
-      GROUP_CONCAT(
-        pending_reason || ' (' || pending_duration_ms || 'ms)',
-        ', ' ORDER BY reason_index
-      ) AS pending_reasons_summary
-    FROM __intrinsic_android_job_scheduler_pending_reasons_track_events
-    GROUP BY
-      slice_id
-  )
+-- Create a table containing all JobScheduler job state changes from slices.
+CREATE PERFETTO TABLE _android_js_job_state_events AS
 SELECT
   js.ts AS ts,
   CASE
@@ -139,13 +127,10 @@ SELECT
   CAST(js.is_running_as_user_initiated_job AS BOOL) AS is_running_as_user_initiated_job,
   CAST(js.is_periodic AS BOOL) AS is_periodic,
   CAST(js.has_flexibility_constraint AS BOOL) AS has_flexibility_constraint,
-  CAST(js.can_apply_transport_affinities AS BOOL) AS can_apply_transport_affinities,
-  ps.pending_reasons_summary AS pending_reasons_summary
+  CAST(js.can_apply_transport_affinities AS BOOL) AS can_apply_transport_affinities
 FROM __intrinsic_android_job_scheduler_track_events AS js
 JOIN slice AS s
-  ON js.slice_id = s.id
-LEFT JOIN pending_summaries AS ps
-  ON js.slice_id = ps.slice_id;
+  ON js.slice_id = s.id;
 
 -- Valid state transitions in Android JobScheduler:
 -- 1. JOB_STATE_SCHEDULED -> JOB_STATE_STARTED: Constraints met and execution begins (JobServiceContext binds service).
@@ -173,6 +158,57 @@ LEFT JOIN pending_summaries AS ps
 -- 3. Incomplete execution intervals lacking a verified [ts_start, ts_end] pair are safely
 --    omitted, ensuring duration and latency metrics are not corrupted.
 --
+-- Create table with verified job execution intervals (state='JOB_STATE_STARTED' AND lead_state='JOB_STATE_FINISHED').
+CREATE PERFETTO TABLE _android_js_job_started AS
+WITH
+  job_states_with_lead AS (
+    SELECT
+      *,
+      lead(state, 1) OVER job_asc AS lead_state,
+      lead(ts, 1, trace_end()) OVER job_asc AS ts_lead,
+      lead(ts, 1) OVER job_asc IS NULL AS is_end_slice,
+      coalesce(
+        lead(internal_stop_reason, 1) OVER job_asc,
+        'INTERNAL_STOP_REASON_UNKNOWN'
+      ) AS lead_internal_stop_reason,
+      coalesce(
+        lead(public_stop_reason, 1) OVER job_asc,
+        'STOP_REASON_UNDEFINED'
+      ) AS lead_public_stop_reason,
+      lag(requested_priority, 1, 'JOB_PRIORITY_UNKNOWN') OVER job_asc AS lag_requested_priority
+    FROM _android_js_job_state_events
+    WINDOW
+      job_asc AS (PARTITION BY uid, job_name, job_id ORDER BY ts)
+  )
+SELECT
+  _android_js_extract_package_name(job_name) AS package_name,
+  _android_js_extract_job_namespace(job_name) AS job_namespace,
+  ts_lead - ts AS dur,
+  coalesce(num_previous_attempts, 0) > 0 AS is_rescheduled,
+  coalesce(
+    nullif(requested_priority, 'JOB_PRIORITY_UNKNOWN'),
+    lag_requested_priority
+  ) AS effective_requested_priority,
+  *
+FROM job_states_with_lead
+WHERE
+  is_end_slice = FALSE
+  AND (ts_lead - ts) > 0
+  AND state = 'JOB_STATE_STARTED'
+  AND lead_state = 'JOB_STATE_FINISHED';
+
+-- Human-readable summary of the pending reasons of each JobScheduler slice.
+CREATE PERFETTO TABLE _android_js_pending_reasons_summary AS
+SELECT
+  slice_id,
+  group_concat(
+    pending_reason || coalesce(' (' || pending_duration_ms || 'ms)', ''),
+    ', ' ORDER BY reason_index
+  ) AS pending_reasons_summary
+FROM __intrinsic_android_job_scheduler_pending_reasons_track_events
+GROUP BY
+  slice_id;
+
 -- This table returns all running jobs from job scheduler track events.
 --
 -- Values in this table are derived from job scheduler track events.
@@ -265,48 +301,11 @@ CREATE PERFETTO TABLE android_job_scheduler_states_track_events(
   has_flexibility_constraint BOOL,
   -- Whether transport preference logic can be applied to this job.
   can_apply_transport_affinities BOOL,
-  -- Summary of reasons and durations the job spent pending before starting.
+  -- Pending reasons and their durations before the job started, in the
+  -- order emitted by JobScheduler.
   pending_reasons_summary STRING
 )
 AS
-WITH
-  job_states_with_lead AS (
-    SELECT
-      *,
-      lead(state, 1) OVER job_asc AS lead_state,
-      lead(ts, 1, trace_end()) OVER job_asc AS ts_lead,
-      lead(ts, 1) OVER job_asc IS NULL AS is_end_slice,
-      coalesce(
-        lead(internal_stop_reason, 1) OVER job_asc,
-        'INTERNAL_STOP_REASON_UNKNOWN'
-      ) AS lead_internal_stop_reason,
-      coalesce(
-        lead(public_stop_reason, 1) OVER job_asc,
-        'STOP_REASON_UNDEFINED'
-      ) AS lead_public_stop_reason,
-      lag(requested_priority, 1, 'JOB_PRIORITY_UNKNOWN') OVER job_asc AS lag_requested_priority
-    FROM _android_js_job_state_events
-    WINDOW
-      job_asc AS (PARTITION BY uid, job_name, job_id ORDER BY ts)
-  ),
-  job_started AS (
-    SELECT
-      _android_js_extract_package_name(job_name) AS package_name,
-      _android_js_extract_job_namespace(job_name) AS job_namespace,
-      ts_lead - ts AS dur,
-      coalesce(num_previous_attempts, 0) > 0 AS is_rescheduled,
-      coalesce(
-        nullif(requested_priority, 'JOB_PRIORITY_UNKNOWN'),
-        lag_requested_priority
-      ) AS effective_requested_priority,
-      *
-    FROM job_states_with_lead
-    WHERE
-      is_end_slice = FALSE
-      AND (ts_lead - ts) > 0
-      AND state = 'JOB_STATE_STARTED'
-      AND lead_state = 'JOB_STATE_FINISHED'
-  )
 SELECT
   row_number() OVER (ORDER BY ts) AS id,
   slice_id,
@@ -352,39 +351,13 @@ SELECT
   has_flexibility_constraint,
   can_apply_transport_affinities,
   pending_reasons_summary
-FROM job_started;
+FROM _android_js_job_started
+LEFT JOIN _android_js_pending_reasons_summary
+  USING (slice_id);
 
--- Provides the pending reason and wait duration breakdown for JobScheduler track events.
---
--- Note: `android_job_scheduler_states_track_events` already contains a human-readable
--- `pending_reasons_summary` column for quick inspection in the UI or queries.
---
--- This view is maintained as a normalized 1:N breakdown view (storing `slice_id`,
--- `reason_index`, `pending_reason`, and `pending_duration_ms`) specifically for
--- granular numerical queries and statistical aggregations (e.g., `AVG`, `SUM`, or
--- `GROUP BY pending_reason`).
---
--- Note on Cancelled Jobs:
--- `android_job_scheduler_states_track_events` only contains verified `STARTED -> FINISHED`
--- intervals, so joining it with this view silently excludes `JOB_STATE_CANCELLED` jobs;
--- users who need cancelled jobs should join against the raw transition data
--- (e.g. the internal `_android_js_job_state_events` view or the `slice` table) instead.
---
--- If you need to analyze or aggregate numerical pending durations broken down by
--- job metadata (such as `package_name`, `job_name`, or `uid`), join this view with
--- `android_job_scheduler_states_track_events` on `slice_id`:
--- ```sql
--- SELECT
---   s.package_name,
---   r.pending_reason,
---   COUNT(*) AS occurrence_count,
---   SUM(r.pending_duration_ms) AS total_wait_ms,
---   AVG(r.pending_duration_ms) AS avg_wait_ms
--- FROM android_job_scheduler_states_track_events s
--- JOIN android_job_scheduler_pending_reasons_track_events r
---   ON s.slice_id = r.slice_id
--- GROUP BY s.package_name, r.pending_reason;
--- ```
+-- Pending reasons of JobScheduler jobs and the time spent in each, one row
+-- per reason. Join with `android_job_scheduler_states_track_events` on
+-- `slice_id` to break these down by job, package or uid.
 CREATE PERFETTO VIEW android_job_scheduler_pending_reasons_track_events(
   -- Unique identifier for the row.
   id ID,
@@ -394,9 +367,15 @@ CREATE PERFETTO VIEW android_job_scheduler_pending_reasons_track_events(
   reason_index LONG,
   -- Pending reason string.
   pending_reason STRING,
-  -- Duration in milliseconds spent waiting for this reason.
+  -- Duration in milliseconds spent waiting for this reason. NULL if the
+  -- trace had no matching duration.
   pending_duration_ms LONG
 )
 AS
-SELECT id, slice_id, reason_index, pending_reason, pending_duration_ms
+SELECT
+  id,
+  slice_id,
+  reason_index,
+  pending_reason,
+  pending_duration_ms
 FROM __intrinsic_android_job_scheduler_pending_reasons_track_events;

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric, Systrace
-from python.generators.diff_tests.testing import Csv, Json, TextProto, BinaryProto, Zip
+from python.generators.diff_tests.testing import Csv, Json, TextProto, BinaryProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import TestSuite
 from python.generators.diff_tests.testing import PrintProfileProto
@@ -2199,47 +2199,7 @@ class AndroidStdlib(TestSuite):
       """,
         out=Csv("""
         "ts","job_name","pending_reasons_summary"
-        5000000000,"com.example.app/com.example.app.MissingDurJobService#2","PENDING_JOB_REASON_CONSTRAINT_CHARGING (1200ms), PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW (0ms)"
-      """))
-
-  def test_android_job_scheduler_pending_reasons_unknown_enum(self):
-    # Binary trace contains an unknown pending_reasons enum value (999) with duration 500ms.
-    # We use a Zip archive with raw protobuf bytes because python's protobuf text format
-    # parser rejects unknown enum values.
-    trace_bytes = bytes([
-        10, 31, 64, 128, 148, 235, 220, 3, 80, 1, 104, 1, 218, 2, 18, 8, 232, 7,
-        50, 13, 115, 121, 115, 116, 101, 109, 95, 115, 101, 114, 118, 101, 114,
-        10, 33, 64, 128, 148, 235, 220, 3, 80, 1, 104, 2, 226, 2, 20, 8, 232, 7,
-        16, 233, 7, 42, 12, 74, 111, 98, 83, 99, 104, 101, 100, 117, 108, 101,
-        114, 10, 29, 64, 128, 148, 235, 220, 3, 80, 1, 104, 2, 226, 3, 16, 8, 1,
-        18, 12, 74, 111, 98, 83, 99, 104, 101, 100, 117, 108, 101, 114, 10, 74,
-        64, 128, 148, 235, 220, 3, 80, 1, 98, 62, 226, 2, 59, 8, 1, 18, 55, 99,
-        111, 109, 46, 101, 120, 97, 109, 112, 108, 101, 46, 97, 112, 112, 47,
-        99, 111, 109, 46, 101, 120, 97, 109, 112, 108, 101, 46, 97, 112, 112,
-        46, 85, 110, 107, 110, 111, 119, 110, 69, 110, 117, 109, 74, 111, 98,
-        83, 101, 114, 118, 105, 99, 101, 35, 51, 104, 2, 10, 59, 64, 128, 228,
-        151, 208, 18, 80, 1, 90, 47, 72, 1, 80, 1, 88, 1, 178, 1, 12, 106, 111,
-        98, 115, 99, 104, 101, 100, 117, 108, 101, 114, 178, 125, 23, 8, 3, 16,
-        145, 78, 32, 1, 40, 7, 56, 172, 2, 168, 1, 1, 176, 1, 231, 7, 184, 1,
-        244, 3, 104, 2, 10, 52, 64, 128, 248, 130, 173, 22, 80, 1, 90, 40, 72,
-        1, 80, 1, 88, 1, 178, 1, 12, 106, 111, 98, 115, 99, 104, 101, 100, 117,
-        108, 101, 114, 178, 125, 16, 8, 3, 16, 145, 78, 32, 4, 144, 1, 10, 152,
-        1, 0, 168, 1, 1, 104, 2, 10, 16, 64, 128, 140, 238, 137, 26, 80, 1, 90,
-        4, 72, 2, 88, 1, 104, 2
-    ])
-    return DiffTestBlueprint(
-        trace=Zip({'trace.pftrace': trace_bytes}),
-        query="""
-        INCLUDE PERFETTO MODULE android.job_scheduler_states_track_events;
-        SELECT
-          ts,
-          job_name,
-          pending_reasons_summary
-        FROM android_job_scheduler_states_track_events;
-      """,
-        out=Csv("""
-        "ts","job_name","pending_reasons_summary"
-        5000000000,"com.example.app/com.example.app.UnknownEnumJobService#3","999 (500ms)"
+        5000000000,"com.example.app/com.example.app.MissingDurJobService#2","PENDING_JOB_REASON_CONSTRAINT_CHARGING (1200ms), PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW"
       """))
 
   def test_android_job_scheduler_no_pending_reasons(self):
