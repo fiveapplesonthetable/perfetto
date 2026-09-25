@@ -13,10 +13,12 @@
 // limitations under the License.
 
 import m from 'mithril';
+import {valueIfAllEqual} from '../../base/array_utils';
 import type {Trace} from '../../public/trace';
 import type {Track} from '../../public/track';
 import {COUNTER_TRACK_KIND} from '../../public/track_kinds';
 import {TrackNode} from '../../public/workspace';
+import type {YMode} from '../../components/tracks/counter_track';
 import {NUM, NUM_NULL, STR_NULL} from '../../trace_processor/query_result';
 import {Form, FormLabel} from '../../widgets/form';
 import {MenuItem} from '../../widgets/menu';
@@ -132,6 +134,7 @@ export function addTimeseriesTrack(
       trackIds: counters.map((c) => c.id),
     },
     renderer: createTimeseriesRenderer(trace, uri, series, {
+      yMode: sharedYMode(counterTracks),
       extraMenuItems: () =>
         m(MenuItem, {
           label: 'Copy to counter tracks',
@@ -142,8 +145,23 @@ export function addTimeseriesTrack(
     }),
   });
 
+  // In the timeline like any other track, and pinned, so unpinning leaves it
+  // in place rather than removing it.
   const node = new TrackNode({uri, name: title, removable: true});
-  trace.currentWorkspace.pinnedTracksNode.addChildLast(node);
+  trace.currentWorkspace.addChildFirst(node);
+  node.pin();
+}
+
+// The mode (value, delta or rate) that every counter's own track shows, so the
+// chart opens the way they do.
+function sharedYMode(
+  counterTracks: ReadonlyArray<Track | undefined>,
+): YMode | undefined {
+  const modes = counterTracks.map(
+    (t) =>
+      t?.renderer.settings?.find((s) => s.descriptor.name === 'Y Mode')?.value,
+  );
+  return valueIfAllEqual(modes) as YMode | undefined;
 }
 
 // Adds a group holding each counter's own track right after the timeseries

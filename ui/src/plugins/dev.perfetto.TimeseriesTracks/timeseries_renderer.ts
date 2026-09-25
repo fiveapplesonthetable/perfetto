@@ -57,6 +57,9 @@ export interface TimeseriesCounter {
 }
 
 export interface TimeseriesRendererOpts {
+  /** The mode (value, delta or rate) to open in. Defaults to 'value'. */
+  readonly yMode?: YMode;
+
   /** Extra items for the bottom of the track's layout & counters menu. */
   readonly extraMenuItems?: () => m.Children;
 }
@@ -212,7 +215,6 @@ const LAYOUTS: ReadonlyArray<readonly [string, Layout]> = [
   ['Stacked area', 'stacked'],
 ];
 
-const layoutDescriptor = radioDescriptor<Layout>('Layout', LAYOUTS);
 const yModeDescriptor = radioDescriptor<YMode>('Mode', [
   ['Value', 'value'],
   ['Delta', 'delta'],
@@ -250,7 +252,7 @@ class TimeseriesRenderer implements TrackRenderer {
   // Display settings, changed from the settings and track shell menus.
   private layout: Layout = 'lines';
   private expanded = false;
-  private yMode: YMode = 'value';
+  private yMode: YMode;
   private yRange: YRange = 'all';
   private yDisplay: YDisplay = 'zero';
   private yRounding: YRounding = 'human_readable';
@@ -282,6 +284,7 @@ class TimeseriesRenderer implements TrackRenderer {
     counters: ReadonlyArray<TimeseriesCounter>,
     private readonly opts: TimeseriesRendererOpts,
   ) {
+    this.yMode = opts.yMode ?? 'value';
     this.series = counters.map((counter, index) => ({
       counter,
       index,
@@ -293,13 +296,6 @@ class TimeseriesRenderer implements TrackRenderer {
   get settings(): ReadonlyArray<TrackSetting> {
     const setting = <T>(x: TrackSetting<T>) => x;
     return [
-      setting({
-        descriptor: layoutDescriptor,
-        value: this.layout,
-        update: (value) => {
-          this.layout = value;
-        },
-      }),
       setting({
         descriptor: yModeDescriptor,
         value: this.yMode,
@@ -535,20 +531,13 @@ class TimeseriesRenderer implements TrackRenderer {
         m(MenuItem, {
           label,
           icon:
-            !this.expanded && this.layout === layout
-              ? Icons.RadioChecked
-              : Icons.RadioUnchecked,
+            this.layout === layout ? Icons.RadioChecked : Icons.RadioUnchecked,
           onclick: () => {
             this.layout = layout;
             this.setExpanded(false);
           },
         }),
       ),
-      m(MenuItem, {
-        label: 'Row per counter',
-        icon: this.expanded ? Icons.RadioChecked : Icons.RadioUnchecked,
-        onclick: () => this.setExpanded(true),
-      }),
       m(MenuDivider),
       m(MenuItem, {
         label: 'Show all counters',
