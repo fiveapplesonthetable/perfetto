@@ -33,6 +33,8 @@ class TraceProcessorContext;
 
 namespace perfetto::trace_processor::android_process_state {
 
+class AndroidProcessTracker;
+
 StringId InternEnum(TraceProcessorContext* context,
                     DescriptorPool::CachedDescriptor& cache,
                     const char* enum_name,
@@ -45,11 +47,15 @@ class AndroidProcessStateTracker {
  public:
   AndroidProcessStateTracker(
       TraceProcessorContext* context,
+      AndroidProcessTracker* android_process_tracker,
       tables::AndroidProcessStateTable* process_state_table,
       tables::AndroidFreezerStateTable* freezer_state_table);
 
   // A process_state_changed_event TrackEvent extension at |ts|.
   void ParseProcessStateChange(int64_t ts, protozero::ConstBytes bytes);
+  // The AndroidProcessMetadata TracePacket written at trace start with
+  // dump_process_metadata: binds every running process to its start seq id.
+  void ParseProcessMetadata(protozero::ConstBytes bytes);
   // An AndroidProcessState dump TracePacket.
   void ParseProcessStateDump(protozero::ConstBytes bytes);
 
@@ -102,6 +108,7 @@ class AndroidProcessStateTracker {
   void EmitInitialFreezerRow(const FreezerStateValues& v);
 
   TraceProcessorContext* const context_;
+  AndroidProcessTracker* const android_process_tracker_;
   tables::AndroidProcessStateTable* const process_state_table_;
   tables::AndroidFreezerStateTable* const freezer_state_table_;
 

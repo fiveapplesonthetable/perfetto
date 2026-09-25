@@ -122,16 +122,35 @@ message AndroidProcessStateSnapshot {
     optional int32 oom_score = 4;
     // Process capability flags.
     optional int32 capability_flags = 5;
-    // Process name.
-    optional string process_name = 6;
-    // start sequence id which is assigned to a process during start update
-    optional int64 start_seq_id = 7;
-    // Process start elapsed realtime in milliseconds.
-    optional int64 start_time_ms = 8;
+    // Deprecated: use AndroidProcessMetadata, written at trace start.
+    optional string process_name = 6 [deprecated = true];
+    optional int64 start_seq_id = 7 [deprecated = true];
+    optional int64 start_time_ms = 8 [deprecated = true];
     // Kernel process group (android.os.Process.THREAD_GROUP_*).
     optional ProcessGroup process_group = 9;
   }
   repeated Record record = 1;
+}
+
+// Identity of every running process, written once at trace start when
+// AndroidProcessStateConfig.dump_process_metadata is set. Processes started
+// later in the trace are reported by AndroidProcessStartEvent, and deaths by
+// AndroidBinderDiedEvent, both carrying the same start_seq_id.
+message AndroidProcessMetadata {
+  message Process {
+    // Process ID.
+    optional int32 pid = 1;
+    // Package UID of the process.
+    optional int32 uid = 2;
+    // Process name.
+    optional string process_name = 3;
+    // Monotonic id ActivityManager assigns to each process start. Identifies
+    // this incarnation of |pid|.
+    optional int64 start_seq_id = 4;
+    // Process start time, elapsed realtime (CLOCK_BOOTTIME) in milliseconds.
+    optional int64 start_time_ms = 5;
+  }
+  repeated Process process = 1;
 }
 
 // Snapshot of frozen process states written at trace stop.
@@ -159,5 +178,6 @@ message FrameworksBaseTracePacket {
     optional VideoFrameError video_frame_error = 1001;
     optional AndroidProcessStateSnapshot android_process_state = 1002;
     optional AndroidFreezerStateSnapshot android_freezer_state = 1003;
+    optional AndroidProcessMetadata android_process_metadata = 1004;
   }
 }

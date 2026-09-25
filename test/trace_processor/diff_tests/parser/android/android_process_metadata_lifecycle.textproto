@@ -1,0 +1,88 @@
+# AndroidProcessMetadata at trace start, then:
+# - pid 1 (running before the trace) changes state and dies: its events map
+#   to the process named by the metadata.
+# - pid 100 (running before the trace, seq 1) is reused by App B (seq 2)
+#   before App A's death is reported: the death must end App A only.
+packet {
+  clock_snapshot {
+    primary_trace_clock: BUILTIN_CLOCK_BOOTTIME
+    clocks { clock_id: 6 timestamp: 0 }
+    clocks { clock_id: 3 timestamp: 0 }
+  }
+  trusted_uid: 9999
+  trusted_packet_sequence_id: 1
+}
+packet {
+  timestamp: 100000000
+  [com.android.internal.FrameworksBaseTracePacket.android_process_metadata] {
+    process {
+      pid: 1
+      uid: 10001
+      process_name: "com.example.app"
+      start_seq_id: 7
+      start_time_ms: 20
+    }
+    process {
+      pid: 100
+      uid: 10003
+      process_name: "com.example.appa"
+      start_seq_id: 1
+      start_time_ms: 30
+    }
+  }
+}
+packet {
+  timestamp: 1000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "psc"
+    [com.android.internal.FrameworksBaseTrackEvent.process_state_changed_event] {
+      pid: 1
+      prev_proc_state: PROCESS_STATE_TOP
+      cur_proc_state: PROCESS_STATE_CACHED_ACTIVITY
+    }
+  }
+}
+packet {
+  timestamp: 2000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "binder_died"
+    [com.android.internal.FrameworksBaseTrackEvent.binder_died_event] {
+      uid: 10001
+      pid: 1
+      process_name: "com.example.app"
+      start_seq_id: 7
+    }
+  }
+}
+packet {
+  timestamp: 5000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "process_start"
+    [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+      uid: 10002
+      pid: 100
+      process_name: "com.example.appb"
+      start_seq_id: 2
+    }
+  }
+}
+packet {
+  timestamp: 6000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "binder_died"
+    [com.android.internal.FrameworksBaseTrackEvent.binder_died_event] {
+      uid: 10003
+      pid: 100
+      process_name: "com.example.appa"
+      start_seq_id: 1
+    }
+  }
+}

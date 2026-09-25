@@ -1,0 +1,67 @@
+# Exercises android_process_state with dump_process_metadata:
+# - AndroidProcessMetadata at trace start names every running process
+# - Mid-trace pid reuse with start_seq_id via TrackEvent
+# - Trace-stop snapshot carries state only and resolves by pid
+packet {
+  clock_snapshot {
+    primary_trace_clock: BUILTIN_CLOCK_BOOTTIME
+    clocks { clock_id: 6 timestamp: 0 }
+    clocks { clock_id: 3 timestamp: 0 }
+  }
+  trusted_uid: 9999
+  trusted_packet_sequence_id: 1
+}
+packet {
+  timestamp: 100000000
+  [com.android.internal.FrameworksBaseTracePacket.android_process_metadata] {
+    process {
+      pid: 200
+      uid: 20001
+      process_name: "com.example.running"
+      start_seq_id: 10
+      start_time_ms: 50
+    }
+    process {
+      pid: 300
+      uid: 1000
+      process_name: "system_server"
+      start_time_ms: 10
+    }
+  }
+}
+packet {
+  timestamp: 1000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "process_start"
+    [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+      uid: 10001
+      pid: 100
+      process_name: "com.example.appa"
+      start_seq_id: 1
+    }
+  }
+}
+packet {
+  timestamp: 5000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "process_start"
+    [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+      uid: 10002
+      pid: 100
+      process_name: "com.example.appb"
+      start_seq_id: 2
+    }
+  }
+}
+packet {
+  timestamp: 10000000000
+  [com.android.internal.FrameworksBaseTracePacket.android_process_state] {
+    record { pid: 100 uid: 10002 proc_state: 1002 oom_score: 100 }
+    record { pid: 200 uid: 20001 proc_state: 1000 oom_score: -1000 }
+    record { pid: 300 uid: 1000 proc_state: 1000 oom_score: -1000 }
+  }
+}

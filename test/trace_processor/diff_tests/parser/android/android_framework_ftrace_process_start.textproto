@@ -1,0 +1,99 @@
+# ftrace mode (no dump_process_metadata): the kernel reports forks and exits
+# and the framework events still carry start_seq_id. The upids the kernel
+# starts must be adopted, not duplicated, names must come from the kernel as
+# on main, and the late death for seq 1 must not touch App B.
+packet {
+  clock_snapshot {
+    primary_trace_clock: BUILTIN_CLOCK_BOOTTIME
+    clocks { clock_id: 6 timestamp: 0 }
+    clocks { clock_id: 3 timestamp: 0 }
+  }
+  trusted_uid: 9999
+  trusted_packet_sequence_id: 1
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 900000000
+      pid: 50
+      task_newtask { pid: 100 comm: "zygote64" clone_flags: 0 }
+    }
+  }
+  trusted_packet_sequence_id: 2
+}
+packet {
+  timestamp: 1000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "process_start"
+    [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+      uid: 10001
+      pid: 100
+      process_name: "com.example.appa"
+      start_seq_id: 1
+    }
+  }
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 4000000000
+      pid: 50
+      sched_process_free { pid: 100 comm: "e.example.appa" }
+    }
+  }
+  trusted_packet_sequence_id: 2
+}
+packet {
+  ftrace_events {
+    cpu: 0
+    event {
+      timestamp: 4500000000
+      pid: 50
+      task_newtask { pid: 100 comm: "zygote64" clone_flags: 0 }
+    }
+  }
+  trusted_packet_sequence_id: 2
+}
+packet {
+  timestamp: 5000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "process_start"
+    [com.android.internal.FrameworksBaseTrackEvent.process_start_event] {
+      uid: 10002
+      pid: 100
+      process_name: "com.example.appb"
+      start_seq_id: 2
+    }
+  }
+}
+packet {
+  timestamp: 6000000000
+  trusted_packet_sequence_id: 1
+  track_event {
+    type: TYPE_INSTANT
+    name: "binder_died"
+    [com.android.internal.FrameworksBaseTrackEvent.binder_died_event] {
+      uid: 10001
+      pid: 100
+      process_name: "com.example.appa"
+      start_seq_id: 1
+    }
+  }
+}
+packet {
+  timestamp: 10000000000
+  [com.android.internal.FrameworksBaseTracePacket.android_process_state] {
+    record {
+      pid: 100
+      uid: 10002
+      proc_state: 1002
+      oom_score: 100
+    }
+  }
+}

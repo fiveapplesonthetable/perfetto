@@ -39,6 +39,8 @@ AndroidProcessStateModule::AndroidProcessStateModule(
       fb::FrameworksBaseTracePacket::kAndroidProcessStateFieldNumber);
   RegisterForField(
       fb::FrameworksBaseTracePacket::kAndroidFreezerStateFieldNumber);
+  RegisterForField(
+      fb::FrameworksBaseTracePacket::kAndroidProcessMetadataFieldNumber);
 }
 
 AndroidProcessStateModule::~AndroidProcessStateModule() = default;
@@ -54,6 +56,11 @@ void AndroidProcessStateModule::ParseField(const ParseFieldArgs& args) {
       tracker_->ParseFreezerDump(
           args.field
               .Cast<fb::FrameworksBaseTracePacket::kAndroidFreezerState>());
+      break;
+    case fb::FrameworksBaseTracePacket::kAndroidProcessMetadataFieldNumber:
+      tracker_->ParseProcessMetadata(
+          args.field
+              .Cast<fb::FrameworksBaseTracePacket::kAndroidProcessMetadata>());
       break;
     default:
       break;
