@@ -51,6 +51,7 @@ perfetto_proto_library("@TYPE@") {
     "data_source_config.proto",
     "etw/etw_config.proto",
     "interceptor_config.proto",
+    "io_stall_config.proto",
     "stress_test_config.proto",
     "test_config.proto",
     "trace_config.proto",

@@ -62,13 +62,14 @@ import "protos/perfetto/config/test_config.proto";
 import "protos/perfetto/config/track_event/track_event_config.proto";
 import "protos/perfetto/config/system_info/system_info_config.proto";
 import "protos/perfetto/config/chrome/histogram_samples.proto";
+import "protos/perfetto/config/io_stall_config.proto";
 import "protos/perfetto/config/chrome/sampling_heap_profiler.proto";
 import "protos/perfetto/config/chrome/stack_sampling_profiler.proto";
 import "protos/perfetto/config/linux/journald_config.proto";
 import "protos/perfetto/config/qnx/qnx_config.proto";
 
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 145
+// Next id: 146
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -299,6 +300,8 @@ message DataSourceConfig {
 
   // Data source name: android.cpu_per_uid
   optional CpuPerUidConfig cpu_per_uid_config = 137 [lazy = true];
+  // Data source name: linux.io_stall
+  optional IoStallConfig io_stall_config = 145 [lazy = true];
 
   // Data source name: android.user_list
   optional AndroidUserListConfig user_list_config = 138 [lazy = true];
